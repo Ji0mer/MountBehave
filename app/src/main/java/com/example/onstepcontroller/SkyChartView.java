@@ -189,6 +189,7 @@ public final class SkyChartView extends View {
         }
 
         CameraBasis basis = cameraBasis();
+        drawGround(canvas, basis);
         drawSkyGrid(canvas, basis);
         drawConstellationLines(canvas, basis);
         drawStars(canvas, basis);
@@ -287,6 +288,25 @@ public final class SkyChartView extends View {
 
     private void drawBackground(Canvas canvas) {
         canvas.drawColor(Color.rgb(5, 10, 21));
+    }
+
+    private void drawGround(Canvas canvas, CameraBasis basis) {
+        if (Math.abs(basis.up.z) < 1.0e-6) {
+            return;
+        }
+        double scale = getHeight() * 0.5 / Math.tan(Math.toRadians(fieldOfViewDegrees) * 0.5);
+        float horizonY = (float) (getHeight() * 0.5 + basis.forward.z * scale / basis.up.z);
+        if (horizonY >= getHeight()) {
+            return;
+        }
+
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(Color.rgb(20, 42, 32));
+        canvas.drawRect(0, Math.max(0f, horizonY), getWidth(), getHeight(), paint);
+
+        paint.setColor(Color.argb(95, 63, 98, 65));
+        float bandTop = (float) clamp(horizonY, 0.0, getHeight());
+        canvas.drawRect(0, bandTop, getWidth(), Math.min(getHeight(), bandTop + dp(18)), paint);
     }
 
     private void drawSkyGrid(Canvas canvas, CameraBasis basis) {

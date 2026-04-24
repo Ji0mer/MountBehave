@@ -25,11 +25,28 @@ try {
                     $command.Clear() | Out-Null
                     Write-Host "RX $text"
 
+                    $replyText = $null
                     if ($text -eq ':GVP#') {
-                        $reply = [System.Text.Encoding]::ASCII.GetBytes('OnStep Mock#')
+                        $replyText = 'OnStep Mock#'
+                    } elseif ($text -eq ':GR#') {
+                        $replyText = '06:45:09#'
+                    } elseif ($text -eq ':GD#') {
+                        $replyText = '-16*42:58#'
+                    } elseif ($text -eq ':MS#') {
+                        $replyText = '0#'
+                    } elseif ($text -eq ':CM#') {
+                        $replyText = 'N/A#'
+                    } elseif ($text -match '^:A[123+]#$' -or $text -eq ':AW#') {
+                        $replyText = '1#'
+                    } elseif ($text -match '^:T[eod12QLS]#$') {
+                        $replyText = '1#'
+                    }
+
+                    if ($replyText) {
+                        $reply = [System.Text.Encoding]::ASCII.GetBytes($replyText)
                         $stream.Write($reply, 0, $reply.Length)
                         $stream.Flush()
-                        Write-Host 'TX OnStep Mock#'
+                        Write-Host "TX $replyText"
                     }
                 }
             }

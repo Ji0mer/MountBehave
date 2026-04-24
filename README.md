@@ -1,6 +1,6 @@
-# OnStep Android 手控器
+# MountBehave
 
-这是一个面向 OnStep 赤道仪的 Android 手控器项目，目标是在手机或平板上完成赤道仪连接、手动移动、离线星图、目标 GOTO、观测地/时间同步和校准辅助。
+MountBehave 是一个面向 OnStep 赤道仪的 Android 手控器项目，目标是在手机或平板上完成赤道仪连接、手动移动、离线星图、目标 GOTO、观测地/时间同步和校准辅助。
 
 ## 本地环境
 
@@ -84,4 +84,3 @@ App 目前已经实现以下核心功能：
 
 - 实施计划：`plan.md`
 - 星图数据来源与授权：`docs\catalog-data.md`
-

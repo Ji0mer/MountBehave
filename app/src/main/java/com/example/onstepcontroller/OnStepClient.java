@@ -8,76 +8,115 @@ import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
+import javax.net.SocketFactory;
 
 final class OnStepClient implements Closeable {
-    private static final int CONNECT_TIMEOUT_MS = 3000;
-    private static final int READ_TIMEOUT_MS = 1200;
+    private static final int CONNECT_TIMEOUT_MS = 1800;
+    private static final int READ_TIMEOUT_MS = 2500;
+    private static final long COMMAND_GAP_MS = 180L;
 
-    private Socket socket;
-    private BufferedInputStream input;
-    private OutputStream output;
+    private SocketFactory socketFactory = SocketFactory.getDefault();
+    private String host;
+    private int port;
+    private boolean configured;
+    private long lastCommandAtMillis;
 
-    synchronized String connect(String host, int port) throws IOException {
-        close();
-
-        Socket nextSocket = new Socket();
-        nextSocket.connect(new InetSocketAddress(host, port), CONNECT_TIMEOUT_MS);
-        nextSocket.setSoTimeout(READ_TIMEOUT_MS);
-
-        socket = nextSocket;
-        input = new BufferedInputStream(socket.getInputStream());
-        output = socket.getOutputStream();
+    synchronized String connect(String host, int port, SocketFactory socketFactory) throws IOException {
+        this.socketFactory = socketFactory == null ? SocketFactory.getDefault() : socketFactory;
+        this.host = host;
+        this.port = port;
+        configured = true;
 
         try {
-            return query(":GVP#");
-        } catch (SocketTimeoutException ex) {
-            return "";
+            return handshakeQuery(":GVP#");
+        } catch (IOException ex) {
+            close();
+            throw ex;
         }
     }
 
     synchronized boolean isConnected() {
-        return socket != null && socket.isConnected() && !socket.isClosed();
+        return configured;
     }
 
     synchronized void sendNoReply(String command) throws IOException {
         ensureConnected();
-        output.write(command.getBytes(StandardCharsets.US_ASCII));
-        output.flush();
+        throttleCommandStart();
+        try (Socket commandSocket = openSocket()) {
+            OutputStream output = commandSocket.getOutputStream();
+            output.write(command.getBytes(StandardCharsets.US_ASCII));
+            output.flush();
+            sleepQuietly(COMMAND_GAP_MS);
+        }
+        lastCommandAtMillis = System.currentTimeMillis();
     }
 
     synchronized String query(String command) throws IOException {
         ensureConnected();
-        discardBufferedReply();
-        sendNoReply(command);
-        return readUntilHash();
-    }
-
-    @Override
-    public synchronized void close() {
-        closeQuietly(input);
-        closeQuietly(output);
-        closeQuietly(socket);
-        input = null;
-        output = null;
-        socket = null;
-    }
-
-    private void ensureConnected() throws IOException {
-        if (!isConnected()) {
-            throw new IOException("Not connected");
+        throttleCommandStart();
+        try (Socket commandSocket = openSocket()) {
+            OutputStream output = commandSocket.getOutputStream();
+            output.write(command.getBytes(StandardCharsets.US_ASCII));
+            output.flush();
+            BufferedInputStream input = new BufferedInputStream(commandSocket.getInputStream());
+            String reply = readUntilHashOrClose(input);
+            lastCommandAtMillis = System.currentTimeMillis();
+            return reply;
         }
     }
 
-    private void discardBufferedReply() throws IOException {
-        while (input.available() > 0) {
-            int ignored = input.read();
-            if (ignored < 0) {
-                break;
+    private String handshakeQuery(String command) throws IOException {
+        ensureConnected();
+        throttleCommandStart();
+        try (Socket commandSocket = openSocket()) {
+            OutputStream output = commandSocket.getOutputStream();
+            output.write(command.getBytes(StandardCharsets.US_ASCII));
+            output.flush();
+            BufferedInputStream input = new BufferedInputStream(commandSocket.getInputStream());
+            try {
+                String reply = readUntilHashOrClose(input);
+                lastCommandAtMillis = System.currentTimeMillis();
+                return reply;
+            } catch (SocketTimeoutException ex) {
+                lastCommandAtMillis = System.currentTimeMillis();
+                return "";
             }
         }
     }
 
-    private String readUntilHash() throws IOException {
+    @Override
+    public synchronized void close() {
+        configured = false;
+        host = null;
+        port = 0;
+        socketFactory = SocketFactory.getDefault();
+        lastCommandAtMillis = 0L;
+    }
+
+    private Socket openSocket() throws IOException {
+        Socket commandSocket = socketFactory.createSocket();
+        commandSocket.setKeepAlive(true);
+        commandSocket.setTcpNoDelay(true);
+        commandSocket.setReuseAddress(true);
+        commandSocket.connect(new InetSocketAddress(host, port), CONNECT_TIMEOUT_MS);
+        commandSocket.setSoTimeout(READ_TIMEOUT_MS);
+        return commandSocket;
+    }
+
+    private void ensureConnected() throws IOException {
+        if (!configured || host == null || host.isEmpty() || port <= 0) {
+            throw new IOException("Not connected");
+        }
+    }
+
+    private void throttleCommandStart() {
+        long elapsed = System.currentTimeMillis() - lastCommandAtMillis;
+        if (lastCommandAtMillis > 0L && elapsed < COMMAND_GAP_MS) {
+            sleepQuietly(COMMAND_GAP_MS - elapsed);
+        }
+    }
+
+    private String readUntilHashOrClose(BufferedInputStream input) throws IOException {
         StringBuilder reply = new StringBuilder();
         while (true) {
             int next;
@@ -90,6 +129,9 @@ final class OnStepClient implements Closeable {
                 throw ex;
             }
             if (next < 0) {
+                if (reply.length() > 0) {
+                    return reply.toString();
+                }
                 throw new IOException("Connection closed");
             }
             if (next == '#') {
@@ -99,14 +141,11 @@ final class OnStepClient implements Closeable {
         }
     }
 
-    private static void closeQuietly(Closeable closeable) {
-        if (closeable == null) {
-            return;
-        }
+    private static void sleepQuietly(long millis) {
         try {
-            closeable.close();
-        } catch (IOException ignored) {
-            // Best-effort cleanup.
+            Thread.sleep(millis);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
         }
     }
 }

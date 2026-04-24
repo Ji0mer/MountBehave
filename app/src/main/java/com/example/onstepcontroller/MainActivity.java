@@ -4,6 +4,7 @@ import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.Dialog;
+import android.content.Context;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.Typeface;
@@ -11,6 +12,10 @@ import android.graphics.drawable.GradientDrawable;
 import android.location.Location;
 import android.location.LocationListener;
 import android.location.LocationManager;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
+import android.net.wifi.WifiManager;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -18,6 +23,7 @@ import android.text.InputType;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
@@ -25,6 +31,7 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 
 import java.io.IOException;
+import java.net.SocketTimeoutException;
 import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.ArrayDeque;
@@ -37,10 +44,13 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
+import javax.net.SocketFactory;
 
 public final class MainActivity extends Activity {
     private static final int DEFAULT_PORT = 9999;
     private static final int LOCATION_PERMISSION_REQUEST = 24;
+    private static final long CONNECTION_POLL_INTERVAL_MS = 5_000L;
     private static final Pattern COORDINATE_TARGET_PATTERN = Pattern.compile(
             "^\\s*(?:RA\\s*)?([0-9]{1,2}(?::[0-9]{1,2}(?::[0-9]{1,2}(?:\\.\\d+)?)?)?|[0-9]+(?:\\.\\d+)?)\\s*[, ]+\\s*(?:DEC\\s*)?([+-]?[0-9]{1,2}(?:(?::|\\*|°)[0-9]{1,2}(?:(?::|')?[0-9]{1,2}(?:\\.\\d+)?)?)?|[+-]?[0-9]+(?:\\.\\d+)?)\\s*$",
             Pattern.CASE_INSENSITIVE
@@ -50,14 +60,12 @@ public final class MainActivity extends Activity {
     private final Handler uiHandler = new Handler(Looper.getMainLooper());
     private final OnStepClient client = new OnStepClient();
     private final Deque<String> logLines = new ArrayDeque<>();
+    private final AtomicInteger connectionGeneration = new AtomicInteger();
     private final Runnable skyClockRunnable = new Runnable() {
         @Override
         public void run() {
             updateSkyTime();
-            if (connected && !busy) {
-                refreshMountPointing();
-            }
-            uiHandler.postDelayed(this, 30_000);
+            uiHandler.postDelayed(this, CONNECTION_POLL_INTERVAL_MS);
         }
     };
 
@@ -99,6 +107,14 @@ public final class MainActivity extends Activity {
     private TextView mountPointingText;
     private Button gotoButton;
     private Button syncMountButton;
+    private Button trackingSiderealButton;
+    private Button trackingLunarButton;
+    private Button trackingSolarButton;
+    private Button trackingToggleButton;
+    private TextView trackingStatusText;
+    private TextView homeStatusText;
+    private Button gotoHomeButton;
+    private Button setHomeButton;
     private EditText calibrationTargetField;
     private TextView calibrationStatusText;
     private TextView calibrationStepText;
@@ -120,10 +136,25 @@ public final class MainActivity extends Activity {
     private TextView manualStatusText;
     private TextView logText;
     private LocationManager locationManager;
+    private ConnectivityManager connectivityManager;
+    private WifiManager.WifiLock wifiLock;
+    private Network boundWifiNetwork;
 
     private boolean connected;
     private boolean busy;
     private boolean sideMenuExpanded = true;
+    private String connectedHost;
+    private int connectedPort = DEFAULT_PORT;
+    private int mountPointingFailureCount;
+    private boolean mountPointingPollingPaused;
+    private boolean hasCurrentMountPosition;
+    private double currentMountRaHours;
+    private double currentMountDecDegrees;
+    private boolean hasHomePosition;
+    private double homeRaHours;
+    private double homeDecDegrees;
+    private boolean trackingEnabled;
+    private TrackingRate selectedTrackingRate = TrackingRate.SIDEREAL;
     private Direction activeDirection;
     private SkyChartView.Target selectedSkyTarget;
     private SkyChartView.Target calibrationTarget;
@@ -133,6 +164,8 @@ public final class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        connectivityManager = (ConnectivityManager) getApplicationContext().getSystemService(Context.CONNECTIVITY_SERVICE);
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         setContentView(createContentView());
         updateUiState();
         updateObserverViews();
@@ -141,6 +174,7 @@ public final class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        acquireWifiLock();
         uiHandler.post(skyClockRunnable);
     }
 
@@ -152,6 +186,7 @@ public final class MainActivity extends Activity {
             activeDirection = null;
             enqueueStop(getString(R.string.log_auto_stop_background));
         }
+        releaseWifiLock();
     }
 
     @Override
@@ -168,6 +203,8 @@ public final class MainActivity extends Activity {
             }
         });
         ioExecutor.shutdown();
+        releaseWifiLock();
+        releaseWifiBinding();
         super.onDestroy();
     }
 
@@ -220,15 +257,6 @@ public final class MainActivity extends Activity {
         manualPage.addView(manualStatusText, matchWrap());
         manualPage.addView(sectionTitle(R.string.manual_control_section), matchWrapWithTopMargin(12));
         manualPage.addView(createControlPanel(), matchWrap());
-
-        manualPage.addView(sectionTitle(R.string.command_log_section), matchWrapWithTopMargin(12));
-        logText = bodyText(R.string.log_empty);
-        logText.setTextColor(Color.rgb(55, 65, 81));
-        logText.setMinLines(4);
-        logText.setGravity(Gravity.START);
-        logText.setBackgroundColor(Color.WHITE);
-        logText.setPadding(dp(14), dp(12), dp(14), dp(12));
-        manualPage.addView(logText, matchWrap());
         root.addView(manualPage, matchWrap());
 
         skyPage = createSkyPage();
@@ -243,7 +271,7 @@ public final class MainActivity extends Activity {
         settingsPage.setVisibility(View.GONE);
         root.addView(settingsPage, matchWrap());
 
-        updatePageTabs(Page.MANUAL);
+        updatePageTabs(Page.SETTINGS);
 
         shell.addView(scrollView, matchParentWeight(1f));
         return shell;
@@ -499,10 +527,90 @@ public final class MainActivity extends Activity {
         page.addView(sectionTitle(R.string.connection_section), matchWrap());
         page.addView(createConnectionPanel(), matchWrap());
 
+        page.addView(sectionTitle(R.string.command_log_section), matchWrapWithTopMargin(12));
+        page.addView(createCommandLogPanel(), matchWrap());
+
+        page.addView(sectionTitle(R.string.tracking_section), matchWrapWithTopMargin(12));
+        page.addView(createTrackingPanel(), matchWrap());
+
+        page.addView(sectionTitle(R.string.home_section), matchWrapWithTopMargin(12));
+        page.addView(createHomePanel(), matchWrap());
+
         page.addView(sectionTitle(R.string.observer_section), matchWrapWithTopMargin(12));
         page.addView(createObserverPanel(), matchWrap());
 
         return page;
+    }
+
+    private View createCommandLogPanel() {
+        LinearLayout panel = card();
+        logText = bodyText(R.string.log_empty);
+        logText.setTextColor(Color.rgb(55, 65, 81));
+        logText.setMinLines(5);
+        logText.setGravity(Gravity.START);
+        panel.addView(logText, matchWrap());
+        return panel;
+    }
+
+    private View createTrackingPanel() {
+        LinearLayout panel = card();
+
+        TextView intro = bodyText(R.string.tracking_intro);
+        intro.setPadding(0, 0, 0, dp(10));
+        panel.addView(intro, matchWrap());
+
+        panel.addView(labelText(R.string.tracking_rate_label), matchWrap());
+
+        LinearLayout rateActions = new LinearLayout(this);
+        rateActions.setOrientation(LinearLayout.HORIZONTAL);
+        rateActions.setGravity(Gravity.CENTER_VERTICAL);
+        rateActions.setPadding(0, dp(8), 0, dp(10));
+
+        trackingSiderealButton = trackingRateButton(TrackingRate.SIDEREAL);
+        rateActions.addView(trackingSiderealButton, weightWrap(1f));
+
+        trackingLunarButton = trackingRateButton(TrackingRate.LUNAR);
+        rateActions.addView(trackingLunarButton, weightWrapWithLeftMargin(1f, 8));
+
+        trackingSolarButton = trackingRateButton(TrackingRate.SOLAR);
+        rateActions.addView(trackingSolarButton, weightWrapWithLeftMargin(1f, 8));
+
+        panel.addView(rateActions, matchWrap());
+
+        trackingToggleButton = actionButton(R.string.tracking_start);
+        trackingToggleButton.setOnClickListener(v -> toggleTracking());
+        panel.addView(trackingToggleButton, matchWrap());
+
+        trackingStatusText = bodyText(R.string.tracking_status_off);
+        trackingStatusText.setPadding(0, dp(10), 0, 0);
+        panel.addView(trackingStatusText, matchWrap());
+
+        updateTrackingViews();
+        return panel;
+    }
+
+    private View createHomePanel() {
+        LinearLayout panel = card();
+
+        homeStatusText = bodyText(R.string.home_status_none);
+        homeStatusText.setPadding(0, 0, 0, dp(10));
+        panel.addView(homeStatusText, matchWrap());
+
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        actions.setGravity(Gravity.CENTER_VERTICAL);
+
+        gotoHomeButton = actionButton(R.string.home_goto);
+        gotoHomeButton.setOnClickListener(v -> gotoHome());
+        actions.addView(gotoHomeButton, weightWrap(1f));
+
+        setHomeButton = actionButton(R.string.home_set_current);
+        setHomeButton.setOnClickListener(v -> setHomeFromMount());
+        actions.addView(setHomeButton, weightWrapWithLeftMargin(1f, 8));
+
+        panel.addView(actions, matchWrap());
+        updateHomeViews();
+        return panel;
     }
 
     private View createObserverPanel() {
@@ -714,26 +822,44 @@ public final class MainActivity extends Activity {
 
         ioExecutor.execute(() -> {
             try {
-                String handshake = client.connect(host, port);
+                SocketFactory socketFactory = stableWifiSocketFactory();
+                ConnectionAttempt connection = connectToAvailablePort(host, port, socketFactory);
                 runOnUiThread(() -> {
                     connected = true;
                     busy = false;
+                    connectionGeneration.incrementAndGet();
+                    connectedHost = host;
+                    connectedPort = connection.port;
+                    portField.setText(String.format(Locale.US, "%d", connection.port));
+                    mountPointingFailureCount = 0;
+                    mountPointingPollingPaused = true;
+                    hasCurrentMountPosition = false;
+                    hasHomePosition = false;
                     activeDirection = null;
-                    if (handshake.isEmpty()) {
-                        setStatus(getString(R.string.status_connected_no_reply));
+                    if (connection.handshake.isEmpty()) {
+                        setStatus(getString(R.string.status_connected_no_reply_port, connection.port));
                         appendLog("RX <no handshake reply>");
                     } else {
-                        setStatus(getString(R.string.status_connected, handshake));
-                        appendLog("RX " + handshake);
+                        setStatus(getString(R.string.status_connected_port, connection.port, connection.handshake));
+                        appendLog("RX " + connection.handshake);
+                    }
+                    if (connection.port != port) {
+                        appendLog("PORT " + connection.port);
                     }
                     updateUiState();
-                    refreshMountPointing();
+                    captureInitialHomeFromMount();
                 });
             } catch (IOException ex) {
                 client.close();
+                releaseWifiBinding();
                 runOnUiThread(() -> {
                     connected = false;
                     busy = false;
+                    connectionGeneration.incrementAndGet();
+                    connectedHost = null;
+                    connectedPort = DEFAULT_PORT;
+                    mountPointingFailureCount = 0;
+                    mountPointingPollingPaused = true;
                     activeDirection = null;
                     setStatus(getString(R.string.status_connect_failed, ex.getMessage()));
                     appendLog("ERROR " + safeMessage(ex));
@@ -743,8 +869,38 @@ public final class MainActivity extends Activity {
         });
     }
 
+    private ConnectionAttempt connectToAvailablePort(String host, int requestedPort, SocketFactory socketFactory) throws IOException {
+        IOException lastError = null;
+        for (int candidatePort : connectionCandidatePorts(requestedPort)) {
+            try {
+                String handshake = client.connect(host, candidatePort, socketFactory);
+                return new ConnectionAttempt(candidatePort, handshake);
+            } catch (IOException ex) {
+                lastError = ex;
+            }
+        }
+        throw lastError == null ? new IOException("No OnStep port available") : lastError;
+    }
+
+    private int[] connectionCandidatePorts(int requestedPort) {
+        int[] knownPorts = {9999, 9998, 9997, 9996};
+        List<Integer> ports = new ArrayList<>();
+        ports.add(requestedPort);
+        for (int knownPort : knownPorts) {
+            if (!ports.contains(knownPort)) {
+                ports.add(knownPort);
+            }
+        }
+        int[] result = new int[ports.size()];
+        for (int i = 0; i < ports.size(); i++) {
+            result[i] = ports.get(i);
+        }
+        return result;
+    }
+
     private void disconnect() {
         busy = true;
+        connectionGeneration.incrementAndGet();
         setStatus(getString(R.string.status_disconnecting));
         updateUiState();
         appendLog("DISCONNECT");
@@ -758,12 +914,21 @@ public final class MainActivity extends Activity {
                 // Closing anyway.
             } finally {
                 client.close();
+                releaseWifiBinding();
             }
             runOnUiThread(() -> {
                 connected = false;
                 busy = false;
+                connectionGeneration.incrementAndGet();
+                connectedHost = null;
+                connectedPort = DEFAULT_PORT;
+                mountPointingFailureCount = 0;
+                mountPointingPollingPaused = false;
+                hasCurrentMountPosition = false;
+                hasHomePosition = false;
                 activeDirection = null;
                 alignmentSession = null;
+                trackingEnabled = false;
                 setStatus(getString(R.string.status_disconnected));
                 appendLog("CLOSED");
                 clearMountPointing();
@@ -779,18 +944,23 @@ public final class MainActivity extends Activity {
         activeDirection = direction;
         String rate = getRateCommand();
         appendLog("TX " + rate);
-        for (OnStepCommand command : direction.commands) {
+        for (OnStepCommand command : direction.moveCommands) {
             appendLog("TX " + command.command);
         }
+        int generation = connectionGeneration.get();
         ioExecutor.execute(() -> {
+            if (!isConnectionGenerationCurrent(generation)) {
+                return;
+            }
             try {
                 client.sendNoReply(rate);
-                for (OnStepCommand command : direction.commands) {
+                for (OnStepCommand command : direction.moveCommands) {
                     client.sendNoReply(command.command);
                 }
                 runOnUiThread(() -> setStatus(getString(R.string.status_moving, direction.label(this))));
             } catch (IOException ex) {
-                runOnUiThread(() -> handleCommandFailure(ex));
+                markTransportFault();
+                runOnUiThread(() -> handleMotionCommandFailure(ex));
             }
         });
     }
@@ -800,38 +970,72 @@ public final class MainActivity extends Activity {
             return;
         }
         activeDirection = null;
-        enqueueStop(getString(R.string.log_stop_sent));
+        enqueueDirectionStop(direction, getString(R.string.log_stop_sent));
     }
 
     private void enqueueStop(String logMessage) {
-        enqueueCommand(OnStepCommand.STOP_ALL.command, logMessage);
+        enqueueCommands(new OnStepCommand[]{OnStepCommand.STOP_ALL}, logMessage);
+    }
+
+    private void enqueueDirectionStop(Direction direction, String logMessage) {
+        enqueueCommands(direction.stopCommands, logMessage);
     }
 
     private void enqueueCommand(String command, String logMessage) {
+        enqueueRawCommands(new String[]{command}, logMessage, false);
+    }
+
+    private void enqueueCommands(OnStepCommand[] commands, String logMessage) {
+        String[] rawCommands = new String[commands.length];
+        for (int i = 0; i < commands.length; i++) {
+            rawCommands[i] = commands[i].command;
+        }
+        enqueueRawCommands(rawCommands, logMessage, true);
+    }
+
+    private void enqueueRawCommands(String[] commands, String logMessage, boolean motionFailureShouldStop) {
         if (!connected) {
             return;
         }
-        appendLog("TX " + command);
+        for (String command : commands) {
+            appendLog("TX " + command);
+        }
+        int generation = connectionGeneration.get();
         ioExecutor.execute(() -> {
+            if (!isConnectionGenerationCurrent(generation)) {
+                return;
+            }
             try {
-                client.sendNoReply(command);
+                for (String command : commands) {
+                    client.sendNoReply(command);
+                }
                 runOnUiThread(() -> setStatus(logMessage));
             } catch (IOException ex) {
-                runOnUiThread(() -> handleCommandFailure(ex));
+                markTransportFault();
+                if (motionFailureShouldStop) {
+                    runOnUiThread(() -> handleMotionCommandFailure(ex));
+                } else {
+                    runOnUiThread(() -> handleCommandFailure(ex));
+                }
             }
         });
     }
 
     private void handleCommandFailure(IOException ex) {
-        connected = false;
         busy = false;
         activeDirection = null;
-        alignmentSession = null;
-        client.close();
-        setStatus(getString(R.string.status_command_failed, safeMessage(ex)));
-        appendLog("ERROR " + safeMessage(ex));
-        clearMountPointing();
+        setStatus(getString(R.string.status_command_failed_keep_connected, safeMessage(ex)));
+        appendLog("WARN command " + safeMessage(ex));
+        updateUiState();
         updateCalibrationViews();
+    }
+
+    private void handleMotionCommandFailure(IOException ex) {
+        busy = false;
+        activeDirection = null;
+        setStatus(getString(R.string.status_motion_failed_keep_connected, safeMessage(ex)));
+        appendLog("WARN motion " + safeMessage(ex));
+        updateUiState();
     }
 
     private void showTargetDialog() {
@@ -952,24 +1156,117 @@ public final class MainActivity extends Activity {
         appendLog("TX " + decCommand);
         appendLog("TX :MS#");
 
+        int generation = connectionGeneration.get();
         ioExecutor.execute(() -> {
+            if (!isConnectionGenerationCurrent(generation)) {
+                return;
+            }
             try {
-                client.sendNoReply(raCommand);
-                client.sendNoReply(decCommand);
-                client.sendNoReply(":MS#");
+                String raReply = client.query(raCommand);
+                String decReply = client.query(decCommand);
+                String gotoReply = client.query(":MS#");
+                if ("0".equals(raReply)) {
+                    throw new CommandRejectedException(raCommand, raReply);
+                }
+                if ("0".equals(decReply)) {
+                    throw new CommandRejectedException(decCommand, decReply);
+                }
                 runOnUiThread(() -> {
+                    appendLog("RX " + raCommand + " -> " + raReply);
+                    appendLog("RX " + decCommand + " -> " + decReply);
+                    appendLog("RX :MS# -> " + gotoReply);
                     busy = false;
                     setStatus(sentStatus);
                     if (onSuccess != null) {
                         onSuccess.run();
                     }
                     updateUiState();
-                    refreshMountPointing();
+                });
+            } catch (CommandRejectedException ex) {
+                runOnUiThread(() -> {
+                    busy = false;
+                    setStatus(getString(R.string.status_command_rejected, ex.command, ex.reply));
+                    updateUiState();
                 });
             } catch (IOException ex) {
+                markTransportFault();
                 runOnUiThread(() -> handleCommandFailure(ex));
             }
         });
+    }
+
+    private void captureInitialHomeFromMount() {
+        captureHomeFromMount(false);
+    }
+
+    private void setHomeFromMount() {
+        captureHomeFromMount(true);
+    }
+
+    private void captureHomeFromMount(boolean userRequested) {
+        if (!connected || busy) {
+            return;
+        }
+        busy = true;
+        String sendingStatus = getString(userRequested ? R.string.home_set_sending : R.string.home_initial_sending);
+        setStatus(sendingStatus);
+        updateUiState();
+        appendLog("TX :GR#");
+        appendLog("TX :GD#");
+
+        int generation = connectionGeneration.get();
+        ioExecutor.execute(() -> {
+            if (!isConnectionGenerationCurrent(generation)) {
+                return;
+            }
+            try {
+                String raReply = client.query(":GR#");
+                String decReply = client.query(":GD#");
+                double raHours = parseRightAscension(raReply);
+                double decDegrees = parseDeclination(decReply);
+                runOnUiThread(() -> {
+                    appendLog("RX :GR# -> " + raReply);
+                    appendLog("RX :GD# -> " + decReply);
+                    busy = false;
+                    setMountPointing(raHours, decDegrees);
+                    setHomePosition(raHours, decDegrees);
+                    setStatus(getString(
+                            userRequested ? R.string.home_set_sent : R.string.home_initial_sent,
+                            formatRightAscensionDisplay(raHours),
+                            formatDeclinationDisplay(decDegrees)
+                    ));
+                    updateUiState();
+                });
+            } catch (IOException | IllegalArgumentException ex) {
+                runOnUiThread(() -> {
+                    busy = false;
+                    setStatus(getString(
+                            userRequested ? R.string.home_set_failed : R.string.home_initial_failed,
+                            safeMessage(ex)
+                    ));
+                    appendLog("WARN home " + safeMessage(ex));
+                    updateUiState();
+                });
+            }
+        });
+    }
+
+    private void gotoHome() {
+        if (!hasHomePosition) {
+            setStatus(getString(R.string.home_no_position));
+            return;
+        }
+        SkyChartView.Target homeTarget = SkyChartView.Target.custom(
+                getString(R.string.home_target_label),
+                homeRaHours,
+                homeDecDegrees
+        );
+        sendGotoTarget(
+                homeTarget,
+                getString(R.string.home_goto_sending),
+                getString(R.string.home_goto_sent),
+                null
+        );
     }
 
     private void syncObserverToMount() {
@@ -991,7 +1288,11 @@ public final class MainActivity extends Activity {
             appendLog("TX " + command);
         }
 
+        int generation = connectionGeneration.get();
         ioExecutor.execute(() -> {
+            if (!isConnectionGenerationCurrent(generation)) {
+                return;
+            }
             try {
                 for (String command : commands) {
                     client.sendNoReply(command);
@@ -1002,9 +1303,58 @@ public final class MainActivity extends Activity {
                     updateUiState();
                 });
             } catch (IOException ex) {
+                markTransportFault();
                 runOnUiThread(() -> handleCommandFailure(ex));
             }
         });
+    }
+
+    private void setTrackingRate(TrackingRate rate) {
+        selectedTrackingRate = rate;
+        updateTrackingViews();
+        if (!connected || busy) {
+            setStatus(getString(R.string.tracking_rate_selected, getString(rate.labelRes)));
+            return;
+        }
+
+        List<MountCommand> commands = new ArrayList<>();
+        commands.add(MountCommand.noReply(rate.command));
+        runMountCommands(
+                commands,
+                getString(R.string.tracking_rate_sending, getString(rate.labelRes)),
+                getString(R.string.tracking_rate_sent, getString(rate.labelRes)),
+                this::updateTrackingViews
+        );
+    }
+
+    private void toggleTracking() {
+        if (!connected || busy) {
+            return;
+        }
+
+        List<MountCommand> commands = new ArrayList<>();
+        String sendingStatus;
+        String successStatus;
+        if (trackingEnabled) {
+            commands.add(MountCommand.noReply(OnStepCommand.TRACK_DISABLE.command));
+            sendingStatus = getString(R.string.tracking_stop_sending);
+            successStatus = getString(R.string.tracking_stop_sent);
+        } else {
+            commands.add(MountCommand.noReply(selectedTrackingRate.command));
+            commands.add(MountCommand.noReply(OnStepCommand.TRACK_ENABLE.command));
+            sendingStatus = getString(R.string.tracking_start_sending, getString(selectedTrackingRate.labelRes));
+            successStatus = getString(R.string.tracking_start_sent, getString(selectedTrackingRate.labelRes));
+        }
+
+        runMountCommands(
+                commands,
+                sendingStatus,
+                successStatus,
+                () -> {
+                    trackingEnabled = !trackingEnabled;
+                    updateTrackingViews();
+                }
+        );
     }
 
     private void fillSuggestedCalibrationTarget() {
@@ -1068,6 +1418,9 @@ public final class MainActivity extends Activity {
                 getString(R.string.calibration_quick_sync_sending, target.label),
                 getString(R.string.calibration_quick_sync_sent, target.label),
                 () -> {
+                    selectedTrackingRate = TrackingRate.SIDEREAL;
+                    trackingEnabled = true;
+                    updateTrackingViews();
                     setCalibrationStatus(getString(R.string.calibration_quick_sync_sent, target.label));
                     refreshMountPointing();
                 }
@@ -1094,9 +1447,12 @@ public final class MainActivity extends Activity {
                 getString(R.string.calibration_align_started, starCount),
                 () -> {
                     alignmentSession = new AlignmentSession(starCount);
+                    selectedTrackingRate = TrackingRate.SIDEREAL;
+                    trackingEnabled = true;
                     calibrationTarget = null;
                     calibrationTargetField.setText("");
                     setCalibrationStatus(getString(R.string.calibration_align_started, starCount));
+                    updateTrackingViews();
                     updateCalibrationViews();
                     fillSuggestedCalibrationTarget();
                 }
@@ -1196,7 +1552,12 @@ public final class MainActivity extends Activity {
                 commands,
                 getString(R.string.calibration_tracking_sending),
                 getString(R.string.calibration_tracking_sent),
-                () -> setCalibrationStatus(getString(R.string.calibration_tracking_sent))
+                () -> {
+                    selectedTrackingRate = TrackingRate.SIDEREAL;
+                    trackingEnabled = true;
+                    updateTrackingViews();
+                    setCalibrationStatus(getString(R.string.calibration_tracking_sent));
+                }
         );
     }
 
@@ -1271,7 +1632,11 @@ public final class MainActivity extends Activity {
             appendLog("TX " + command.command);
         }
 
+        int generation = connectionGeneration.get();
         ioExecutor.execute(() -> {
+            if (!isConnectionGenerationCurrent(generation)) {
+                return;
+            }
             List<String> replies = new ArrayList<>();
             try {
                 for (MountCommand command : commands) {
@@ -1309,50 +1674,89 @@ public final class MainActivity extends Activity {
                     updateUiState();
                 });
             } catch (IOException ex) {
+                markTransportFault();
                 runOnUiThread(() -> handleCommandFailure(ex));
             }
         });
     }
 
     private void refreshMountPointing() {
-        if (!connected || busy) {
+        if (!connected || busy || mountPointingPollingPaused) {
             return;
         }
+        int generation = connectionGeneration.get();
         ioExecutor.execute(() -> {
+            if (!isConnectionGenerationCurrent(generation)) {
+                return;
+            }
             try {
                 String raReply = client.query(":GR#");
                 String decReply = client.query(":GD#");
                 double raHours = parseRightAscension(raReply);
                 double decDegrees = parseDeclination(decReply);
-                runOnUiThread(() -> setMountPointing(raHours, decDegrees));
-            } catch (IOException | IllegalArgumentException ex) {
-                runOnUiThread(() -> handleCommandFailure(ex instanceof IOException
-                        ? (IOException) ex
-                        : new IOException(ex.getMessage(), ex)));
+                runOnUiThread(() -> {
+                    mountPointingFailureCount = 0;
+                    mountPointingPollingPaused = false;
+                    setMountPointing(raHours, decDegrees);
+                });
+            } catch (SocketTimeoutException ex) {
+                runOnUiThread(() -> handleMountPointingPollFailure(ex));
+            } catch (IOException ex) {
+                runOnUiThread(() -> handleMountPointingPollFailure(ex));
+            } catch (IllegalArgumentException ex) {
+                runOnUiThread(() -> {
+                    mountPointingFailureCount++;
+                    appendLog("WARN bad pointing reply " + safeMessage(ex));
+                    setStatus(getString(R.string.status_bad_pointing_reply));
+                });
             }
         });
     }
 
+    private void handleMountPointingPollFailure(IOException ex) {
+        mountPointingFailureCount++;
+        String reason = safeMessage(ex);
+        appendLog("WARN pointing poll " + reason);
+        if (mountPointingFailureCount >= 3) {
+            mountPointingPollingPaused = true;
+            appendLog("INFO pointing poll paused");
+            setStatus(getString(R.string.status_pointing_poll_paused, mountPointingFailureCount, reason));
+        } else {
+            setStatus(getString(R.string.status_pointing_poll_failed, mountPointingFailureCount, reason));
+        }
+    }
+
     private void setMountPointing(double raHours, double decDegrees) {
+        hasCurrentMountPosition = true;
+        currentMountRaHours = normalizeHours(raHours);
+        currentMountDecDegrees = clamp(decDegrees, -90.0, 90.0);
         if (skyChartView != null) {
-            skyChartView.setMountEquatorial(raHours, decDegrees);
+            skyChartView.setMountEquatorial(currentMountRaHours, currentMountDecDegrees);
         }
         if (mountPointingText != null) {
             mountPointingText.setText(getString(
                     R.string.mount_pointing_status,
-                    formatRightAscensionDisplay(raHours),
-                    formatDeclinationDisplay(decDegrees)
+                    formatRightAscensionDisplay(currentMountRaHours),
+                    formatDeclinationDisplay(currentMountDecDegrees)
             ));
         }
     }
 
     private void clearMountPointing() {
+        hasCurrentMountPosition = false;
         if (skyChartView != null) {
             skyChartView.clearMountEquatorial();
         }
         if (mountPointingText != null) {
             mountPointingText.setText(R.string.mount_pointing_default);
         }
+    }
+
+    private void setHomePosition(double raHours, double decDegrees) {
+        hasHomePosition = true;
+        homeRaHours = normalizeHours(raHours);
+        homeDecDegrees = clamp(decDegrees, -90.0, 90.0);
+        updateHomeViews();
     }
 
     private void updateTargetViews() {
@@ -1475,6 +1879,10 @@ public final class MainActivity extends Activity {
         return result < 0.0 ? result + 24.0 : result;
     }
 
+    private static double clamp(double value, double min, double max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
     private String getRateCommand() {
         return selectedRateCommand;
     }
@@ -1526,6 +1934,13 @@ public final class MainActivity extends Activity {
             }
         });
         rateButtons.add(button);
+        return button;
+    }
+
+    private Button trackingRateButton(TrackingRate rate) {
+        Button button = actionButton(rate.labelRes);
+        button.setTextSize(14);
+        button.setOnClickListener(v -> setTrackingRate(rate));
         return button;
     }
 
@@ -1882,7 +2297,9 @@ public final class MainActivity extends Activity {
             }
             builder.append(logLine);
         }
-        logText.setText(builder.length() == 0 ? getString(R.string.log_empty) : builder.toString());
+        if (logText != null) {
+            logText.setText(builder.length() == 0 ? getString(R.string.log_empty) : builder.toString());
+        }
     }
 
     private void updateUiState() {
@@ -1901,6 +2318,18 @@ public final class MainActivity extends Activity {
         if (syncMountButton != null) {
             syncMountButton.setEnabled(connected && !busy);
         }
+        if (trackingToggleButton != null) {
+            trackingToggleButton.setEnabled(connected && !busy);
+        }
+        if (gotoHomeButton != null) {
+            gotoHomeButton.setEnabled(connected && !busy && hasHomePosition);
+        }
+        if (setHomeButton != null) {
+            setHomeButton.setEnabled(connected && !busy);
+        }
+        setTrackingRateButtonEnabled(trackingSiderealButton, !busy);
+        setTrackingRateButtonEnabled(trackingLunarButton, !busy);
+        setTrackingRateButtonEnabled(trackingSolarButton, !busy);
         if (calibrationSuggestButton != null) {
             calibrationSuggestButton.setEnabled(skyChartView != null);
         }
@@ -1958,6 +2387,22 @@ public final class MainActivity extends Activity {
         stopButton.setEnabled(controlsEnabled);
         stopButton.setBackground(createStopButtonBackground(controlsEnabled));
         stopButton.setTextColor(Color.WHITE);
+        updateTrackingViews();
+        updateHomeViews();
+    }
+
+    private void updateHomeViews() {
+        if (homeStatusText != null) {
+            if (hasHomePosition) {
+                homeStatusText.setText(getString(
+                        R.string.home_status,
+                        formatRightAscensionDisplay(homeRaHours),
+                        formatDeclinationDisplay(homeDecDegrees)
+                ));
+            } else {
+                homeStatusText.setText(R.string.home_status_none);
+            }
+        }
     }
 
     private void updateObserverViews() {
@@ -1988,6 +2433,75 @@ public final class MainActivity extends Activity {
         if (observerStatusText != null) {
             observerStatusText.setText(message);
         }
+    }
+
+    private void acquireWifiLock() {
+        if (wifiLock == null) {
+            WifiManager manager = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+            if (manager != null) {
+                wifiLock = manager.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "OnStepControllerWifi");
+                wifiLock.setReferenceCounted(false);
+            }
+        }
+        if (wifiLock != null && !wifiLock.isHeld()) {
+            wifiLock.acquire();
+        }
+    }
+
+    private void releaseWifiLock() {
+        if (wifiLock != null && wifiLock.isHeld()) {
+            wifiLock.release();
+        }
+    }
+
+    private SocketFactory stableWifiSocketFactory() {
+        Network wifiNetwork = findWifiNetwork();
+        if (wifiNetwork != null && connectivityManager != null) {
+            connectivityManager.bindProcessToNetwork(wifiNetwork);
+            boundWifiNetwork = wifiNetwork;
+            return wifiNetwork.getSocketFactory();
+        }
+        releaseWifiBinding();
+        return SocketFactory.getDefault();
+    }
+
+    private Network findWifiNetwork() {
+        if (connectivityManager == null) {
+            return null;
+        }
+        Network activeNetwork = connectivityManager.getActiveNetwork();
+        if (isWifiNetwork(activeNetwork)) {
+            return activeNetwork;
+        }
+        for (Network network : connectivityManager.getAllNetworks()) {
+            if (isWifiNetwork(network)) {
+                return network;
+            }
+        }
+        return null;
+    }
+
+    private boolean isWifiNetwork(Network network) {
+        if (network == null || connectivityManager == null) {
+            return false;
+        }
+        NetworkCapabilities capabilities = connectivityManager.getNetworkCapabilities(network);
+        return capabilities != null && capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI);
+    }
+
+    private void releaseWifiBinding() {
+        if (connectivityManager != null && boundWifiNetwork != null) {
+            connectivityManager.bindProcessToNetwork(null);
+            boundWifiNetwork = null;
+        }
+    }
+
+    private boolean isConnectionGenerationCurrent(int generation) {
+        return generation == connectionGeneration.get();
+    }
+
+    private void markTransportFault() {
+        connectionGeneration.incrementAndGet();
     }
 
     private void updatePageTabs(Page selectedPage) {
@@ -2065,10 +2579,44 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private void updateTrackingViews() {
+        styleTrackingRateButton(trackingSiderealButton, TrackingRate.SIDEREAL);
+        styleTrackingRateButton(trackingLunarButton, TrackingRate.LUNAR);
+        styleTrackingRateButton(trackingSolarButton, TrackingRate.SOLAR);
+
+        if (trackingToggleButton != null) {
+            trackingToggleButton.setText(trackingEnabled ? R.string.tracking_stop : R.string.tracking_start);
+        }
+        if (trackingStatusText != null) {
+            if (trackingEnabled) {
+                trackingStatusText.setText(getString(R.string.tracking_status_on, getString(selectedTrackingRate.labelRes)));
+            } else {
+                trackingStatusText.setText(getString(R.string.tracking_status_off_with_rate, getString(selectedTrackingRate.labelRes)));
+            }
+        }
+    }
+
+    private void styleTrackingRateButton(Button button, TrackingRate rate) {
+        if (button == null) {
+            return;
+        }
+        boolean enabled = !busy;
+        boolean selected = selectedTrackingRate == rate;
+        button.setTextColor(selected ? Color.rgb(14, 116, 144) : Color.rgb(55, 65, 81));
+        button.setTypeface(selected ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
+        button.setBackground(createRateButtonBackground(selected, enabled));
+    }
+
     private void setDirectionButtonEnabled(Button button, boolean enabled) {
         button.setEnabled(enabled);
         button.setTextColor(enabled ? Color.rgb(17, 24, 39) : Color.rgb(156, 163, 175));
         button.setBackground(createDirectionButtonBackground(enabled));
+    }
+
+    private void setTrackingRateButtonEnabled(Button button, boolean enabled) {
+        if (button != null) {
+            button.setEnabled(enabled);
+        }
     }
 
     private static String safeMessage(Throwable throwable) {
@@ -2091,6 +2639,16 @@ public final class MainActivity extends Activity {
 
         boolean isComplete() {
             return acceptedStars >= totalStars;
+        }
+    }
+
+    private static final class ConnectionAttempt {
+        final int port;
+        final String handshake;
+
+        ConnectionAttempt(int port, String handshake) {
+            this.port = port;
+            this.handshake = handshake;
         }
     }
 
@@ -2139,15 +2697,36 @@ public final class MainActivity extends Activity {
         ALIGN_ACCEPT(":A+#"),
         ALIGN_WRITE(":AW#"),
         TRACK_SIDEREAL(":TQ#"),
+        TRACK_LUNAR(":TL#"),
+        TRACK_SOLAR(":TS#"),
         TRACK_ENABLE(":Te#"),
+        TRACK_DISABLE(":Td#"),
         TRACK_FULL_COMPENSATION(":To#"),
         TRACK_DUAL_AXIS(":T2#"),
         REFINE_POLAR_ALIGNMENT(":MP#"),
+        STOP_NORTH(":Qn#"),
+        STOP_SOUTH(":Qs#"),
+        STOP_EAST(":Qe#"),
+        STOP_WEST(":Qw#"),
         STOP_ALL(":Q#");
 
         private final String command;
 
         OnStepCommand(String command) {
+            this.command = command;
+        }
+    }
+
+    private enum TrackingRate {
+        SIDEREAL(R.string.tracking_rate_sidereal, OnStepCommand.TRACK_SIDEREAL.command),
+        LUNAR(R.string.tracking_rate_lunar, OnStepCommand.TRACK_LUNAR.command),
+        SOLAR(R.string.tracking_rate_solar, OnStepCommand.TRACK_SOLAR.command);
+
+        private final int labelRes;
+        private final String command;
+
+        TrackingRate(int labelRes, String command) {
+            this.labelRes = labelRes;
             this.command = command;
         }
     }
@@ -2160,21 +2739,55 @@ public final class MainActivity extends Activity {
     }
 
     private enum Direction {
-        NORTH(R.string.direction_north, OnStepCommand.MOVE_NORTH),
-        NORTH_EAST(R.string.direction_north_east, OnStepCommand.MOVE_NORTH, OnStepCommand.MOVE_EAST),
-        EAST(R.string.direction_east, OnStepCommand.MOVE_EAST),
-        SOUTH_EAST(R.string.direction_south_east, OnStepCommand.MOVE_SOUTH, OnStepCommand.MOVE_EAST),
-        SOUTH(R.string.direction_south, OnStepCommand.MOVE_SOUTH),
-        SOUTH_WEST(R.string.direction_south_west, OnStepCommand.MOVE_SOUTH, OnStepCommand.MOVE_WEST),
-        WEST(R.string.direction_west, OnStepCommand.MOVE_WEST),
-        NORTH_WEST(R.string.direction_north_west, OnStepCommand.MOVE_NORTH, OnStepCommand.MOVE_WEST);
+        NORTH(
+                R.string.direction_north,
+                new OnStepCommand[]{OnStepCommand.MOVE_NORTH},
+                new OnStepCommand[]{OnStepCommand.STOP_NORTH}
+        ),
+        NORTH_EAST(
+                R.string.direction_north_east,
+                new OnStepCommand[]{OnStepCommand.MOVE_NORTH, OnStepCommand.MOVE_EAST},
+                new OnStepCommand[]{OnStepCommand.STOP_NORTH, OnStepCommand.STOP_EAST}
+        ),
+        EAST(
+                R.string.direction_east,
+                new OnStepCommand[]{OnStepCommand.MOVE_EAST},
+                new OnStepCommand[]{OnStepCommand.STOP_EAST}
+        ),
+        SOUTH_EAST(
+                R.string.direction_south_east,
+                new OnStepCommand[]{OnStepCommand.MOVE_SOUTH, OnStepCommand.MOVE_EAST},
+                new OnStepCommand[]{OnStepCommand.STOP_SOUTH, OnStepCommand.STOP_EAST}
+        ),
+        SOUTH(
+                R.string.direction_south,
+                new OnStepCommand[]{OnStepCommand.MOVE_SOUTH},
+                new OnStepCommand[]{OnStepCommand.STOP_SOUTH}
+        ),
+        SOUTH_WEST(
+                R.string.direction_south_west,
+                new OnStepCommand[]{OnStepCommand.MOVE_SOUTH, OnStepCommand.MOVE_WEST},
+                new OnStepCommand[]{OnStepCommand.STOP_SOUTH, OnStepCommand.STOP_WEST}
+        ),
+        WEST(
+                R.string.direction_west,
+                new OnStepCommand[]{OnStepCommand.MOVE_WEST},
+                new OnStepCommand[]{OnStepCommand.STOP_WEST}
+        ),
+        NORTH_WEST(
+                R.string.direction_north_west,
+                new OnStepCommand[]{OnStepCommand.MOVE_NORTH, OnStepCommand.MOVE_WEST},
+                new OnStepCommand[]{OnStepCommand.STOP_NORTH, OnStepCommand.STOP_WEST}
+        );
 
         private final int labelRes;
-        private final OnStepCommand[] commands;
+        private final OnStepCommand[] moveCommands;
+        private final OnStepCommand[] stopCommands;
 
-        Direction(int labelRes, OnStepCommand... commands) {
+        Direction(int labelRes, OnStepCommand[] moveCommands, OnStepCommand[] stopCommands) {
             this.labelRes = labelRes;
-            this.commands = commands;
+            this.moveCommands = moveCommands;
+            this.stopCommands = stopCommands;
         }
 
         private String label(Activity activity) {
