@@ -1,0 +1,13 @@
+.gradle/
+.toolchain/
+.avd/
+data/raw/
+build/
+app/build/
+*.iml
+.idea/
+local.properties
+*.apk
+*.aab
+preview-*.png
+window.xml
