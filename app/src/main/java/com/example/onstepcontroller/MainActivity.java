@@ -5,6 +5,7 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.Dialog;
 import android.content.Context;
+import android.content.res.Configuration;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.Typeface;
@@ -26,9 +27,13 @@ import android.view.View;
 import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
+import android.widget.Spinner;
 import android.widget.TextView;
+import android.widget.ArrayAdapter;
+import android.widget.AdapterView;
 
 import java.io.IOException;
 import java.net.SocketTimeoutException;
@@ -72,13 +77,12 @@ public final class MainActivity extends Activity {
     private Button manualTabButton;
     private Button skyTabButton;
     private Button settingsTabButton;
-    private Button calibrationTabButton;
     private Button sideMenuToggleButton;
+    private Button floatingStopButton;
     private LinearLayout sideMenu;
     private LinearLayout manualPage;
     private LinearLayout skyPage;
     private LinearLayout settingsPage;
-    private LinearLayout calibrationPage;
     private EditText hostField;
     private EditText portField;
     private LinearLayout connectionForm;
@@ -93,9 +97,7 @@ public final class MainActivity extends Activity {
     private Button southWestButton;
     private Button eastButton;
     private Button westButton;
-    private LinearLayout rateGrid;
-    private final List<Button> rateButtons = new ArrayList<>();
-    private String selectedRateCommand = OnStepCommand.RATE_CENTER.command;
+    private Spinner manualRateSpinner;
     private ObserverState observerState = ObserverState.boston();
     private EditText latitudeField;
     private EditText longitudeField;
@@ -105,7 +107,10 @@ public final class MainActivity extends Activity {
     private TextView skySummaryText;
     private TextView targetStatusText;
     private TextView mountPointingText;
+    private TextView gotoStatusText;
+    private TextView observingAlertText;
     private Button gotoButton;
+    private Button skyCancelGotoButton;
     private Button syncMountButton;
     private Button trackingSiderealButton;
     private Button trackingLunarButton;
@@ -115,6 +120,17 @@ public final class MainActivity extends Activity {
     private TextView homeStatusText;
     private Button gotoHomeButton;
     private Button setHomeButton;
+    private TextView safetyStatusText;
+    private Button emergencyStopButton;
+    private Button safetyCancelGotoButton;
+    private Button gotoStatusRefreshButton;
+    private Button parkButton;
+    private Button unparkButton;
+    private Button nightModeButton;
+    private Spinner calibrationModeSpinner;
+    private LinearLayout quickCalibrationPanel;
+    private LinearLayout alignCalibrationPanel;
+    private LinearLayout refineCalibrationPanel;
     private EditText calibrationTargetField;
     private TextView calibrationStatusText;
     private TextView calibrationStepText;
@@ -122,15 +138,11 @@ public final class MainActivity extends Activity {
     private Button calibrationShowButton;
     private Button quickGotoButton;
     private Button quickSyncButton;
-    private Button alignOneButton;
-    private Button alignTwoButton;
-    private Button alignThreeButton;
+    private Button alignStartButton;
     private Button alignGotoButton;
     private Button alignAcceptButton;
     private Button alignSaveButton;
     private Button alignCancelButton;
-    private Button alignOpenManualButton;
-    private Button modelTrackingButton;
     private Button refinePaButton;
     private TextView statusText;
     private TextView manualStatusText;
@@ -142,9 +154,15 @@ public final class MainActivity extends Activity {
 
     private boolean connected;
     private boolean busy;
-    private boolean sideMenuExpanded = true;
+    private boolean sideMenuExpanded;
+    private boolean nightModeEnabled;
+    private boolean gotoInProgress;
+    private boolean parked;
     private String connectedHost;
     private int connectedPort = DEFAULT_PORT;
+    private String currentStatusMessage;
+    private String gotoStatusMessage;
+    private String safetyStatusMessage;
     private int mountPointingFailureCount;
     private boolean mountPointingPollingPaused;
     private boolean hasCurrentMountPosition;
@@ -154,10 +172,15 @@ public final class MainActivity extends Activity {
     private double homeRaHours;
     private double homeDecDegrees;
     private boolean trackingEnabled;
+    private boolean hasThreeStarTrackingModel;
+    private boolean trackingUsingDualAxis;
     private TrackingRate selectedTrackingRate = TrackingRate.SIDEREAL;
     private Direction activeDirection;
     private SkyChartView.Target selectedSkyTarget;
     private SkyChartView.Target calibrationTarget;
+    private ManualRate selectedManualRate = ManualRate.CENTER;
+    private CalibrationMode selectedCalibrationMode = CalibrationMode.QUICK_SYNC;
+    private Page currentPage = Page.SETTINGS;
     private AlignmentSession alignmentSession;
     private int suggestedCalibrationIndex;
 
@@ -166,6 +189,7 @@ public final class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         connectivityManager = (ConnectivityManager) getApplicationContext().getSystemService(Context.CONNECTIVITY_SERVICE);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        applyNightModeWindow();
         setContentView(createContentView());
         updateUiState();
         updateObserverViews();
@@ -226,54 +250,77 @@ public final class MainActivity extends Activity {
     }
 
     private View createContentView() {
-        LinearLayout shell = new LinearLayout(this);
-        shell.setOrientation(LinearLayout.HORIZONTAL);
-        shell.setBackgroundColor(Color.rgb(245, 247, 251));
-
-        shell.addView(createPageTabs(), sideMenuParams());
+        boolean wideLayout = isWideLayout();
+        FrameLayout shell = new FrameLayout(this);
+        shell.setBackgroundColor(pageBackgroundColor());
 
         ScrollView scrollView = new ScrollView(this);
         scrollView.setFillViewport(true);
-        scrollView.setBackgroundColor(Color.rgb(245, 247, 251));
+        scrollView.setBackgroundColor(pageBackgroundColor());
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(12), dp(18), dp(12), dp(20));
+        root.setPadding(dp(wideLayout ? 24 : 12), dp(18), dp(wideLayout ? 24 : 12), dp(24));
         scrollView.addView(root, matchWrap());
 
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.VERTICAL);
+        header.setPadding(dp(64), 0, 0, dp(12));
         TextView title = titleText(R.string.app_name, 24);
-        root.addView(title, matchWrap());
+        header.addView(title, matchWrap());
 
         TextView subtitle = bodyText(R.string.app_subtitle);
-        subtitle.setPadding(0, dp(4), 0, dp(12));
-        root.addView(subtitle, matchWrap());
+        subtitle.setPadding(0, dp(4), 0, 0);
+        header.addView(subtitle, matchWrap());
+        root.addView(header, matchWrap());
 
         manualPage = new LinearLayout(this);
         manualPage.setOrientation(LinearLayout.VERTICAL);
         manualStatusText = bodyText(R.string.status_disconnected);
-        manualStatusText.setTextColor(Color.rgb(31, 41, 55));
-        manualStatusText.setBackgroundColor(Color.WHITE);
+        manualStatusText.setTextColor(labelTextColor());
+        manualStatusText.setBackgroundColor(cardBackgroundColor());
         manualStatusText.setPadding(dp(12), dp(10), dp(12), dp(10));
+        if (currentStatusMessage != null) {
+            manualStatusText.setText(currentStatusMessage);
+        }
         manualPage.addView(manualStatusText, matchWrap());
-        manualPage.addView(sectionTitle(R.string.manual_control_section), matchWrapWithTopMargin(12));
-        manualPage.addView(createControlPanel(), matchWrap());
+        if (wideLayout) {
+            LinearLayout manualColumns = new LinearLayout(this);
+            manualColumns.setOrientation(LinearLayout.HORIZONTAL);
+            manualColumns.setGravity(Gravity.TOP);
+
+            LinearLayout controlColumn = new LinearLayout(this);
+            controlColumn.setOrientation(LinearLayout.VERTICAL);
+            controlColumn.addView(sectionTitle(R.string.manual_control_section), matchWrapWithTopMargin(12));
+            controlColumn.addView(createControlPanel(), matchWrap());
+            manualColumns.addView(controlColumn, weightWrap(1f));
+
+            LinearLayout calibrationColumn = new LinearLayout(this);
+            calibrationColumn.setOrientation(LinearLayout.VERTICAL);
+            calibrationColumn.addView(createCalibrationPage(), matchWrapWithTopMargin(12));
+            manualColumns.addView(calibrationColumn, weightWrapWithLeftMargin(1f, 16));
+
+            manualPage.addView(manualColumns, matchWrap());
+        } else {
+            manualPage.addView(sectionTitle(R.string.manual_control_section), matchWrapWithTopMargin(12));
+            manualPage.addView(createControlPanel(), matchWrap());
+            manualPage.addView(createCalibrationPage(), matchWrapWithTopMargin(12));
+        }
         root.addView(manualPage, matchWrap());
 
         skyPage = createSkyPage();
         skyPage.setVisibility(View.GONE);
         root.addView(skyPage, matchWrap());
 
-        calibrationPage = createCalibrationPage();
-        calibrationPage.setVisibility(View.GONE);
-        root.addView(calibrationPage, matchWrap());
-
         settingsPage = createSettingsPage();
         settingsPage.setVisibility(View.GONE);
         root.addView(settingsPage, matchWrap());
 
-        updatePageTabs(Page.SETTINGS);
+        shell.addView(scrollView, frameMatchParent());
+        shell.addView(createPageTabs(), sideMenuParams());
+        shell.addView(createFloatingEmergencyStopButton(), floatingStopParams());
 
-        shell.addView(scrollView, matchParentWeight(1f));
+        updatePageTabs(currentPage);
         return shell;
     }
 
@@ -281,8 +328,7 @@ public final class MainActivity extends Activity {
         sideMenu = new LinearLayout(this);
         sideMenu.setOrientation(LinearLayout.VERTICAL);
         sideMenu.setGravity(Gravity.TOP | Gravity.CENTER_HORIZONTAL);
-        sideMenu.setPadding(dp(8), dp(22), dp(8), dp(8));
-        sideMenu.setBackgroundColor(Color.rgb(15, 23, 42));
+        sideMenu.setElevation(dp(8));
 
         sideMenuToggleButton = new Button(this);
         configureMenuToggleButton(sideMenuToggleButton);
@@ -294,12 +340,6 @@ public final class MainActivity extends Activity {
         settingsTabButton.setText(R.string.tab_settings);
         settingsTabButton.setOnClickListener(v -> selectPageFromMenu(Page.SETTINGS));
         sideMenu.addView(settingsTabButton, sideMenuButtonParams(10));
-
-        calibrationTabButton = new Button(this);
-        configureTabButton(calibrationTabButton);
-        calibrationTabButton.setText(R.string.tab_calibration);
-        calibrationTabButton.setOnClickListener(v -> selectPageFromMenu(Page.CALIBRATION));
-        sideMenu.addView(calibrationTabButton, sideMenuButtonParams(10));
 
         manualTabButton = new Button(this);
         configureTabButton(manualTabButton);
@@ -315,6 +355,18 @@ public final class MainActivity extends Activity {
 
         setSideMenuExpanded(sideMenuExpanded);
         return sideMenu;
+    }
+
+    private View createFloatingEmergencyStopButton() {
+        floatingStopButton = new Button(this);
+        floatingStopButton.setAllCaps(false);
+        floatingStopButton.setText(R.string.emergency_stop_short);
+        floatingStopButton.setTextSize(14);
+        floatingStopButton.setTextColor(Color.WHITE);
+        floatingStopButton.setTypeface(Typeface.DEFAULT_BOLD);
+        floatingStopButton.setBackground(createStopButtonBackground());
+        floatingStopButton.setOnClickListener(v -> emergencyStop());
+        return floatingStopButton;
     }
 
     private LinearLayout createSkyPage() {
@@ -335,6 +387,12 @@ public final class MainActivity extends Activity {
             updateTargetViews();
         });
         skyChartView.setViewStateListener(() -> skySummaryText.setText(skyChartView.summary()));
+        if (selectedSkyTarget != null) {
+            skyChartView.setSelectedTarget(selectedSkyTarget, false);
+        }
+        if (hasCurrentMountPosition) {
+            skyChartView.setMountEquatorial(currentMountRaHours, currentMountDecDegrees);
+        }
         skySummaryText.setText(skyChartView.summary());
 
         targetStatusText = bodyText(R.string.sky_target_none);
@@ -343,7 +401,25 @@ public final class MainActivity extends Activity {
 
         mountPointingText = bodyText(R.string.mount_pointing_default);
         mountPointingText.setPadding(0, dp(4), 0, 0);
+        if (hasCurrentMountPosition) {
+            mountPointingText.setText(getString(
+                    R.string.mount_pointing_status,
+                    formatRightAscensionDisplay(currentMountRaHours),
+                    formatDeclinationDisplay(currentMountDecDegrees)
+            ));
+        }
         panel.addView(mountPointingText, matchWrap());
+
+        gotoStatusText = bodyText(R.string.goto_status_idle);
+        gotoStatusText.setPadding(0, dp(4), 0, 0);
+        if (gotoStatusMessage != null) {
+            gotoStatusText.setText(gotoStatusMessage);
+        }
+        panel.addView(gotoStatusText, matchWrap());
+
+        observingAlertText = bodyText(R.string.observing_alert_no_target);
+        observingAlertText.setPadding(0, dp(4), 0, 0);
+        panel.addView(observingAlertText, matchWrap());
 
         LinearLayout actions = new LinearLayout(this);
         actions.setOrientation(LinearLayout.HORIZONTAL);
@@ -365,9 +441,15 @@ public final class MainActivity extends Activity {
         gotoButton.setOnClickListener(v -> showTargetDialog());
         actions.addView(gotoButton, weightWrapWithLeftMargin(1f, 10));
 
+        skyCancelGotoButton = new Button(this);
+        skyCancelGotoButton.setAllCaps(false);
+        skyCancelGotoButton.setText(R.string.goto_cancel);
+        skyCancelGotoButton.setOnClickListener(v -> cancelGoto());
+        actions.addView(skyCancelGotoButton, weightWrapWithLeftMargin(1f, 10));
+
         panel.addView(actions, matchWrap());
 
-        panel.addView(skyChartView, matchFixedHeight(480));
+        panel.addView(skyChartView, matchFixedHeight(isWideLayout() ? 620 : 480));
 
         TextView note = bodyText(R.string.sky_planet_note);
         note.setPadding(0, dp(10), 0, 0);
@@ -387,6 +469,34 @@ public final class MainActivity extends Activity {
         TextView intro = bodyText(R.string.calibration_intro);
         intro.setPadding(0, 0, 0, dp(10));
         targetPanel.addView(intro, matchWrap());
+
+        targetPanel.addView(labelText(R.string.calibration_mode_label), matchWrap());
+        calibrationModeSpinner = new Spinner(this);
+        List<String> modeLabels = new ArrayList<>();
+        for (CalibrationMode mode : CalibrationMode.values()) {
+            modeLabels.add(getString(mode.labelRes));
+        }
+        ArrayAdapter<String> modeAdapter = new ArrayAdapter<>(
+                this,
+                android.R.layout.simple_spinner_item,
+                modeLabels
+        );
+        modeAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        calibrationModeSpinner.setAdapter(modeAdapter);
+        calibrationModeSpinner.setSelection(selectedCalibrationMode.ordinal());
+        calibrationModeSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                selectedCalibrationMode = CalibrationMode.values()[position];
+                updateCalibrationModeViews();
+            }
+
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) {
+                // Keep the current mode.
+            }
+        });
+        targetPanel.addView(calibrationModeSpinner, matchWrap());
 
         targetPanel.addView(labelText(R.string.calibration_target_label), matchWrap());
         calibrationTargetField = new EditText(this);
@@ -415,11 +525,12 @@ public final class MainActivity extends Activity {
         targetPanel.addView(calibrationStatusText, matchWrap());
         page.addView(targetPanel, matchWrap());
 
-        page.addView(sectionTitle(R.string.calibration_quick_section), matchWrapWithTopMargin(12));
-        LinearLayout quickPanel = card();
+        page.addView(sectionTitle(R.string.calibration_mode_settings), matchWrapWithTopMargin(12));
+
+        quickCalibrationPanel = card();
         TextView quickIntro = bodyText(R.string.calibration_quick_intro);
         quickIntro.setPadding(0, 0, 0, dp(10));
-        quickPanel.addView(quickIntro, matchWrap());
+        quickCalibrationPanel.addView(quickIntro, matchWrap());
 
         LinearLayout quickActions = new LinearLayout(this);
         quickActions.setOrientation(LinearLayout.HORIZONTAL);
@@ -433,36 +544,25 @@ public final class MainActivity extends Activity {
         quickSyncButton.setOnClickListener(v -> syncQuickCalibrationTarget());
         quickActions.addView(quickSyncButton, weightWrapWithLeftMargin(1f, 8));
 
-        quickPanel.addView(quickActions, matchWrap());
-        page.addView(quickPanel, matchWrap());
+        quickCalibrationPanel.addView(quickActions, matchWrap());
+        page.addView(quickCalibrationPanel, matchWrap());
 
-        page.addView(sectionTitle(R.string.calibration_align_section), matchWrapWithTopMargin(12));
-        LinearLayout alignPanel = card();
+        alignCalibrationPanel = card();
         TextView alignIntro = bodyText(R.string.calibration_align_intro);
         alignIntro.setPadding(0, 0, 0, dp(10));
-        alignPanel.addView(alignIntro, matchWrap());
+        alignCalibrationPanel.addView(alignIntro, matchWrap());
 
-        LinearLayout modeActions = new LinearLayout(this);
-        modeActions.setOrientation(LinearLayout.HORIZONTAL);
-        modeActions.setGravity(Gravity.CENTER_VERTICAL);
-
-        alignOneButton = actionButton(R.string.calibration_one_star);
-        alignOneButton.setOnClickListener(v -> startAlignment(1));
-        modeActions.addView(alignOneButton, weightWrap(1f));
-
-        alignTwoButton = actionButton(R.string.calibration_two_star);
-        alignTwoButton.setOnClickListener(v -> startAlignment(2));
-        modeActions.addView(alignTwoButton, weightWrapWithLeftMargin(1f, 8));
-
-        alignThreeButton = actionButton(R.string.calibration_three_star);
-        alignThreeButton.setOnClickListener(v -> startAlignment(3));
-        modeActions.addView(alignThreeButton, weightWrapWithLeftMargin(1f, 8));
-
-        alignPanel.addView(modeActions, matchWrap());
+        alignStartButton = actionButton(R.string.calibration_align_start);
+        alignStartButton.setOnClickListener(v -> {
+            if (selectedCalibrationMode.starCount > 0) {
+                startAlignment(selectedCalibrationMode.starCount);
+            }
+        });
+        alignCalibrationPanel.addView(alignStartButton, matchWrap());
 
         calibrationStepText = bodyText(R.string.calibration_align_idle);
         calibrationStepText.setPadding(0, dp(10), 0, dp(10));
-        alignPanel.addView(calibrationStepText, matchWrap());
+        alignCalibrationPanel.addView(calibrationStepText, matchWrap());
 
         LinearLayout alignActionsOne = new LinearLayout(this);
         alignActionsOne.setOrientation(LinearLayout.HORIZONTAL);
@@ -470,13 +570,9 @@ public final class MainActivity extends Activity {
 
         alignGotoButton = actionButton(R.string.calibration_align_goto);
         alignGotoButton.setOnClickListener(v -> gotoAlignmentTarget());
-        alignActionsOne.addView(alignGotoButton, weightWrap(1f));
+        alignActionsOne.addView(alignGotoButton, matchWrap());
 
-        alignOpenManualButton = actionButton(R.string.calibration_open_manual);
-        alignOpenManualButton.setOnClickListener(v -> updatePageTabs(Page.MANUAL));
-        alignActionsOne.addView(alignOpenManualButton, weightWrapWithLeftMargin(1f, 8));
-
-        alignPanel.addView(alignActionsOne, matchWrap());
+        alignCalibrationPanel.addView(alignActionsOne, matchWrap());
 
         LinearLayout alignActionsTwo = new LinearLayout(this);
         alignActionsTwo.setOrientation(LinearLayout.HORIZONTAL);
@@ -495,28 +591,20 @@ public final class MainActivity extends Activity {
         alignCancelButton.setOnClickListener(v -> cancelAlignmentSession());
         alignActionsTwo.addView(alignCancelButton, weightWrapWithLeftMargin(1f, 8));
 
-        alignPanel.addView(alignActionsTwo, matchWrap());
-        page.addView(alignPanel, matchWrap());
+        alignCalibrationPanel.addView(alignActionsTwo, matchWrap());
+        page.addView(alignCalibrationPanel, matchWrap());
 
-        page.addView(sectionTitle(R.string.calibration_tracking_section), matchWrapWithTopMargin(12));
-        LinearLayout trackingPanel = card();
-        TextView trackingIntro = bodyText(R.string.calibration_tracking_intro);
-        trackingIntro.setPadding(0, 0, 0, dp(10));
-        trackingPanel.addView(trackingIntro, matchWrap());
-
-        modelTrackingButton = actionButton(R.string.calibration_enable_model_tracking);
-        modelTrackingButton.setOnClickListener(v -> enableModelDualAxisTracking());
-        trackingPanel.addView(modelTrackingButton, matchWrap());
-
+        refineCalibrationPanel = card();
         TextView refineIntro = bodyText(R.string.calibration_refine_intro);
-        refineIntro.setPadding(0, dp(12), 0, dp(10));
-        trackingPanel.addView(refineIntro, matchWrap());
+        refineIntro.setPadding(0, 0, 0, dp(10));
+        refineCalibrationPanel.addView(refineIntro, matchWrap());
 
         refinePaButton = actionButton(R.string.calibration_refine_pa);
         refinePaButton.setOnClickListener(v -> refinePolarAlignment());
-        trackingPanel.addView(refinePaButton, matchWrap());
+        refineCalibrationPanel.addView(refinePaButton, matchWrap());
 
-        page.addView(trackingPanel, matchWrap());
+        page.addView(refineCalibrationPanel, matchWrap());
+        updateCalibrationModeViews();
         return page;
     }
 
@@ -524,31 +612,124 @@ public final class MainActivity extends Activity {
         LinearLayout page = new LinearLayout(this);
         page.setOrientation(LinearLayout.VERTICAL);
 
-        page.addView(sectionTitle(R.string.connection_section), matchWrap());
-        page.addView(createConnectionPanel(), matchWrap());
+        if (isWideLayout()) {
+            LinearLayout columns = new LinearLayout(this);
+            columns.setOrientation(LinearLayout.HORIZONTAL);
+            columns.setGravity(Gravity.TOP);
 
-        page.addView(sectionTitle(R.string.command_log_section), matchWrapWithTopMargin(12));
-        page.addView(createCommandLogPanel(), matchWrap());
+            LinearLayout left = new LinearLayout(this);
+            left.setOrientation(LinearLayout.VERTICAL);
+            left.addView(sectionTitle(R.string.connection_section), matchWrap());
+            left.addView(createConnectionPanel(), matchWrap());
+            left.addView(sectionTitle(R.string.observer_section), matchWrapWithTopMargin(12));
+            left.addView(createObserverPanel(), matchWrap());
+            left.addView(sectionTitle(R.string.home_section), matchWrapWithTopMargin(12));
+            left.addView(createHomePanel(), matchWrap());
+            columns.addView(left, weightWrap(1f));
 
-        page.addView(sectionTitle(R.string.tracking_section), matchWrapWithTopMargin(12));
-        page.addView(createTrackingPanel(), matchWrap());
+            LinearLayout right = new LinearLayout(this);
+            right.setOrientation(LinearLayout.VERTICAL);
+            right.addView(sectionTitle(R.string.tracking_section), matchWrap());
+            right.addView(createTrackingPanel(), matchWrap());
+            right.addView(sectionTitle(R.string.command_log_section), matchWrapWithTopMargin(12));
+            right.addView(createCommandLogPanel(), matchWrap());
+            right.addView(sectionTitle(R.string.safety_section), matchWrapWithTopMargin(12));
+            right.addView(createSafetyPanel(), matchWrap());
+            columns.addView(right, weightWrapWithLeftMargin(1f, 16));
 
-        page.addView(sectionTitle(R.string.home_section), matchWrapWithTopMargin(12));
-        page.addView(createHomePanel(), matchWrap());
+            page.addView(columns, matchWrap());
+        } else {
+            page.addView(sectionTitle(R.string.connection_section), matchWrap());
+            page.addView(createConnectionPanel(), matchWrap());
 
-        page.addView(sectionTitle(R.string.observer_section), matchWrapWithTopMargin(12));
-        page.addView(createObserverPanel(), matchWrap());
+            page.addView(sectionTitle(R.string.observer_section), matchWrapWithTopMargin(12));
+            page.addView(createObserverPanel(), matchWrap());
+
+            page.addView(sectionTitle(R.string.home_section), matchWrapWithTopMargin(12));
+            page.addView(createHomePanel(), matchWrap());
+
+            page.addView(sectionTitle(R.string.tracking_section), matchWrapWithTopMargin(12));
+            page.addView(createTrackingPanel(), matchWrap());
+
+            page.addView(sectionTitle(R.string.command_log_section), matchWrapWithTopMargin(12));
+            page.addView(createCommandLogPanel(), matchWrap());
+
+            page.addView(sectionTitle(R.string.safety_section), matchWrapWithTopMargin(12));
+            page.addView(createSafetyPanel(), matchWrap());
+        }
 
         return page;
+    }
+
+    private View createSafetyPanel() {
+        LinearLayout panel = card();
+
+        TextView intro = bodyText(R.string.safety_intro);
+        intro.setPadding(0, 0, 0, dp(10));
+        panel.addView(intro, matchWrap());
+
+        LinearLayout stopActions = new LinearLayout(this);
+        stopActions.setOrientation(LinearLayout.HORIZONTAL);
+        stopActions.setGravity(Gravity.CENTER_VERTICAL);
+
+        emergencyStopButton = actionButton(R.string.emergency_stop);
+        emergencyStopButton.setTextColor(Color.WHITE);
+        emergencyStopButton.setTypeface(Typeface.DEFAULT_BOLD);
+        emergencyStopButton.setBackground(createStopButtonBackground());
+        emergencyStopButton.setOnClickListener(v -> emergencyStop());
+        stopActions.addView(emergencyStopButton, weightWrap(1f));
+
+        safetyCancelGotoButton = actionButton(R.string.goto_cancel);
+        safetyCancelGotoButton.setOnClickListener(v -> cancelGoto());
+        stopActions.addView(safetyCancelGotoButton, weightWrapWithLeftMargin(1f, 8));
+        panel.addView(stopActions, matchWrap());
+
+        LinearLayout gotoActions = new LinearLayout(this);
+        gotoActions.setOrientation(LinearLayout.HORIZONTAL);
+        gotoActions.setGravity(Gravity.CENTER_VERTICAL);
+        gotoActions.setPadding(0, dp(8), 0, 0);
+
+        gotoStatusRefreshButton = actionButton(R.string.goto_refresh_status);
+        gotoStatusRefreshButton.setOnClickListener(v -> refreshGotoStatus());
+        gotoActions.addView(gotoStatusRefreshButton, weightWrap(1f));
+
+        nightModeButton = actionButton(nightModeEnabled ? R.string.night_mode_off : R.string.night_mode_on);
+        nightModeButton.setOnClickListener(v -> toggleNightMode());
+        gotoActions.addView(nightModeButton, weightWrapWithLeftMargin(1f, 8));
+        panel.addView(gotoActions, matchWrap());
+
+        LinearLayout parkActions = new LinearLayout(this);
+        parkActions.setOrientation(LinearLayout.HORIZONTAL);
+        parkActions.setGravity(Gravity.CENTER_VERTICAL);
+        parkActions.setPadding(0, dp(8), 0, 0);
+
+        parkButton = actionButton(R.string.park_mount);
+        parkButton.setOnClickListener(v -> parkMount());
+        parkActions.addView(parkButton, weightWrap(1f));
+
+        unparkButton = actionButton(R.string.unpark_mount);
+        unparkButton.setOnClickListener(v -> unparkMount());
+        parkActions.addView(unparkButton, weightWrapWithLeftMargin(1f, 8));
+        panel.addView(parkActions, matchWrap());
+
+        safetyStatusText = bodyText(R.string.safety_status_idle);
+        safetyStatusText.setPadding(0, dp(10), 0, 0);
+        if (safetyStatusMessage != null) {
+            safetyStatusText.setText(safetyStatusMessage);
+        }
+        panel.addView(safetyStatusText, matchWrap());
+
+        return panel;
     }
 
     private View createCommandLogPanel() {
         LinearLayout panel = card();
         logText = bodyText(R.string.log_empty);
-        logText.setTextColor(Color.rgb(55, 65, 81));
+        logText.setTextColor(bodyTextColor());
         logText.setMinLines(5);
         logText.setGravity(Gravity.START);
         panel.addView(logText, matchWrap());
+        updateLogText();
         return panel;
     }
 
@@ -725,6 +906,9 @@ public final class MainActivity extends Activity {
 
         statusText = bodyText(R.string.status_disconnected);
         statusText.setPadding(0, dp(10), 0, 0);
+        if (currentStatusMessage != null) {
+            statusText.setText(currentStatusMessage);
+        }
         panel.addView(statusText, matchWrap());
 
         return panel;
@@ -736,22 +920,44 @@ public final class MainActivity extends Activity {
         TextView rateLabel = labelText(R.string.rate_label);
         panel.addView(rateLabel, matchWrap());
 
-        rateGrid = new LinearLayout(this);
-        rateGrid.setOrientation(LinearLayout.VERTICAL);
-        rateGrid.setPadding(0, dp(6), 0, dp(12));
+        LinearLayout ratePanel = new LinearLayout(this);
+        ratePanel.setOrientation(LinearLayout.VERTICAL);
+        ratePanel.setPadding(0, dp(6), 0, dp(12));
 
-        LinearLayout rateRowOne = centeredRow();
-        rateRowOne.addView(rateButton(R.string.rate_guide, OnStepCommand.RATE_GUIDE.command), rateButtonParams());
-        rateRowOne.addView(rateButton(R.string.rate_center, OnStepCommand.RATE_CENTER.command), rateButtonParams());
-        rateGrid.addView(rateRowOne, matchWrap());
+        manualRateSpinner = new Spinner(this);
+        List<String> rateLabels = new ArrayList<>();
+        for (ManualRate rate : ManualRate.values()) {
+            rateLabels.add(getString(rate.labelRes));
+        }
+        ArrayAdapter<String> rateAdapter = new ArrayAdapter<>(
+                this,
+                android.R.layout.simple_spinner_item,
+                rateLabels
+        );
+        rateAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        manualRateSpinner.setAdapter(rateAdapter);
+        manualRateSpinner.setSelection(selectedManualRate.ordinal());
+        manualRateSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                ManualRate rate = ManualRate.values()[position];
+                if (selectedManualRate == rate) {
+                    return;
+                }
+                selectedManualRate = rate;
+                if (connected) {
+                    enqueueCommand(selectedManualRate.command, getString(R.string.log_rate_changed));
+                }
+            }
 
-        LinearLayout rateRowTwo = centeredRow();
-        rateRowTwo.addView(rateButton(R.string.rate_find, OnStepCommand.RATE_FIND.command), rateButtonParams());
-        rateRowTwo.addView(rateButton(R.string.rate_slew, OnStepCommand.RATE_SLEW.command), rateButtonParams());
-        rateGrid.addView(rateRowTwo, matchWrap());
-
-        panel.addView(rateGrid, matchWrap());
-        updateRateButtons();
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) {
+                // Keep the current rate.
+            }
+        });
+        ratePanel.addView(manualRateSpinner, matchWrap());
+        panel.addView(ratePanel, matchWrap());
+        updateManualRateControl();
 
         LinearLayout grid = new LinearLayout(this);
         grid.setOrientation(LinearLayout.VERTICAL);
@@ -835,6 +1041,11 @@ public final class MainActivity extends Activity {
                     mountPointingPollingPaused = true;
                     hasCurrentMountPosition = false;
                     hasHomePosition = false;
+                    hasThreeStarTrackingModel = false;
+                    trackingEnabled = false;
+                    trackingUsingDualAxis = false;
+                    gotoInProgress = false;
+                    parked = false;
                     activeDirection = null;
                     if (connection.handshake.isEmpty()) {
                         setStatus(getString(R.string.status_connected_no_reply_port, connection.port));
@@ -846,6 +1057,8 @@ public final class MainActivity extends Activity {
                     if (connection.port != port) {
                         appendLog("PORT " + connection.port);
                     }
+                    setGotoStatus(getString(R.string.goto_status_idle));
+                    setSafetyStatus(getString(R.string.safety_status_connected));
                     updateUiState();
                     captureInitialHomeFromMount();
                 });
@@ -861,7 +1074,10 @@ public final class MainActivity extends Activity {
                     mountPointingFailureCount = 0;
                     mountPointingPollingPaused = true;
                     activeDirection = null;
+                    gotoInProgress = false;
+                    parked = false;
                     setStatus(getString(R.string.status_connect_failed, ex.getMessage()));
+                    setSafetyStatus(getString(R.string.safety_status_connect_failed));
                     appendLog("ERROR " + safeMessage(ex));
                     updateUiState();
                 });
@@ -926,10 +1142,16 @@ public final class MainActivity extends Activity {
                 mountPointingPollingPaused = false;
                 hasCurrentMountPosition = false;
                 hasHomePosition = false;
+                hasThreeStarTrackingModel = false;
                 activeDirection = null;
                 alignmentSession = null;
+                gotoInProgress = false;
+                parked = false;
                 trackingEnabled = false;
+                trackingUsingDualAxis = false;
                 setStatus(getString(R.string.status_disconnected));
+                setGotoStatus(getString(R.string.goto_status_idle));
+                setSafetyStatus(getString(R.string.safety_status_idle));
                 appendLog("CLOSED");
                 clearMountPointing();
                 updateCalibrationViews();
@@ -975,6 +1197,75 @@ public final class MainActivity extends Activity {
 
     private void enqueueStop(String logMessage) {
         enqueueCommands(new OnStepCommand[]{OnStepCommand.STOP_ALL}, logMessage);
+    }
+
+    private void enqueueImmediateStop(String logMessage) {
+        if (!connected) {
+            return;
+        }
+        appendLog("TX " + OnStepCommand.STOP_ALL.command);
+        ioExecutor.execute(() -> {
+            try {
+                client.sendNoReply(OnStepCommand.STOP_ALL.command);
+                runOnUiThread(() -> setStatus(logMessage));
+            } catch (IOException ex) {
+                markTransportFault();
+                runOnUiThread(() -> handleMotionCommandFailure(ex));
+            }
+        });
+    }
+
+    private void emergencyStop() {
+        activeDirection = null;
+        gotoInProgress = false;
+        setGotoStatus(getString(R.string.goto_status_cancelled));
+        setSafetyStatus(getString(R.string.safety_status_emergency_stop));
+        enqueueImmediateStop(getString(R.string.status_emergency_stop_sent));
+        updateUiState();
+    }
+
+    private void cancelGoto() {
+        if (!connected) {
+            setGotoStatus(getString(R.string.goto_status_not_connected));
+            return;
+        }
+        activeDirection = null;
+        gotoInProgress = false;
+        setGotoStatus(getString(R.string.goto_status_cancelled));
+        setSafetyStatus(getString(R.string.safety_status_goto_cancelled));
+        enqueueImmediateStop(getString(R.string.goto_cancel_sent));
+        updateUiState();
+    }
+
+    private void refreshGotoStatus() {
+        if (!connected || busy) {
+            return;
+        }
+        busy = true;
+        setGotoStatus(getString(R.string.goto_status_refreshing));
+        updateUiState();
+        appendLog("TX " + OnStepCommand.GOTO_STATUS.command);
+
+        int generation = connectionGeneration.get();
+        ioExecutor.execute(() -> {
+            if (!isConnectionGenerationCurrent(generation)) {
+                return;
+            }
+            try {
+                String reply = client.query(OnStepCommand.GOTO_STATUS.command);
+                boolean moving = !reply.isEmpty();
+                runOnUiThread(() -> {
+                    busy = false;
+                    gotoInProgress = moving;
+                    appendLog("RX " + OnStepCommand.GOTO_STATUS.command + " -> " + (moving ? "moving" : "idle"));
+                    setGotoStatus(getString(moving ? R.string.goto_status_running : R.string.goto_status_idle));
+                    updateUiState();
+                });
+            } catch (IOException ex) {
+                markTransportFault();
+                runOnUiThread(() -> handleCommandFailure(ex));
+            }
+        });
     }
 
     private void enqueueDirectionStop(Direction direction, String logMessage) {
@@ -1171,12 +1462,18 @@ public final class MainActivity extends Activity {
                 if ("0".equals(decReply)) {
                     throw new CommandRejectedException(decCommand, decReply);
                 }
+                if (!"0".equals(gotoReply)) {
+                    throw new CommandRejectedException(":MS#", describeGotoReply(gotoReply));
+                }
                 runOnUiThread(() -> {
                     appendLog("RX " + raCommand + " -> " + raReply);
                     appendLog("RX " + decCommand + " -> " + decReply);
                     appendLog("RX :MS# -> " + gotoReply);
                     busy = false;
+                    gotoInProgress = true;
+                    parked = false;
                     setStatus(sentStatus);
+                    setGotoStatus(getString(R.string.goto_status_sent, target.label));
                     if (onSuccess != null) {
                         onSuccess.run();
                     }
@@ -1185,7 +1482,9 @@ public final class MainActivity extends Activity {
             } catch (CommandRejectedException ex) {
                 runOnUiThread(() -> {
                     busy = false;
+                    gotoInProgress = false;
                     setStatus(getString(R.string.status_command_rejected, ex.command, ex.reply));
+                    setGotoStatus(getString(R.string.goto_status_rejected, ex.reply));
                     updateUiState();
                 });
             } catch (IOException ex) {
@@ -1269,6 +1568,45 @@ public final class MainActivity extends Activity {
         );
     }
 
+    private void parkMount() {
+        if (!connected || busy) {
+            return;
+        }
+        List<MountCommand> commands = new ArrayList<>();
+        commands.add(MountCommand.withReply(OnStepCommand.PARK.command));
+        runMountCommands(
+                commands,
+                getString(R.string.park_sending),
+                getString(R.string.park_sent),
+                () -> {
+                    parked = true;
+                    gotoInProgress = false;
+                    trackingEnabled = false;
+                    trackingUsingDualAxis = false;
+                    setGotoStatus(getString(R.string.goto_status_idle));
+                    setSafetyStatus(getString(R.string.safety_status_parked));
+                    updateTrackingViews();
+                }
+        );
+    }
+
+    private void unparkMount() {
+        if (!connected || busy) {
+            return;
+        }
+        List<MountCommand> commands = new ArrayList<>();
+        commands.add(MountCommand.withReply(OnStepCommand.UNPARK.command));
+        runMountCommands(
+                commands,
+                getString(R.string.unpark_sending),
+                getString(R.string.unpark_sent),
+                () -> {
+                    parked = false;
+                    setSafetyStatus(getString(R.string.safety_status_unparked));
+                }
+        );
+    }
+
     private void syncObserverToMount() {
         if (!connected || busy) {
             return;
@@ -1313,7 +1651,11 @@ public final class MainActivity extends Activity {
         selectedTrackingRate = rate;
         updateTrackingViews();
         if (!connected || busy) {
-            setStatus(getString(R.string.tracking_rate_selected, getString(rate.labelRes)));
+            setStatus(getString(
+                    R.string.tracking_rate_selected,
+                    getString(rate.labelRes),
+                    trackingModeLabel(shouldStartDualAxisTracking())
+            ));
             return;
         }
 
@@ -1335,15 +1677,24 @@ public final class MainActivity extends Activity {
         List<MountCommand> commands = new ArrayList<>();
         String sendingStatus;
         String successStatus;
+        final boolean startingDualAxis = shouldStartDualAxisTracking();
         if (trackingEnabled) {
             commands.add(MountCommand.noReply(OnStepCommand.TRACK_DISABLE.command));
             sendingStatus = getString(R.string.tracking_stop_sending);
             successStatus = getString(R.string.tracking_stop_sent);
         } else {
-            commands.add(MountCommand.noReply(selectedTrackingRate.command));
+            addTrackingStartCommands(commands, startingDualAxis);
             commands.add(MountCommand.noReply(OnStepCommand.TRACK_ENABLE.command));
-            sendingStatus = getString(R.string.tracking_start_sending, getString(selectedTrackingRate.labelRes));
-            successStatus = getString(R.string.tracking_start_sent, getString(selectedTrackingRate.labelRes));
+            sendingStatus = getString(
+                    R.string.tracking_start_sending,
+                    getString(selectedTrackingRate.labelRes),
+                    trackingModeLabel(startingDualAxis)
+            );
+            successStatus = getString(
+                    R.string.tracking_start_sent,
+                    getString(selectedTrackingRate.labelRes),
+                    trackingModeLabel(startingDualAxis)
+            );
         }
 
         runMountCommands(
@@ -1351,10 +1702,32 @@ public final class MainActivity extends Activity {
                 sendingStatus,
                 successStatus,
                 () -> {
-                    trackingEnabled = !trackingEnabled;
+                    if (trackingEnabled) {
+                        trackingEnabled = false;
+                        trackingUsingDualAxis = false;
+                    } else {
+                        trackingEnabled = true;
+                        trackingUsingDualAxis = startingDualAxis;
+                    }
                     updateTrackingViews();
                 }
         );
+    }
+
+    private void addTrackingStartCommands(List<MountCommand> commands, boolean dualAxis) {
+        commands.add(MountCommand.noReply(selectedTrackingRate.command));
+        if (dualAxis) {
+            commands.add(MountCommand.noReply(OnStepCommand.TRACK_FULL_COMPENSATION.command));
+            commands.add(MountCommand.noReply(OnStepCommand.TRACK_DUAL_AXIS.command));
+        }
+    }
+
+    private boolean shouldStartDualAxisTracking() {
+        return hasThreeStarTrackingModel;
+    }
+
+    private String trackingModeLabel(boolean dualAxis) {
+        return getString(dualAxis ? R.string.tracking_mode_dual_axis : R.string.tracking_mode_single_axis);
     }
 
     private void fillSuggestedCalibrationTarget() {
@@ -1420,6 +1793,7 @@ public final class MainActivity extends Activity {
                 () -> {
                     selectedTrackingRate = TrackingRate.SIDEREAL;
                     trackingEnabled = true;
+                    trackingUsingDualAxis = false;
                     updateTrackingViews();
                     setCalibrationStatus(getString(R.string.calibration_quick_sync_sent, target.label));
                     refreshMountPointing();
@@ -1447,8 +1821,10 @@ public final class MainActivity extends Activity {
                 getString(R.string.calibration_align_started, starCount),
                 () -> {
                     alignmentSession = new AlignmentSession(starCount);
+                    hasThreeStarTrackingModel = false;
                     selectedTrackingRate = TrackingRate.SIDEREAL;
                     trackingEnabled = true;
+                    trackingUsingDualAxis = false;
                     calibrationTarget = null;
                     calibrationTargetField.setText("");
                     setCalibrationStatus(getString(R.string.calibration_align_started, starCount));
@@ -1503,6 +1879,11 @@ public final class MainActivity extends Activity {
                 () -> {
                     alignmentSession.acceptedStars++;
                     if (alignmentSession.isComplete()) {
+                        if (alignmentSession.totalStars >= 3) {
+                            hasThreeStarTrackingModel = true;
+                            trackingEnabled = false;
+                            trackingUsingDualAxis = false;
+                        }
                         setCalibrationStatus(getString(R.string.calibration_align_complete, alignmentSession.totalStars));
                     } else {
                         alignmentSession.currentTarget = null;
@@ -1531,7 +1912,15 @@ public final class MainActivity extends Activity {
                 commands,
                 getString(R.string.calibration_align_saving),
                 getString(R.string.calibration_align_saved),
-                () -> setCalibrationStatus(getString(R.string.calibration_align_saved))
+                () -> {
+                    if (alignmentSession.totalStars >= 3) {
+                        hasThreeStarTrackingModel = true;
+                        trackingEnabled = false;
+                        trackingUsingDualAxis = false;
+                    }
+                    setCalibrationStatus(getString(R.string.calibration_align_saved));
+                    updateTrackingViews();
+                }
         );
     }
 
@@ -1542,33 +1931,24 @@ public final class MainActivity extends Activity {
         updateCalibrationViews();
     }
 
-    private void enableModelDualAxisTracking() {
-        List<MountCommand> commands = new ArrayList<>();
-        commands.add(MountCommand.noReply(OnStepCommand.TRACK_SIDEREAL.command));
-        commands.add(MountCommand.withReply(OnStepCommand.TRACK_FULL_COMPENSATION.command));
-        commands.add(MountCommand.withReply(OnStepCommand.TRACK_DUAL_AXIS.command));
-        commands.add(MountCommand.withReply(OnStepCommand.TRACK_ENABLE.command));
-        runMountCommands(
-                commands,
-                getString(R.string.calibration_tracking_sending),
-                getString(R.string.calibration_tracking_sent),
-                () -> {
-                    selectedTrackingRate = TrackingRate.SIDEREAL;
-                    trackingEnabled = true;
-                    updateTrackingViews();
-                    setCalibrationStatus(getString(R.string.calibration_tracking_sent));
-                }
-        );
-    }
-
     private void refinePolarAlignment() {
+        if (!hasThreeStarTrackingModel) {
+            setCalibrationStatus(getString(R.string.calibration_refine_requires_three_star));
+            return;
+        }
         List<MountCommand> commands = new ArrayList<>();
         commands.add(MountCommand.noReply(OnStepCommand.REFINE_POLAR_ALIGNMENT.command));
         runMountCommands(
                 commands,
                 getString(R.string.calibration_refine_sending),
                 getString(R.string.calibration_refine_sent),
-                () -> setCalibrationStatus(getString(R.string.calibration_refine_sent))
+                () -> {
+                    hasThreeStarTrackingModel = true;
+                    trackingEnabled = false;
+                    trackingUsingDualAxis = false;
+                    setCalibrationStatus(getString(R.string.calibration_refine_sent));
+                    updateTrackingViews();
+                }
         );
     }
 
@@ -1616,6 +1996,28 @@ public final class MainActivity extends Activity {
             }
         }
         updateUiState();
+    }
+
+    private void updateCalibrationModeViews() {
+        boolean quickMode = selectedCalibrationMode == CalibrationMode.QUICK_SYNC;
+        boolean alignMode = selectedCalibrationMode.isStarAlignment();
+        boolean refineMode = selectedCalibrationMode == CalibrationMode.REFINE_POLAR;
+
+        if (quickCalibrationPanel != null) {
+            quickCalibrationPanel.setVisibility(quickMode ? View.VISIBLE : View.GONE);
+        }
+        if (alignCalibrationPanel != null) {
+            alignCalibrationPanel.setVisibility(alignMode ? View.VISIBLE : View.GONE);
+        }
+        if (refineCalibrationPanel != null) {
+            refineCalibrationPanel.setVisibility(refineMode ? View.VISIBLE : View.GONE);
+        }
+        if (alignStartButton != null && alignMode) {
+            alignStartButton.setText(getString(R.string.calibration_align_start_count, selectedCalibrationMode.starCount));
+        }
+        if (hostField != null) {
+            updateUiState();
+        }
     }
 
     private void runMountCommands(List<MountCommand> commands, String sendingStatus, String successStatus, Runnable onSuccess) {
@@ -1740,6 +2142,7 @@ public final class MainActivity extends Activity {
                     formatDeclinationDisplay(currentMountDecDegrees)
             ));
         }
+        updateGotoProgressFromPointing();
     }
 
     private void clearMountPointing() {
@@ -1772,7 +2175,153 @@ public final class MainActivity extends Activity {
                 ));
             }
         }
+        updateObservingAlert();
         updateUiState();
+    }
+
+    private void updateObservingAlert() {
+        if (observingAlertText == null) {
+            return;
+        }
+        if (selectedSkyTarget == null) {
+            observingAlertText.setText(R.string.observing_alert_no_target);
+            return;
+        }
+
+        Instant now = Instant.now();
+        HorizontalCoordinates coordinates = horizontalCoordinates(
+                selectedSkyTarget.raHours,
+                selectedSkyTarget.decDegrees,
+                now
+        );
+        double localSiderealDegrees = localSiderealDegrees(now);
+        double hourAngleHours = wrapDegrees(localSiderealDegrees - selectedSkyTarget.raHours * 15.0) / 15.0;
+        double minutesFromMeridian = Math.abs(hourAngleHours) * 60.0;
+        String meridian = meridianStatus(hourAngleHours);
+
+        if (coordinates.altitudeDegrees < 0.0) {
+            observingAlertText.setText(getString(
+                    R.string.observing_alert_below_horizon,
+                    coordinates.altitudeDegrees,
+                    coordinates.azimuthDegrees,
+                    meridian
+            ));
+        } else if (coordinates.altitudeDegrees < 15.0) {
+            observingAlertText.setText(getString(
+                    R.string.observing_alert_low_altitude,
+                    coordinates.altitudeDegrees,
+                    coordinates.azimuthDegrees,
+                    meridian
+            ));
+        } else if (minutesFromMeridian <= 30.0) {
+            observingAlertText.setText(getString(
+                    R.string.observing_alert_meridian,
+                    coordinates.altitudeDegrees,
+                    coordinates.azimuthDegrees,
+                    meridian
+            ));
+        } else {
+            observingAlertText.setText(getString(
+                    R.string.observing_alert_ok,
+                    coordinates.altitudeDegrees,
+                    coordinates.azimuthDegrees,
+                    meridian
+            ));
+        }
+    }
+
+    private void updateGotoProgressFromPointing() {
+        if (!gotoInProgress || selectedSkyTarget == null || !hasCurrentMountPosition) {
+            return;
+        }
+        double distanceDegrees = angularDistanceDegrees(
+                currentMountRaHours,
+                currentMountDecDegrees,
+                selectedSkyTarget.raHours,
+                selectedSkyTarget.decDegrees
+        );
+        if (distanceDegrees <= 0.25) {
+            gotoInProgress = false;
+            setGotoStatus(getString(R.string.goto_status_arrived, selectedSkyTarget.label));
+            updateUiState();
+        }
+    }
+
+    private HorizontalCoordinates horizontalCoordinates(double raHours, double decDegrees, Instant instant) {
+        double hourAngle = Math.toRadians(wrapDegrees(localSiderealDegrees(instant) - raHours * 15.0));
+        double dec = Math.toRadians(decDegrees);
+        double lat = Math.toRadians(observerState.latitudeDegrees);
+
+        double sinAlt = Math.sin(dec) * Math.sin(lat) + Math.cos(dec) * Math.cos(lat) * Math.cos(hourAngle);
+        double altitude = Math.asin(clamp(sinAlt, -1.0, 1.0));
+        double cosAlt = Math.max(1.0e-8, Math.cos(altitude));
+        double cosLat = Math.cos(lat);
+        double sinAz = -Math.cos(dec) * Math.sin(hourAngle) / cosAlt;
+        double cosAz = Math.abs(cosLat) < 1.0e-8
+                ? 1.0
+                : (Math.sin(dec) - Math.sin(altitude) * Math.sin(lat)) / (cosAlt * cosLat);
+        double azimuth = Math.toDegrees(Math.atan2(sinAz, cosAz));
+        return new HorizontalCoordinates(Math.toDegrees(altitude), normalizeDegrees(azimuth));
+    }
+
+    private double localSiderealDegrees(Instant instant) {
+        double jd = instant.toEpochMilli() / 86_400_000.0 + 2_440_587.5;
+        double d = jd - 2_451_545.0;
+        double t = d / 36_525.0;
+        double gmst = 280.46061837 + 360.98564736629 * d + 0.000387933 * t * t - t * t * t / 38_710_000.0;
+        return normalizeDegrees(gmst + observerState.longitudeDegrees);
+    }
+
+    private String meridianStatus(double hourAngleHours) {
+        double minutes = Math.abs(hourAngleHours) * 60.0;
+        if (minutes < 3.0) {
+            return getString(R.string.meridian_now);
+        }
+        if (hourAngleHours < 0.0) {
+            return getString(R.string.meridian_before, minutes);
+        }
+        return getString(R.string.meridian_after, minutes);
+    }
+
+    private static double angularDistanceDegrees(double firstRaHours, double firstDecDegrees, double secondRaHours, double secondDecDegrees) {
+        double ra1 = Math.toRadians(normalizeHours(firstRaHours) * 15.0);
+        double dec1 = Math.toRadians(firstDecDegrees);
+        double ra2 = Math.toRadians(normalizeHours(secondRaHours) * 15.0);
+        double dec2 = Math.toRadians(secondDecDegrees);
+        double cosDistance = Math.sin(dec1) * Math.sin(dec2)
+                + Math.cos(dec1) * Math.cos(dec2) * Math.cos(ra1 - ra2);
+        return Math.toDegrees(Math.acos(clamp(cosDistance, -1.0, 1.0)));
+    }
+
+    private String describeGotoReply(String reply) {
+        if ("1".equals(reply)) {
+            return getString(R.string.goto_reply_below_horizon);
+        }
+        if ("2".equals(reply)) {
+            return getString(R.string.goto_reply_above_overhead);
+        }
+        if ("3".equals(reply)) {
+            return getString(R.string.goto_reply_standby);
+        }
+        if ("4".equals(reply)) {
+            return getString(R.string.goto_reply_parked);
+        }
+        if ("5".equals(reply)) {
+            return getString(R.string.goto_reply_in_progress);
+        }
+        if ("6".equals(reply)) {
+            return getString(R.string.goto_reply_outside_limits);
+        }
+        if ("7".equals(reply)) {
+            return getString(R.string.goto_reply_hardware_fault);
+        }
+        if ("8".equals(reply)) {
+            return getString(R.string.goto_reply_already_moving);
+        }
+        if ("9".equals(reply)) {
+            return getString(R.string.goto_reply_unknown);
+        }
+        return reply == null || reply.isEmpty() ? getString(R.string.goto_reply_empty) : reply;
     }
 
     private static String formatRightAscensionCommand(double raHours) {
@@ -1879,12 +2428,22 @@ public final class MainActivity extends Activity {
         return result < 0.0 ? result + 24.0 : result;
     }
 
+    private static double normalizeDegrees(double degrees) {
+        double result = degrees % 360.0;
+        return result < 0.0 ? result + 360.0 : result;
+    }
+
+    private static double wrapDegrees(double degrees) {
+        double result = normalizeDegrees(degrees);
+        return result > 180.0 ? result - 360.0 : result;
+    }
+
     private static double clamp(double value, double min, double max) {
         return Math.max(min, Math.min(max, value));
     }
 
     private String getRateCommand() {
-        return selectedRateCommand;
+        return selectedManualRate.command;
     }
 
     private Button directionButton(int labelRes, Direction direction) {
@@ -1916,24 +2475,6 @@ public final class MainActivity extends Activity {
                     return true;
             }
         });
-        return button;
-    }
-
-    private Button rateButton(int labelRes, String command) {
-        Button button = new Button(this);
-        button.setAllCaps(false);
-        button.setText(labelRes);
-        button.setTextSize(14);
-        button.setTag(command);
-        button.setMinHeight(dp(46));
-        button.setOnClickListener(v -> {
-            selectedRateCommand = command;
-            updateRateButtons();
-            if (connected) {
-                enqueueCommand(selectedRateCommand, getString(R.string.log_rate_changed));
-            }
-        });
-        rateButtons.add(button);
         return button;
     }
 
@@ -2088,11 +2629,59 @@ public final class MainActivity extends Activity {
         updateObserverViews();
     }
 
+    private void toggleNightMode() {
+        nightModeEnabled = !nightModeEnabled;
+        applyNightModeWindow();
+        setContentView(createContentView());
+        updateUiState();
+        updateObserverViews();
+        updateTargetViews();
+        updateGotoStatusViews();
+        updateSafetyStatusViews();
+        updateLogText();
+    }
+
+    private void applyNightModeWindow() {
+        WindowManager.LayoutParams attributes = getWindow().getAttributes();
+        attributes.screenBrightness = nightModeEnabled
+                ? 0.08f
+                : WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE;
+        getWindow().setAttributes(attributes);
+    }
+
+    private int pageBackgroundColor() {
+        return nightModeEnabled ? Color.rgb(18, 4, 4) : Color.rgb(245, 247, 251);
+    }
+
+    private int cardBackgroundColor() {
+        return nightModeEnabled ? Color.rgb(38, 7, 7) : Color.WHITE;
+    }
+
+    private int titleTextColor() {
+        return nightModeEnabled ? Color.rgb(255, 190, 190) : Color.rgb(17, 24, 39);
+    }
+
+    private int labelTextColor() {
+        return nightModeEnabled ? Color.rgb(255, 175, 175) : Color.rgb(31, 41, 55);
+    }
+
+    private int bodyTextColor() {
+        return nightModeEnabled ? Color.rgb(255, 145, 145) : Color.rgb(75, 85, 99);
+    }
+
+    private int mutedTextColor() {
+        return nightModeEnabled ? Color.rgb(175, 80, 80) : Color.rgb(156, 163, 175);
+    }
+
+    private int selectedAccentColor() {
+        return nightModeEnabled ? Color.rgb(255, 98, 98) : Color.rgb(14, 116, 144);
+    }
+
     private LinearLayout card() {
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
         panel.setPadding(dp(12), dp(12), dp(12), dp(12));
-        panel.setBackgroundColor(Color.WHITE);
+        panel.setBackgroundColor(cardBackgroundColor());
         return panel;
     }
 
@@ -2100,7 +2689,7 @@ public final class MainActivity extends Activity {
         TextView textView = new TextView(this);
         textView.setText(textRes);
         textView.setTextSize(sp);
-        textView.setTextColor(Color.rgb(17, 24, 39));
+        textView.setTextColor(titleTextColor());
         textView.setGravity(Gravity.START);
         return textView;
     }
@@ -2113,7 +2702,7 @@ public final class MainActivity extends Activity {
 
     private TextView labelText(int textRes) {
         TextView textView = bodyText(textRes);
-        textView.setTextColor(Color.rgb(31, 41, 55));
+        textView.setTextColor(labelTextColor());
         textView.setGravity(Gravity.START);
         return textView;
     }
@@ -2122,7 +2711,7 @@ public final class MainActivity extends Activity {
         TextView textView = new TextView(this);
         textView.setText(textRes);
         textView.setTextSize(15);
-        textView.setTextColor(Color.rgb(75, 85, 99));
+        textView.setTextColor(bodyTextColor());
         textView.setGravity(Gravity.START);
         return textView;
     }
@@ -2139,6 +2728,19 @@ public final class MainActivity extends Activity {
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER);
         return row;
+    }
+
+    private boolean isWideLayout() {
+        Configuration config = getResources().getConfiguration();
+        return config.screenWidthDp >= 840
+                || (config.orientation == Configuration.ORIENTATION_LANDSCAPE && config.screenWidthDp >= 600);
+    }
+
+    private FrameLayout.LayoutParams frameMatchParent() {
+        return new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+        );
     }
 
     private LinearLayout.LayoutParams matchWrap() {
@@ -2162,17 +2764,29 @@ public final class MainActivity extends Activity {
         );
     }
 
-    private LinearLayout.LayoutParams sideMenuParams() {
-        return new LinearLayout.LayoutParams(
-                dp(sideMenuExpanded ? 82 : 44),
-                LinearLayout.LayoutParams.MATCH_PARENT
+    private FrameLayout.LayoutParams sideMenuParams() {
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+                dp(sideMenuExpanded ? 148 : 56),
+                sideMenuExpanded ? FrameLayout.LayoutParams.WRAP_CONTENT : dp(56)
         );
+        params.gravity = Gravity.TOP | Gravity.START;
+        params.leftMargin = dp(8);
+        params.topMargin = dp(22);
+        return params;
+    }
+
+    private FrameLayout.LayoutParams floatingStopParams() {
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(dp(56), dp(48));
+        params.gravity = Gravity.TOP | Gravity.START;
+        params.leftMargin = dp(8);
+        params.topMargin = dp(sideMenuExpanded ? 286 : 86);
+        return params;
     }
 
     private LinearLayout.LayoutParams sideMenuToggleParams() {
         return new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(44)
+                dp(48)
         );
     }
 
@@ -2202,12 +2816,6 @@ public final class MainActivity extends Activity {
         return params;
     }
 
-    private LinearLayout.LayoutParams rateButtonParams() {
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(48), 1f);
-        params.setMargins(dp(4), dp(4), dp(4), dp(4));
-        return params;
-    }
-
     private LinearLayout.LayoutParams controlButtonParams() {
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(68), dp(68));
         params.setMargins(dp(4), dp(4), dp(4), dp(4));
@@ -2217,8 +2825,13 @@ public final class MainActivity extends Activity {
     private GradientDrawable createDirectionButtonBackground(boolean enabled) {
         GradientDrawable drawable = new GradientDrawable();
         drawable.setShape(GradientDrawable.RECTANGLE);
-        drawable.setColor(enabled ? Color.WHITE : Color.rgb(249, 250, 251));
-        drawable.setStroke(dp(1), enabled ? Color.rgb(75, 85, 99) : Color.rgb(229, 231, 235));
+        if (nightModeEnabled) {
+            drawable.setColor(enabled ? Color.rgb(48, 10, 10) : Color.rgb(32, 7, 7));
+            drawable.setStroke(dp(1), enabled ? Color.rgb(170, 58, 58) : Color.rgb(85, 30, 30));
+        } else {
+            drawable.setColor(enabled ? Color.WHITE : Color.rgb(249, 250, 251));
+            drawable.setStroke(dp(1), enabled ? Color.rgb(75, 85, 99) : Color.rgb(229, 231, 235));
+        }
         drawable.setCornerRadius(0);
         return drawable;
     }
@@ -2240,14 +2853,14 @@ public final class MainActivity extends Activity {
         GradientDrawable drawable = new GradientDrawable();
         drawable.setShape(GradientDrawable.RECTANGLE);
         if (!enabled) {
-            drawable.setColor(Color.rgb(249, 250, 251));
-            drawable.setStroke(dp(1), Color.rgb(229, 231, 235));
+            drawable.setColor(nightModeEnabled ? Color.rgb(32, 7, 7) : Color.rgb(249, 250, 251));
+            drawable.setStroke(dp(1), nightModeEnabled ? Color.rgb(85, 30, 30) : Color.rgb(229, 231, 235));
         } else if (selected) {
-            drawable.setColor(Color.rgb(224, 242, 254));
-            drawable.setStroke(dp(2), Color.rgb(14, 116, 144));
+            drawable.setColor(nightModeEnabled ? Color.rgb(74, 13, 13) : Color.rgb(224, 242, 254));
+            drawable.setStroke(dp(2), selectedAccentColor());
         } else {
-            drawable.setColor(Color.WHITE);
-            drawable.setStroke(dp(1), Color.rgb(156, 163, 175));
+            drawable.setColor(cardBackgroundColor());
+            drawable.setStroke(dp(1), nightModeEnabled ? Color.rgb(120, 45, 45) : Color.rgb(156, 163, 175));
         }
         drawable.setCornerRadius(dp(4));
         return drawable;
@@ -2267,7 +2880,16 @@ public final class MainActivity extends Activity {
         drawable.setShape(GradientDrawable.RECTANGLE);
         drawable.setColor(Color.rgb(30, 41, 59));
         drawable.setStroke(dp(1), Color.rgb(71, 85, 105));
-        drawable.setCornerRadius(dp(4));
+        drawable.setCornerRadius(dp(8));
+        return drawable;
+    }
+
+    private GradientDrawable createFloatingMenuBackground() {
+        GradientDrawable drawable = new GradientDrawable();
+        drawable.setShape(GradientDrawable.RECTANGLE);
+        drawable.setColor(Color.rgb(15, 23, 42));
+        drawable.setStroke(dp(1), Color.rgb(30, 41, 59));
+        drawable.setCornerRadius(dp(8));
         return drawable;
     }
 
@@ -2276,6 +2898,7 @@ public final class MainActivity extends Activity {
     }
 
     private void setStatus(String text) {
+        currentStatusMessage = text;
         if (statusText != null) {
             statusText.setText(text);
         }
@@ -2284,12 +2907,37 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private void setGotoStatus(String text) {
+        gotoStatusMessage = text;
+        updateGotoStatusViews();
+    }
+
+    private void updateGotoStatusViews() {
+        if (gotoStatusText != null) {
+            gotoStatusText.setText(gotoStatusMessage == null ? getString(R.string.goto_status_idle) : gotoStatusMessage);
+        }
+    }
+
+    private void setSafetyStatus(String text) {
+        safetyStatusMessage = text;
+        updateSafetyStatusViews();
+    }
+
+    private void updateSafetyStatusViews() {
+        if (safetyStatusText != null) {
+            safetyStatusText.setText(safetyStatusMessage == null ? getString(R.string.safety_status_idle) : safetyStatusMessage);
+        }
+    }
+
     private void appendLog(String line) {
         logLines.addLast(line);
         while (logLines.size() > 12) {
             logLines.removeFirst();
         }
+        updateLogText();
+    }
 
+    private void updateLogText() {
         StringBuilder builder = new StringBuilder();
         for (String logLine : logLines) {
             if (builder.length() > 0) {
@@ -2310,10 +2958,37 @@ public final class MainActivity extends Activity {
         connectionForm.setVisibility(connected ? View.GONE : View.VISIBLE);
         connectButton.setVisibility(connected ? View.GONE : View.VISIBLE);
         disconnectButton.setVisibility(connected ? View.VISIBLE : View.GONE);
-        updateRateButtons();
+        updateManualRateControl();
         if (gotoButton != null) {
             gotoButton.setEnabled(!busy);
             gotoButton.setText(connected ? R.string.sky_goto_target : R.string.sky_find_target);
+        }
+        if (skyCancelGotoButton != null) {
+            skyCancelGotoButton.setEnabled(connected && !busy && gotoInProgress);
+        }
+        if (safetyCancelGotoButton != null) {
+            safetyCancelGotoButton.setEnabled(connected && !busy && gotoInProgress);
+        }
+        if (gotoStatusRefreshButton != null) {
+            gotoStatusRefreshButton.setEnabled(connected && !busy);
+        }
+        if (floatingStopButton != null) {
+            floatingStopButton.setEnabled(connected);
+            floatingStopButton.setAlpha(connected ? 1.0f : 0.45f);
+        }
+        if (emergencyStopButton != null) {
+            emergencyStopButton.setEnabled(connected);
+            emergencyStopButton.setBackground(createStopButtonBackground(connected));
+            emergencyStopButton.setTextColor(Color.WHITE);
+        }
+        if (parkButton != null) {
+            parkButton.setEnabled(connected && !busy);
+        }
+        if (unparkButton != null) {
+            unparkButton.setEnabled(connected && !busy);
+        }
+        if (nightModeButton != null) {
+            nightModeButton.setText(nightModeEnabled ? R.string.night_mode_off : R.string.night_mode_on);
         }
         if (syncMountButton != null) {
             syncMountButton.setEnabled(connected && !busy);
@@ -2343,14 +3018,11 @@ public final class MainActivity extends Activity {
             quickSyncButton.setEnabled(connected && !busy);
         }
         boolean canStartAlignment = connected && !busy && alignmentSession == null;
-        if (alignOneButton != null) {
-            alignOneButton.setEnabled(canStartAlignment);
+        if (calibrationModeSpinner != null) {
+            calibrationModeSpinner.setEnabled(!busy && alignmentSession == null);
         }
-        if (alignTwoButton != null) {
-            alignTwoButton.setEnabled(canStartAlignment);
-        }
-        if (alignThreeButton != null) {
-            alignThreeButton.setEnabled(canStartAlignment);
+        if (alignStartButton != null) {
+            alignStartButton.setEnabled(canStartAlignment && selectedCalibrationMode.starCount > 0);
         }
         boolean alignmentActive = connected && !busy && alignmentSession != null && !alignmentSession.isComplete();
         if (alignGotoButton != null) {
@@ -2359,20 +3031,14 @@ public final class MainActivity extends Activity {
         if (alignAcceptButton != null) {
             alignAcceptButton.setEnabled(alignmentActive);
         }
-        if (alignOpenManualButton != null) {
-            alignOpenManualButton.setEnabled(alignmentSession != null);
-        }
         if (alignSaveButton != null) {
             alignSaveButton.setEnabled(connected && !busy && alignmentSession != null && alignmentSession.isComplete());
         }
         if (alignCancelButton != null) {
             alignCancelButton.setEnabled(alignmentSession != null && !busy);
         }
-        if (modelTrackingButton != null) {
-            modelTrackingButton.setEnabled(connected && !busy);
-        }
         if (refinePaButton != null) {
-            refinePaButton.setEnabled(connected && !busy);
+            refinePaButton.setEnabled(connected && !busy && hasThreeStarTrackingModel);
         }
 
         boolean controlsEnabled = connected && !busy;
@@ -2427,6 +3093,7 @@ public final class MainActivity extends Activity {
         if (skyChartView != null) {
             skyChartView.setObserver(observerState, now);
         }
+        updateObservingAlert();
     }
 
     private void setObserverMessage(String message) {
@@ -2505,6 +3172,7 @@ public final class MainActivity extends Activity {
     }
 
     private void updatePageTabs(Page selectedPage) {
+        currentPage = selectedPage;
         if (manualPage != null) {
             manualPage.setVisibility(selectedPage == Page.MANUAL ? View.VISIBLE : View.GONE);
         }
@@ -2514,13 +3182,9 @@ public final class MainActivity extends Activity {
         if (settingsPage != null) {
             settingsPage.setVisibility(selectedPage == Page.SETTINGS ? View.VISIBLE : View.GONE);
         }
-        if (calibrationPage != null) {
-            calibrationPage.setVisibility(selectedPage == Page.CALIBRATION ? View.VISIBLE : View.GONE);
-        }
         styleTabButton(manualTabButton, selectedPage == Page.MANUAL);
         styleTabButton(skyTabButton, selectedPage == Page.SKY);
         styleTabButton(settingsTabButton, selectedPage == Page.SETTINGS);
-        styleTabButton(calibrationTabButton, selectedPage == Page.CALIBRATION);
     }
 
     private void selectPageFromMenu(Page selectedPage) {
@@ -2535,15 +3199,13 @@ public final class MainActivity extends Activity {
         }
 
         sideMenu.setLayoutParams(sideMenuParams());
-        int horizontalPadding = expanded ? 8 : 4;
-        sideMenu.setPadding(dp(horizontalPadding), dp(22), dp(horizontalPadding), dp(8));
+        int padding = expanded ? 8 : 4;
+        sideMenu.setPadding(dp(padding), dp(padding), dp(padding), dp(padding));
+        sideMenu.setBackground(expanded ? createFloatingMenuBackground() : null);
 
         int menuItemVisibility = expanded ? View.VISIBLE : View.GONE;
         if (settingsTabButton != null) {
             settingsTabButton.setVisibility(menuItemVisibility);
-        }
-        if (calibrationTabButton != null) {
-            calibrationTabButton.setVisibility(menuItemVisibility);
         }
         if (manualTabButton != null) {
             manualTabButton.setVisibility(menuItemVisibility);
@@ -2556,6 +3218,9 @@ public final class MainActivity extends Activity {
             sideMenuToggleButton.setTextColor(Color.rgb(226, 232, 240));
             sideMenuToggleButton.setBackground(createMenuToggleBackground());
         }
+        if (floatingStopButton != null) {
+            floatingStopButton.setLayoutParams(floatingStopParams());
+        }
     }
 
     private void styleTabButton(Button button, boolean selected) {
@@ -2567,15 +3232,9 @@ public final class MainActivity extends Activity {
         button.setBackground(createTabBackground(selected));
     }
 
-    private void updateRateButtons() {
-        boolean enabled = connected && !busy;
-        for (Button button : rateButtons) {
-            String command = (String) button.getTag();
-            boolean selected = command.equals(selectedRateCommand);
-            button.setEnabled(enabled);
-            button.setTextColor(selected ? Color.rgb(14, 116, 144) : Color.rgb(55, 65, 81));
-            button.setTypeface(selected ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
-            button.setBackground(createRateButtonBackground(selected, enabled));
+    private void updateManualRateControl() {
+        if (manualRateSpinner != null) {
+            manualRateSpinner.setEnabled(!busy);
         }
     }
 
@@ -2589,9 +3248,17 @@ public final class MainActivity extends Activity {
         }
         if (trackingStatusText != null) {
             if (trackingEnabled) {
-                trackingStatusText.setText(getString(R.string.tracking_status_on, getString(selectedTrackingRate.labelRes)));
+                trackingStatusText.setText(getString(
+                        R.string.tracking_status_on,
+                        getString(selectedTrackingRate.labelRes),
+                        trackingModeLabel(trackingUsingDualAxis)
+                ));
             } else {
-                trackingStatusText.setText(getString(R.string.tracking_status_off_with_rate, getString(selectedTrackingRate.labelRes)));
+                trackingStatusText.setText(getString(
+                        R.string.tracking_status_off_with_rate,
+                        getString(selectedTrackingRate.labelRes),
+                        trackingModeLabel(shouldStartDualAxisTracking())
+                ));
             }
         }
     }
@@ -2602,14 +3269,14 @@ public final class MainActivity extends Activity {
         }
         boolean enabled = !busy;
         boolean selected = selectedTrackingRate == rate;
-        button.setTextColor(selected ? Color.rgb(14, 116, 144) : Color.rgb(55, 65, 81));
+        button.setTextColor(selected ? selectedAccentColor() : labelTextColor());
         button.setTypeface(selected ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
         button.setBackground(createRateButtonBackground(selected, enabled));
     }
 
     private void setDirectionButtonEnabled(Button button, boolean enabled) {
         button.setEnabled(enabled);
-        button.setTextColor(enabled ? Color.rgb(17, 24, 39) : Color.rgb(156, 163, 175));
+        button.setTextColor(enabled ? titleTextColor() : mutedTextColor());
         button.setBackground(createDirectionButtonBackground(enabled));
     }
 
@@ -2652,6 +3319,16 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private static final class HorizontalCoordinates {
+        final double altitudeDegrees;
+        final double azimuthDegrees;
+
+        HorizontalCoordinates(double altitudeDegrees, double azimuthDegrees) {
+            this.altitudeDegrees = altitudeDegrees;
+            this.azimuthDegrees = azimuthDegrees;
+        }
+    }
+
     private static final class MountCommand {
         final String command;
         final boolean expectReply;
@@ -2685,7 +3362,9 @@ public final class MainActivity extends Activity {
         RATE_GUIDE(":RG#"),
         RATE_CENTER(":RC#"),
         RATE_FIND(":RM#"),
-        RATE_SLEW(":RS#"),
+        RATE_FAST(":R7#"),
+        RATE_HALF_MAX(":R8#"),
+        RATE_MAX(":R9#"),
         MOVE_NORTH(":Mn#"),
         MOVE_SOUTH(":Ms#"),
         MOVE_EAST(":Me#"),
@@ -2704,6 +3383,9 @@ public final class MainActivity extends Activity {
         TRACK_FULL_COMPENSATION(":To#"),
         TRACK_DUAL_AXIS(":T2#"),
         REFINE_POLAR_ALIGNMENT(":MP#"),
+        PARK(":hP#"),
+        UNPARK(":hR#"),
+        GOTO_STATUS(":D#"),
         STOP_NORTH(":Qn#"),
         STOP_SOUTH(":Qs#"),
         STOP_EAST(":Qe#"),
@@ -2713,6 +3395,23 @@ public final class MainActivity extends Activity {
         private final String command;
 
         OnStepCommand(String command) {
+            this.command = command;
+        }
+    }
+
+    private enum ManualRate {
+        GUIDE(R.string.rate_guide, OnStepCommand.RATE_GUIDE.command),
+        CENTER(R.string.rate_center, OnStepCommand.RATE_CENTER.command),
+        FIND(R.string.rate_find, OnStepCommand.RATE_FIND.command),
+        FAST(R.string.rate_fast, OnStepCommand.RATE_FAST.command),
+        HALF_MAX(R.string.rate_half_max, OnStepCommand.RATE_HALF_MAX.command),
+        MAX(R.string.rate_max, OnStepCommand.RATE_MAX.command);
+
+        private final int labelRes;
+        private final String command;
+
+        ManualRate(int labelRes, String command) {
+            this.labelRes = labelRes;
             this.command = command;
         }
     }
@@ -2731,9 +3430,28 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private enum CalibrationMode {
+        QUICK_SYNC(R.string.calibration_mode_quick_sync, 0),
+        ONE_STAR(R.string.calibration_mode_one_star, 1),
+        TWO_STAR(R.string.calibration_mode_two_star, 2),
+        THREE_STAR(R.string.calibration_mode_three_star, 3),
+        REFINE_POLAR(R.string.calibration_mode_refine_polar, 0);
+
+        private final int labelRes;
+        private final int starCount;
+
+        CalibrationMode(int labelRes, int starCount) {
+            this.labelRes = labelRes;
+            this.starCount = starCount;
+        }
+
+        private boolean isStarAlignment() {
+            return starCount > 0;
+        }
+    }
+
     private enum Page {
         MANUAL,
-        CALIBRATION,
         SKY,
         SETTINGS
     }
