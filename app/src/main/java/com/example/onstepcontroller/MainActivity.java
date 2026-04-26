@@ -28,6 +28,7 @@ import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.Spinner;
@@ -169,8 +170,10 @@ public final class MainActivity extends Activity {
     private double currentMountRaHours;
     private double currentMountDecDegrees;
     private boolean hasHomePosition;
-    private double homeRaHours;
+    private double homeReferenceRaHours;
+    private double homeHourAngleHours;
     private double homeDecDegrees;
+    private Instant homeReferenceInstant;
     private boolean trackingEnabled;
     private boolean hasThreeStarTrackingModel;
     private boolean trackingUsingDualAxis;
@@ -365,6 +368,7 @@ public final class MainActivity extends Activity {
         floatingStopButton.setTextColor(Color.WHITE);
         floatingStopButton.setTypeface(Typeface.DEFAULT_BOLD);
         floatingStopButton.setBackground(createStopButtonBackground());
+        floatingStopButton.setVisibility(View.GONE);
         floatingStopButton.setOnClickListener(v -> emergencyStop());
         return floatingStopButton;
     }
@@ -861,6 +865,7 @@ public final class MainActivity extends Activity {
 
     private View createConnectionPanel() {
         LinearLayout panel = card();
+        panel.addView(createMountProfileBadge(), matchWrap());
 
         connectionForm = new LinearLayout(this);
         connectionForm.setOrientation(LinearLayout.VERTICAL);
@@ -912,6 +917,32 @@ public final class MainActivity extends Activity {
         panel.addView(statusText, matchWrap());
 
         return panel;
+    }
+
+    private View createMountProfileBadge() {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(0, 0, 0, dp(12));
+
+        ImageView badge = new ImageView(this);
+        badge.setImageResource(R.drawable.clearsky_badge);
+        badge.setAdjustViewBounds(true);
+        badge.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        row.addView(badge, new LinearLayout.LayoutParams(dp(64), dp(64)));
+
+        LinearLayout textColumn = new LinearLayout(this);
+        textColumn.setOrientation(LinearLayout.VERTICAL);
+
+        TextView title = titleText(R.string.mount_profile_title, 16);
+        textColumn.addView(title, matchWrap());
+
+        TextView body = bodyText(R.string.mount_profile_body);
+        body.setPadding(0, dp(3), 0, 0);
+        textColumn.addView(body, matchWrap());
+
+        row.addView(textColumn, weightWrapWithLeftMargin(1f, 12));
+        return row;
     }
 
     private View createControlPanel() {
@@ -1531,7 +1562,7 @@ public final class MainActivity extends Activity {
                     setHomePosition(raHours, decDegrees);
                     setStatus(getString(
                             userRequested ? R.string.home_set_sent : R.string.home_initial_sent,
-                            formatRightAscensionDisplay(raHours),
+                            formatHourAngleDisplay(homeHourAngleHours),
                             formatDeclinationDisplay(decDegrees)
                     ));
                     updateUiState();
@@ -1557,7 +1588,7 @@ public final class MainActivity extends Activity {
         }
         SkyChartView.Target homeTarget = SkyChartView.Target.custom(
                 getString(R.string.home_target_label),
-                homeRaHours,
+                currentHomeRaHours(),
                 homeDecDegrees
         );
         sendGotoTarget(
@@ -2156,10 +2187,20 @@ public final class MainActivity extends Activity {
     }
 
     private void setHomePosition(double raHours, double decDegrees) {
+        Instant now = Instant.now();
         hasHomePosition = true;
-        homeRaHours = normalizeHours(raHours);
+        homeReferenceRaHours = normalizeHours(raHours);
+        homeHourAngleHours = signedHourAngleHours(raHours, now);
         homeDecDegrees = clamp(decDegrees, -90.0, 90.0);
+        homeReferenceInstant = now;
         updateHomeViews();
+    }
+
+    private double currentHomeRaHours() {
+        if (homeReferenceInstant == null) {
+            return homeReferenceRaHours;
+        }
+        return normalizeHours(homeReferenceRaHours + siderealDeltaHours(homeReferenceInstant, Instant.now()));
     }
 
     private void updateTargetViews() {
@@ -2265,11 +2306,24 @@ public final class MainActivity extends Activity {
     }
 
     private double localSiderealDegrees(Instant instant) {
+        return normalizeDegrees(greenwichSiderealDegrees(instant) + observerState.longitudeDegrees);
+    }
+
+    private static double greenwichSiderealDegrees(Instant instant) {
         double jd = instant.toEpochMilli() / 86_400_000.0 + 2_440_587.5;
         double d = jd - 2_451_545.0;
         double t = d / 36_525.0;
         double gmst = 280.46061837 + 360.98564736629 * d + 0.000387933 * t * t - t * t * t / 38_710_000.0;
-        return normalizeDegrees(gmst + observerState.longitudeDegrees);
+        return normalizeDegrees(gmst);
+    }
+
+    private double signedHourAngleHours(double raHours, Instant instant) {
+        double hourAngle = normalizeHours(localSiderealDegrees(instant) / 15.0 - normalizeHours(raHours));
+        return hourAngle > 12.0 ? hourAngle - 24.0 : hourAngle;
+    }
+
+    private static double siderealDeltaHours(Instant start, Instant end) {
+        return normalizeDegrees(greenwichSiderealDegrees(end) - greenwichSiderealDegrees(start)) / 15.0;
     }
 
     private String meridianStatus(double hourAngleHours) {
@@ -2378,6 +2432,20 @@ public final class MainActivity extends Activity {
 
     private static String formatRightAscensionDisplay(double raHours) {
         return formatRightAscensionCommand(raHours);
+    }
+
+    private static String formatHourAngleDisplay(double hourAngleHours) {
+        double signed = hourAngleHours;
+        if (signed > 12.0) {
+            signed -= 24.0;
+        } else if (signed < -12.0) {
+            signed += 24.0;
+        }
+        int totalSeconds = (int) Math.round(Math.abs(signed) * 3600.0);
+        int hours = totalSeconds / 3600;
+        int minutes = totalSeconds % 3600 / 60;
+        int seconds = totalSeconds % 60;
+        return String.format(Locale.US, "%c%02d:%02d:%02d", signed < 0.0 ? '-' : '+', hours, minutes, seconds);
     }
 
     private static String formatDeclinationDisplay(double decDegrees) {
@@ -2974,7 +3042,8 @@ public final class MainActivity extends Activity {
         }
         if (floatingStopButton != null) {
             floatingStopButton.setEnabled(connected);
-            floatingStopButton.setAlpha(connected ? 1.0f : 0.45f);
+            floatingStopButton.setVisibility(connected ? View.VISIBLE : View.GONE);
+            floatingStopButton.setAlpha(1.0f);
         }
         if (emergencyStopButton != null) {
             emergencyStopButton.setEnabled(connected);
@@ -3062,7 +3131,7 @@ public final class MainActivity extends Activity {
             if (hasHomePosition) {
                 homeStatusText.setText(getString(
                         R.string.home_status,
-                        formatRightAscensionDisplay(homeRaHours),
+                        formatHourAngleDisplay(homeHourAngleHours),
                         formatDeclinationDisplay(homeDecDegrees)
                 ));
             } else {

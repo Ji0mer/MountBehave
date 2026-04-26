@@ -1,8 +1,12 @@
 # MountBehave
 
+<p align="center">
+  <img src="docs/images/clearsky_wordmark.png" alt="Clearsky ST17 test badge" width="360">
+</p>
+
 MountBehave 是一个面向 OnStep 赤道仪的 Android 手控器项目，目标是在手机或平板上完成赤道仪连接、手动移动、离线星图、目标 GOTO、观测地/时间同步和校准辅助。
 
-> 测试状态：目前大部分功能仍处于开发验证阶段，尚未经过完整实机测试。到目前为止，只使用 ST17 赤道仪完成过 WiFi 连接和手动移动/停止测试；GOTO、校准、跟踪、Park/Unpark、限位/过中天提醒等功能还需要继续实机验证。
+> 测试状态：目前大部分功能仍处于开发验证阶段，尚未经过完整实机测试。到目前为止，只使用晴空谐波赤道仪 ST17 完成过 WiFi 连接和手动移动/停止测试；GOTO、校准、跟踪、Park/Unpark、限位/过中天提醒等功能还需要继续实机验证。
 
 ## 本地环境
 

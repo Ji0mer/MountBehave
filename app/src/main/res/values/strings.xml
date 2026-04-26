@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">MountBehave</string>
+    <string name="mount_profile_title">晴空 ST17 测试配置</string>
+    <string name="mount_profile_body">当前实机测试仅覆盖晴空谐波赤道仪 ST17 的 WiFi 连接、手动移动和停止。</string>
     <string name="app_subtitle">手控、星图与 OnStep 设置</string>
     <string name="connection_section">赤道仪连接</string>
     <string name="manual_control_section">手动移动</string>
@@ -102,17 +104,17 @@
     <string name="safety_status_unparked">已请求恢复运行。</string>
     <string name="home_section">Home 位置</string>
     <string name="home_status_none">尚未记录 Home 位置。</string>
-    <string name="home_status">Home：RA %1$s  Dec %2$s</string>
+    <string name="home_status">Home：HA %1$s  Dec %2$s</string>
     <string name="home_goto">回到 Home</string>
     <string name="home_set_current">设为 Home</string>
     <string name="home_target_label">Home</string>
-    <string name="home_initial_sending">正在读取连接时的赤道仪位置作为 Home...</string>
-    <string name="home_initial_sent">已把连接时位置设为 Home：RA %1$s  Dec %2$s</string>
+    <string name="home_initial_sending">正在读取连接时的赤道仪姿态作为 Home...</string>
+    <string name="home_initial_sent">已把连接时姿态设为 Home：HA %1$s  Dec %2$s</string>
     <string name="home_initial_failed">未能读取连接时位置，Home 暂未设置：%1$s</string>
-    <string name="home_set_sending">正在读取当前位置并设为 Home...</string>
-    <string name="home_set_sent">已把当前位置设为 Home：RA %1$s  Dec %2$s</string>
+    <string name="home_set_sending">正在读取当前姿态并设为 Home...</string>
+    <string name="home_set_sent">已把当前姿态设为 Home：HA %1$s  Dec %2$s</string>
     <string name="home_set_failed">设为 Home 失败，连接保持：%1$s</string>
-    <string name="home_goto_sending">正在返回 Home...</string>
+    <string name="home_goto_sending">正在按当前恒星时返回 Home...</string>
     <string name="home_goto_sent">已发送返回 Home。</string>
     <string name="home_no_position">还没有 Home 位置。</string>
     <string name="latitude_label">纬度</string>
