@@ -5,6 +5,7 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.Dialog;
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.content.res.Configuration;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
@@ -55,6 +56,13 @@ import javax.net.SocketFactory;
 
 public final class MainActivity extends Activity {
     private static final int DEFAULT_PORT = 9999;
+    private static final String PREFS_NAME = "mountbehave_prefs";
+    private static final String PREF_HOME_HAS_POSITION = "home_has_position";
+    private static final String PREF_HOME_VALID = "home_valid";
+    private static final String PREF_HOME_REFERENCE_RA = "home_reference_ra";
+    private static final String PREF_HOME_REFERENCE_EPOCH_MS = "home_reference_epoch_ms";
+    private static final String PREF_HOME_HOUR_ANGLE = "home_hour_angle";
+    private static final String PREF_HOME_DEC_DEGREES = "home_dec_degrees";
     private static final int LOCATION_PERMISSION_REQUEST = 24;
     private static final long CONNECTION_POLL_INTERVAL_MS = 5_000L;
     private static final Pattern COORDINATE_TARGET_PATTERN = Pattern.compile(
@@ -135,15 +143,18 @@ public final class MainActivity extends Activity {
     private EditText calibrationTargetField;
     private TextView calibrationStatusText;
     private TextView calibrationStepText;
+    private TextView alignmentCurrentText;
+    private TextView alignmentAcceptedText;
     private Button calibrationSuggestButton;
     private Button calibrationShowButton;
-    private Button quickGotoButton;
+    private Button quickSelectButton;
     private Button quickSyncButton;
     private Button alignStartButton;
-    private Button alignGotoButton;
+    private Button alignSelectButton;
     private Button alignAcceptButton;
     private Button alignSaveButton;
     private Button alignCancelButton;
+    private Button refineGotoButton;
     private Button refinePaButton;
     private TextView statusText;
     private TextView manualStatusText;
@@ -170,6 +181,7 @@ public final class MainActivity extends Activity {
     private double currentMountRaHours;
     private double currentMountDecDegrees;
     private boolean hasHomePosition;
+    private boolean homePositionValid;
     private double homeReferenceRaHours;
     private double homeHourAngleHours;
     private double homeDecDegrees;
@@ -181,6 +193,11 @@ public final class MainActivity extends Activity {
     private Direction activeDirection;
     private SkyChartView.Target selectedSkyTarget;
     private SkyChartView.Target calibrationTarget;
+    private SkyChartView.Target syncedCurrentTarget;
+    private SkyChartView.Target polarRefineSyncedTarget;
+    private boolean quickPointingCorrectionActive;
+    private double quickPointingRaOffsetHours;
+    private double quickPointingDecOffsetDegrees;
     private ManualRate selectedManualRate = ManualRate.CENTER;
     private CalibrationMode selectedCalibrationMode = CalibrationMode.QUICK_SYNC;
     private Page currentPage = Page.SETTINGS;
@@ -287,28 +304,9 @@ public final class MainActivity extends Activity {
             manualStatusText.setText(currentStatusMessage);
         }
         manualPage.addView(manualStatusText, matchWrap());
-        if (wideLayout) {
-            LinearLayout manualColumns = new LinearLayout(this);
-            manualColumns.setOrientation(LinearLayout.HORIZONTAL);
-            manualColumns.setGravity(Gravity.TOP);
-
-            LinearLayout controlColumn = new LinearLayout(this);
-            controlColumn.setOrientation(LinearLayout.VERTICAL);
-            controlColumn.addView(sectionTitle(R.string.manual_control_section), matchWrapWithTopMargin(12));
-            controlColumn.addView(createControlPanel(), matchWrap());
-            manualColumns.addView(controlColumn, weightWrap(1f));
-
-            LinearLayout calibrationColumn = new LinearLayout(this);
-            calibrationColumn.setOrientation(LinearLayout.VERTICAL);
-            calibrationColumn.addView(createCalibrationPage(), matchWrapWithTopMargin(12));
-            manualColumns.addView(calibrationColumn, weightWrapWithLeftMargin(1f, 16));
-
-            manualPage.addView(manualColumns, matchWrap());
-        } else {
-            manualPage.addView(sectionTitle(R.string.manual_control_section), matchWrapWithTopMargin(12));
-            manualPage.addView(createControlPanel(), matchWrap());
-            manualPage.addView(createCalibrationPage(), matchWrapWithTopMargin(12));
-        }
+        manualPage.addView(createCalibrationPage(), matchWrapWithTopMargin(12));
+        manualPage.addView(sectionTitle(R.string.manual_control_section), matchWrapWithTopMargin(12));
+        manualPage.addView(createControlPanel(), matchWrap());
         root.addView(manualPage, matchWrap());
 
         skyPage = createSkyPage();
@@ -540,9 +538,9 @@ public final class MainActivity extends Activity {
         quickActions.setOrientation(LinearLayout.HORIZONTAL);
         quickActions.setGravity(Gravity.CENTER_VERTICAL);
 
-        quickGotoButton = actionButton(R.string.calibration_quick_goto);
-        quickGotoButton.setOnClickListener(v -> quickGotoCalibrationTarget());
-        quickActions.addView(quickGotoButton, weightWrap(1f));
+        quickSelectButton = actionButton(R.string.calibration_quick_select);
+        quickSelectButton.setOnClickListener(v -> selectQuickCalibrationTarget());
+        quickActions.addView(quickSelectButton, weightWrap(1f));
 
         quickSyncButton = actionButton(R.string.calibration_quick_sync);
         quickSyncButton.setOnClickListener(v -> syncQuickCalibrationTarget());
@@ -568,32 +566,47 @@ public final class MainActivity extends Activity {
         calibrationStepText.setPadding(0, dp(10), 0, dp(10));
         alignCalibrationPanel.addView(calibrationStepText, matchWrap());
 
+        alignmentCurrentText = bodyText(R.string.calibration_align_current_none);
+        alignmentCurrentText.setPadding(0, 0, 0, dp(8));
+        alignCalibrationPanel.addView(alignmentCurrentText, matchWrap());
+
+        alignmentAcceptedText = bodyText(R.string.calibration_align_accepted_none);
+        alignmentAcceptedText.setPadding(0, 0, 0, dp(10));
+        alignCalibrationPanel.addView(alignmentAcceptedText, matchWrap());
+
         LinearLayout alignActionsOne = new LinearLayout(this);
-        alignActionsOne.setOrientation(LinearLayout.HORIZONTAL);
+        alignActionsOne.setOrientation(LinearLayout.VERTICAL);
         alignActionsOne.setGravity(Gravity.CENTER_VERTICAL);
 
-        alignGotoButton = actionButton(R.string.calibration_align_goto);
-        alignGotoButton.setOnClickListener(v -> gotoAlignmentTarget());
-        alignActionsOne.addView(alignGotoButton, matchWrap());
+        alignSelectButton = actionButton(R.string.calibration_align_select_current);
+        alignSelectButton.setOnClickListener(v -> selectAlignmentTargetOnly());
+        alignActionsOne.addView(alignSelectButton, matchWrap());
 
         alignCalibrationPanel.addView(alignActionsOne, matchWrap());
 
         LinearLayout alignActionsTwo = new LinearLayout(this);
-        alignActionsTwo.setOrientation(LinearLayout.HORIZONTAL);
+        alignActionsTwo.setOrientation(LinearLayout.VERTICAL);
         alignActionsTwo.setGravity(Gravity.CENTER_VERTICAL);
         alignActionsTwo.setPadding(0, dp(8), 0, 0);
 
         alignAcceptButton = actionButton(R.string.calibration_align_accept);
         alignAcceptButton.setOnClickListener(v -> acceptAlignmentStar());
-        alignActionsTwo.addView(alignAcceptButton, weightWrap(1f));
+        alignActionsTwo.addView(alignAcceptButton, matchWrap());
+
+        LinearLayout alignFinishActions = new LinearLayout(this);
+        alignFinishActions.setOrientation(LinearLayout.HORIZONTAL);
+        alignFinishActions.setGravity(Gravity.CENTER_VERTICAL);
+        alignFinishActions.setPadding(0, dp(8), 0, 0);
 
         alignSaveButton = actionButton(R.string.calibration_align_save);
         alignSaveButton.setOnClickListener(v -> saveAlignmentModel());
-        alignActionsTwo.addView(alignSaveButton, weightWrapWithLeftMargin(1f, 8));
+        alignFinishActions.addView(alignSaveButton, weightWrap(1f));
 
         alignCancelButton = actionButton(R.string.calibration_align_cancel);
         alignCancelButton.setOnClickListener(v -> cancelAlignmentSession());
-        alignActionsTwo.addView(alignCancelButton, weightWrapWithLeftMargin(1f, 8));
+        alignFinishActions.addView(alignCancelButton, weightWrapWithLeftMargin(1f, 8));
+
+        alignActionsTwo.addView(alignFinishActions, matchWrap());
 
         alignCalibrationPanel.addView(alignActionsTwo, matchWrap());
         page.addView(alignCalibrationPanel, matchWrap());
@@ -603,9 +616,13 @@ public final class MainActivity extends Activity {
         refineIntro.setPadding(0, 0, 0, dp(10));
         refineCalibrationPanel.addView(refineIntro, matchWrap());
 
+        refineGotoButton = actionButton(R.string.calibration_refine_goto);
+        refineGotoButton.setOnClickListener(v -> gotoRefinePolarTarget());
+        refineCalibrationPanel.addView(refineGotoButton, matchWrap());
+
         refinePaButton = actionButton(R.string.calibration_refine_pa);
         refinePaButton.setOnClickListener(v -> refinePolarAlignment());
-        refineCalibrationPanel.addView(refinePaButton, matchWrap());
+        refineCalibrationPanel.addView(refinePaButton, matchWrapWithTopMargin(8));
 
         page.addView(refineCalibrationPanel, matchWrap());
         updateCalibrationModeViews();
@@ -627,8 +644,6 @@ public final class MainActivity extends Activity {
             left.addView(createConnectionPanel(), matchWrap());
             left.addView(sectionTitle(R.string.observer_section), matchWrapWithTopMargin(12));
             left.addView(createObserverPanel(), matchWrap());
-            left.addView(sectionTitle(R.string.home_section), matchWrapWithTopMargin(12));
-            left.addView(createHomePanel(), matchWrap());
             columns.addView(left, weightWrap(1f));
 
             LinearLayout right = new LinearLayout(this);
@@ -648,9 +663,6 @@ public final class MainActivity extends Activity {
 
             page.addView(sectionTitle(R.string.observer_section), matchWrapWithTopMargin(12));
             page.addView(createObserverPanel(), matchWrap());
-
-            page.addView(sectionTitle(R.string.home_section), matchWrapWithTopMargin(12));
-            page.addView(createHomePanel(), matchWrap());
 
             page.addView(sectionTitle(R.string.tracking_section), matchWrapWithTopMargin(12));
             page.addView(createTrackingPanel(), matchWrap());
@@ -825,17 +837,11 @@ public final class MainActivity extends Activity {
         actions.setGravity(Gravity.CENTER_VERTICAL);
         actions.setPadding(0, dp(10), 0, 0);
 
-        Button bostonButton = new Button(this);
-        bostonButton.setAllCaps(false);
-        bostonButton.setText(R.string.use_boston);
-        bostonButton.setOnClickListener(v -> applyBostonLocation());
-        actions.addView(bostonButton, weightWrap(1f));
-
         Button gpsButton = new Button(this);
         gpsButton.setAllCaps(false);
         gpsButton.setText(R.string.use_gps);
         gpsButton.setOnClickListener(v -> requestGpsLocation());
-        actions.addView(gpsButton, weightWrapWithLeftMargin(1f, 8));
+        actions.addView(gpsButton, weightWrap(1f));
 
         Button applyButton = new Button(this);
         applyButton.setAllCaps(false);
@@ -1071,11 +1077,12 @@ public final class MainActivity extends Activity {
                     mountPointingFailureCount = 0;
                     mountPointingPollingPaused = true;
                     hasCurrentMountPosition = false;
-                    hasHomePosition = false;
                     hasThreeStarTrackingModel = false;
                     trackingEnabled = false;
                     trackingUsingDualAxis = false;
                     gotoInProgress = false;
+                    clearQuickPointingCorrection();
+                    polarRefineSyncedTarget = null;
                     parked = false;
                     activeDirection = null;
                     if (connection.handshake.isEmpty()) {
@@ -1091,7 +1098,6 @@ public final class MainActivity extends Activity {
                     setGotoStatus(getString(R.string.goto_status_idle));
                     setSafetyStatus(getString(R.string.safety_status_connected));
                     updateUiState();
-                    captureInitialHomeFromMount();
                 });
             } catch (IOException ex) {
                 client.close();
@@ -1172,7 +1178,6 @@ public final class MainActivity extends Activity {
                 mountPointingFailureCount = 0;
                 mountPointingPollingPaused = false;
                 hasCurrentMountPosition = false;
-                hasHomePosition = false;
                 hasThreeStarTrackingModel = false;
                 activeDirection = null;
                 alignmentSession = null;
@@ -1180,6 +1185,8 @@ public final class MainActivity extends Activity {
                 parked = false;
                 trackingEnabled = false;
                 trackingUsingDualAxis = false;
+                clearQuickPointingCorrection();
+                polarRefineSyncedTarget = null;
                 setStatus(getString(R.string.status_disconnected));
                 setGotoStatus(getString(R.string.goto_status_idle));
                 setSafetyStatus(getString(R.string.safety_status_idle));
@@ -1194,6 +1201,7 @@ public final class MainActivity extends Activity {
         if (!connected || activeDirection == direction) {
             return;
         }
+        clearSyncedCurrentTarget();
         activeDirection = direction;
         String rate = getRateCommand();
         appendLog("TX " + rate);
@@ -1247,6 +1255,7 @@ public final class MainActivity extends Activity {
     }
 
     private void emergencyStop() {
+        clearSyncedCurrentTarget();
         activeDirection = null;
         gotoInProgress = false;
         setGotoStatus(getString(R.string.goto_status_cancelled));
@@ -1260,6 +1269,7 @@ public final class MainActivity extends Activity {
             setGotoStatus(getString(R.string.goto_status_not_connected));
             return;
         }
+        clearSyncedCurrentTarget();
         activeDirection = null;
         gotoInProgress = false;
         setGotoStatus(getString(R.string.goto_status_cancelled));
@@ -1469,11 +1479,30 @@ public final class MainActivity extends Activity {
         if (!connected || busy || target == null) {
             return;
         }
-        String raCommand = ":Sr" + formatRightAscensionCommand(target.raHours) + "#";
-        String decCommand = ":Sd" + formatDeclinationCommand(target.decDegrees) + "#";
+        if (!quickPointingCorrectionActive && isSyncedCurrentTarget(target)) {
+            gotoInProgress = false;
+            setStatus(getString(R.string.status_goto_already_synced, target.label));
+            setGotoStatus(getString(R.string.goto_status_already_synced, target.label));
+            appendLog("INFO GOTO skipped; " + target.label + " is the synced current target");
+            if (onSuccess != null) {
+                onSuccess.run();
+            }
+            updateUiState();
+            return;
+        }
+        clearSyncedCurrentTarget();
+        EquatorialPoint commandPoint = gotoCommandPoint(target);
+        String raCommand = ":Sr" + formatRightAscensionCommand(commandPoint.raHours) + "#";
+        String decCommand = ":Sd" + formatDeclinationCommand(commandPoint.decDegrees) + "#";
         busy = true;
         setStatus(sendingStatus);
         updateUiState();
+        if (quickPointingCorrectionActive) {
+            appendLog("INFO quick sync correction RA "
+                    + formatSignedDegrees(quickPointingRaOffsetHours * 15.0)
+                    + " Dec " + formatSignedDegrees(quickPointingDecOffsetDegrees)
+                    + " for " + target.label);
+        }
         appendLog("TX " + raCommand);
         appendLog("TX " + decCommand);
         appendLog("TX :MS#");
@@ -1523,6 +1552,55 @@ public final class MainActivity extends Activity {
                 runOnUiThread(() -> handleCommandFailure(ex));
             }
         });
+    }
+
+    private boolean isSyncedCurrentTarget(SkyChartView.Target target) {
+        return sameTargetCoordinates(syncedCurrentTarget, target);
+    }
+
+    private void clearSyncedCurrentTarget() {
+        syncedCurrentTarget = null;
+    }
+
+    private static boolean sameTargetCoordinates(SkyChartView.Target first, SkyChartView.Target second) {
+        if (first == null || second == null) {
+            return false;
+        }
+        double raDiffDegrees = Math.abs(wrapDegrees((first.raHours - second.raHours) * 15.0));
+        double decDiffDegrees = Math.abs(first.decDegrees - second.decDegrees);
+        return raDiffDegrees <= 0.05 && decDiffDegrees <= 0.05;
+    }
+
+    private EquatorialPoint gotoCommandPoint(SkyChartView.Target target) {
+        if (!quickPointingCorrectionActive) {
+            return new EquatorialPoint(target.raHours, target.decDegrees);
+        }
+        return new EquatorialPoint(
+                normalizeHours(target.raHours + quickPointingRaOffsetHours),
+                clamp(target.decDegrees + quickPointingDecOffsetDegrees, -90.0, 90.0)
+        );
+    }
+
+    private EquatorialPoint actualPointingFromMountReport(double raHours, double decDegrees) {
+        if (!quickPointingCorrectionActive) {
+            return new EquatorialPoint(raHours, decDegrees);
+        }
+        return new EquatorialPoint(
+                normalizeHours(raHours - quickPointingRaOffsetHours),
+                clamp(decDegrees - quickPointingDecOffsetDegrees, -90.0, 90.0)
+        );
+    }
+
+    private void enableQuickPointingCorrection(double reportedRaHours, double reportedDecDegrees, SkyChartView.Target target) {
+        quickPointingCorrectionActive = true;
+        quickPointingRaOffsetHours = wrapDegrees((reportedRaHours - target.raHours) * 15.0) / 15.0;
+        quickPointingDecOffsetDegrees = clamp(reportedDecDegrees - target.decDegrees, -45.0, 45.0);
+    }
+
+    private void clearQuickPointingCorrection() {
+        quickPointingCorrectionActive = false;
+        quickPointingRaOffsetHours = 0.0;
+        quickPointingDecOffsetDegrees = 0.0;
     }
 
     private void captureInitialHomeFromMount() {
@@ -1582,8 +1660,15 @@ public final class MainActivity extends Activity {
     }
 
     private void gotoHome() {
+        if (!connected || busy) {
+            return;
+        }
         if (!hasHomePosition) {
             setStatus(getString(R.string.home_no_position));
+            return;
+        }
+        if (!homePositionValid) {
+            setStatus(getString(R.string.home_invalid_no_goto));
             return;
         }
         SkyChartView.Target homeTarget = SkyChartView.Target.custom(
@@ -1668,6 +1753,7 @@ public final class MainActivity extends Activity {
                 }
                 runOnUiThread(() -> {
                     busy = false;
+                    clearQuickPointingCorrection();
                     setStatus(getString(R.string.status_sync_mount_sent));
                     updateUiState();
                 });
@@ -1770,8 +1856,19 @@ public final class MainActivity extends Activity {
             setCalibrationStatus(getString(R.string.calibration_no_suggestion));
             return;
         }
-        SkyChartView.Target target = suggestions.get(suggestedCalibrationIndex % suggestions.size());
-        suggestedCalibrationIndex++;
+        SkyChartView.Target target = null;
+        for (int attempt = 0; attempt < suggestions.size(); attempt++) {
+            SkyChartView.Target candidate = suggestions.get(suggestedCalibrationIndex % suggestions.size());
+            suggestedCalibrationIndex++;
+            if (!isAlignmentTargetUsed(candidate)) {
+                target = candidate;
+                break;
+            }
+        }
+        if (target == null) {
+            target = suggestions.get(suggestedCalibrationIndex % suggestions.size());
+            suggestedCalibrationIndex++;
+        }
         setCalibrationTarget(target);
         setCalibrationStatus(getString(
                 R.string.calibration_suggested_status,
@@ -1779,6 +1876,21 @@ public final class MainActivity extends Activity {
                 formatRightAscensionDisplay(target.raHours),
                 formatDeclinationDisplay(target.decDegrees)
         ));
+    }
+
+    private boolean isAlignmentTargetUsed(SkyChartView.Target target) {
+        if (alignmentSession == null || target == null) {
+            return false;
+        }
+        if (sameTargetCoordinates(alignmentSession.currentTarget, target)) {
+            return true;
+        }
+        for (SkyChartView.Target acceptedTarget : alignmentSession.acceptedTargets) {
+            if (sameTargetCoordinates(acceptedTarget, target)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void showCalibrationTargetInSky() {
@@ -1790,19 +1902,14 @@ public final class MainActivity extends Activity {
         applySkyTarget(target, true);
     }
 
-    private void quickGotoCalibrationTarget() {
+    private void selectQuickCalibrationTarget() {
         SkyChartView.Target target = resolveCalibrationTarget();
         if (target == null) {
             return;
         }
         setCalibrationTarget(target);
         selectSkyTarget(target, true);
-        sendGotoTarget(
-                target,
-                getString(R.string.calibration_quick_goto_sending, target.label),
-                getString(R.string.calibration_quick_goto_sent, target.label),
-                () -> setCalibrationStatus(getString(R.string.calibration_quick_center_prompt, target.label))
-        );
+        setCalibrationStatus(getString(R.string.calibration_quick_selected_manual, target.label));
     }
 
     private void syncQuickCalibrationTarget() {
@@ -1811,25 +1918,140 @@ public final class MainActivity extends Activity {
             return;
         }
         setCalibrationTarget(target);
-        List<MountCommand> commands = new ArrayList<>();
-        commands.add(MountCommand.noReply(":Sr" + formatRightAscensionCommand(target.raHours) + "#"));
-        commands.add(MountCommand.noReply(":Sd" + formatDeclinationCommand(target.decDegrees) + "#"));
-        commands.add(MountCommand.withReply(OnStepCommand.SYNC_CURRENT_TARGET.command));
-        commands.add(MountCommand.noReply(OnStepCommand.TRACK_SIDEREAL.command));
-        commands.add(MountCommand.withReply(OnStepCommand.TRACK_ENABLE.command));
-        runMountCommands(
-                commands,
-                getString(R.string.calibration_quick_sync_sending, target.label),
-                getString(R.string.calibration_quick_sync_sent, target.label),
-                () -> {
+        if (!connected || busy) {
+            return;
+        }
+
+        String raCommand = ":Sr" + formatRightAscensionCommand(target.raHours) + "#";
+        String decCommand = ":Sd" + formatDeclinationCommand(target.decDegrees) + "#";
+        String sendingStatus = getString(R.string.calibration_quick_sync_sending, target.label);
+        busy = true;
+        setStatus(sendingStatus);
+        setCalibrationStatus(sendingStatus);
+        updateUiState();
+        appendLog("TX " + OnStepCommand.STOP_ALL.command);
+        appendLog("TX :GR#");
+        appendLog("TX :GD#");
+        appendLog("TX " + raCommand);
+        appendLog("TX " + decCommand);
+        appendLog("TX " + OnStepCommand.SYNC_CURRENT_TARGET.command);
+        appendLog("TX " + OnStepCommand.TRACK_SIDEREAL.command);
+        appendLog("TX " + OnStepCommand.TRACK_ENABLE.command);
+        appendLog("TX :GR#");
+        appendLog("TX :GD#");
+
+        int generation = connectionGeneration.get();
+        ioExecutor.execute(() -> {
+            if (!isConnectionGenerationCurrent(generation)) {
+                return;
+            }
+            List<String> replies = new ArrayList<>();
+            try {
+                client.sendNoReply(OnStepCommand.STOP_ALL.command);
+
+                String beforeRaReply = client.query(":GR#");
+                String beforeDecReply = client.query(":GD#");
+                replies.add(":GR# -> " + beforeRaReply);
+                replies.add(":GD# -> " + beforeDecReply);
+                double beforeRaHours = parseRightAscension(beforeRaReply);
+                double beforeDecDegrees = parseDeclination(beforeDecReply);
+
+                String raReply = client.query(raCommand);
+                replies.add(raCommand + " -> " + raReply);
+                if ("0".equals(raReply) || raReply.startsWith("E")) {
+                    throw new CommandRejectedException(raCommand, raReply);
+                }
+
+                String decReply = client.query(decCommand);
+                replies.add(decCommand + " -> " + decReply);
+                if ("0".equals(decReply) || decReply.startsWith("E")) {
+                    throw new CommandRejectedException(decCommand, decReply);
+                }
+
+                String syncReply = client.query(OnStepCommand.SYNC_CURRENT_TARGET.command);
+                replies.add(OnStepCommand.SYNC_CURRENT_TARGET.command + " -> " + syncReply);
+                if ("0".equals(syncReply) || syncReply.startsWith("E")) {
+                    throw new CommandRejectedException(OnStepCommand.SYNC_CURRENT_TARGET.command, syncReply);
+                }
+
+                client.sendNoReply(OnStepCommand.TRACK_SIDEREAL.command);
+                String trackingReply = client.query(OnStepCommand.TRACK_ENABLE.command);
+                replies.add(OnStepCommand.TRACK_ENABLE.command + " -> " + trackingReply);
+                if ("0".equals(trackingReply) || trackingReply.startsWith("E")) {
+                    throw new CommandRejectedException(OnStepCommand.TRACK_ENABLE.command, trackingReply);
+                }
+
+                String afterRaReply = client.query(":GR#");
+                String afterDecReply = client.query(":GD#");
+                replies.add(":GR# -> " + afterRaReply);
+                replies.add(":GD# -> " + afterDecReply);
+                double afterRaHours = parseRightAscension(afterRaReply);
+                double afterDecDegrees = parseDeclination(afterDecReply);
+                double postSyncDistance = angularDistanceDegrees(
+                        afterRaHours,
+                        afterDecDegrees,
+                        target.raHours,
+                        target.decDegrees
+                );
+
+                runOnUiThread(() -> {
+                    for (String reply : replies) {
+                        appendLog("RX " + reply);
+                    }
+                    busy = false;
                     selectedTrackingRate = TrackingRate.SIDEREAL;
                     trackingEnabled = true;
                     trackingUsingDualAxis = false;
+                    gotoInProgress = false;
+                    setMountPointing(target.raHours, target.decDegrees);
+                    syncedCurrentTarget = target;
+                    if (postSyncDistance <= 0.25) {
+                        clearQuickPointingCorrection();
+                        setCalibrationStatus(getString(R.string.calibration_quick_sync_mount_model_sent, target.label));
+                        setStatus(getString(R.string.calibration_quick_sync_mount_model_sent, target.label));
+                    } else {
+                        enableQuickPointingCorrection(afterRaHours, afterDecDegrees, target);
+                        setCalibrationStatus(getString(
+                                R.string.calibration_quick_sync_app_offset_sent,
+                                target.label,
+                                formatSignedDegrees(quickPointingRaOffsetHours * 15.0),
+                                formatSignedDegrees(quickPointingDecOffsetDegrees)
+                        ));
+                        setStatus(getString(
+                                R.string.calibration_quick_sync_app_offset_sent,
+                                target.label,
+                                formatSignedDegrees(quickPointingRaOffsetHours * 15.0),
+                                formatSignedDegrees(quickPointingDecOffsetDegrees)
+                        ));
+                    }
                     updateTrackingViews();
-                    setCalibrationStatus(getString(R.string.calibration_quick_sync_sent, target.label));
+                    updateUiState();
                     refreshMountPointing();
-                }
-        );
+                });
+            } catch (CommandRejectedException ex) {
+                runOnUiThread(() -> {
+                    for (String reply : replies) {
+                        appendLog("RX " + reply);
+                    }
+                    busy = false;
+                    setCalibrationStatus(getString(R.string.status_command_rejected, ex.command, ex.reply));
+                    updateUiState();
+                });
+            } catch (IOException ex) {
+                markTransportFault();
+                runOnUiThread(() -> handleCommandFailure(ex));
+            } catch (IllegalArgumentException ex) {
+                runOnUiThread(() -> {
+                    for (String reply : replies) {
+                        appendLog("RX " + reply);
+                    }
+                    busy = false;
+                    setCalibrationStatus(getString(R.string.status_bad_pointing_reply));
+                    setStatus(getString(R.string.status_bad_pointing_reply));
+                    updateUiState();
+                });
+            }
+        });
     }
 
     private void startAlignment(int starCount) {
@@ -1837,12 +2059,12 @@ public final class MainActivity extends Activity {
             return;
         }
         OnStepCommand startCommand;
-        if (starCount == 1) {
-            startCommand = OnStepCommand.ALIGN_ONE;
-        } else if (starCount == 2) {
+        if (starCount == 2) {
             startCommand = OnStepCommand.ALIGN_TWO;
-        } else {
+        } else if (starCount == 3) {
             startCommand = OnStepCommand.ALIGN_THREE;
+        } else {
+            return;
         }
         List<MountCommand> commands = new ArrayList<>();
         commands.add(MountCommand.withReply(startCommand.command));
@@ -1858,6 +2080,9 @@ public final class MainActivity extends Activity {
                     trackingUsingDualAxis = false;
                     calibrationTarget = null;
                     calibrationTargetField.setText("");
+                    clearSyncedCurrentTarget();
+                    clearQuickPointingCorrection();
+                    polarRefineSyncedTarget = null;
                     setCalibrationStatus(getString(R.string.calibration_align_started, starCount));
                     updateTrackingViews();
                     updateCalibrationViews();
@@ -1866,26 +2091,48 @@ public final class MainActivity extends Activity {
         );
     }
 
-    private void gotoAlignmentTarget() {
-        if (alignmentSession == null || alignmentSession.isComplete()) {
-            return;
-        }
-        SkyChartView.Target target = resolveCalibrationTarget();
+    private void selectAlignmentTargetOnly() {
+        SkyChartView.Target target = selectAlignmentTarget(true);
         if (target == null) {
             return;
         }
+        setCalibrationStatus(getString(
+                R.string.calibration_align_selected_manual,
+                alignmentSession.currentStarNumber(),
+                alignmentSession.totalStars,
+                target.label
+        ));
+    }
+
+    private SkyChartView.Target selectAlignmentTarget(boolean centerView) {
+        if (alignmentSession == null || alignmentSession.isComplete()) {
+            return null;
+        }
+        SkyChartView.Target target = resolveCalibrationTarget();
+        if (target == null) {
+            return null;
+        }
+        if (isAcceptedAlignmentTarget(target)) {
+            setCalibrationStatus(getString(R.string.calibration_align_duplicate_target, target.label));
+            return null;
+        }
         setCalibrationTarget(target);
         alignmentSession.currentTarget = target;
-        selectSkyTarget(target, true);
-        sendGotoTarget(
-                target,
-                getString(R.string.calibration_align_goto_sending, alignmentSession.currentStarNumber(), alignmentSession.totalStars, target.label),
-                getString(R.string.calibration_align_goto_sent, target.label),
-                () -> {
-                    setCalibrationStatus(getString(R.string.calibration_align_center_prompt, target.label));
-                    updateCalibrationViews();
-                }
-        );
+        selectSkyTarget(target, centerView);
+        updateCalibrationViews();
+        return target;
+    }
+
+    private boolean isAcceptedAlignmentTarget(SkyChartView.Target target) {
+        if (alignmentSession == null || target == null) {
+            return false;
+        }
+        for (SkyChartView.Target acceptedTarget : alignmentSession.acceptedTargets) {
+            if (sameTargetCoordinates(acceptedTarget, target)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void acceptAlignmentStar() {
@@ -1901,21 +2148,32 @@ public final class MainActivity extends Activity {
             alignmentSession.currentTarget = target;
         }
         SkyChartView.Target acceptedTarget = alignmentSession.currentTarget;
+        if (isAcceptedAlignmentTarget(acceptedTarget)) {
+            setCalibrationStatus(getString(R.string.calibration_align_duplicate_target, acceptedTarget.label));
+            return;
+        }
         List<MountCommand> commands = new ArrayList<>();
-        commands.add(MountCommand.withReply(OnStepCommand.ALIGN_ACCEPT.command));
+        commands.add(MountCommand.noReply(OnStepCommand.STOP_ALL.command));
+        commands.add(MountCommand.withReply(":Sr" + formatRightAscensionCommand(acceptedTarget.raHours) + "#"));
+        commands.add(MountCommand.withReply(":Sd" + formatDeclinationCommand(acceptedTarget.decDegrees) + "#"));
+        commands.add(MountCommand.withReply(OnStepCommand.SYNC_CURRENT_TARGET.command));
         runMountCommands(
                 commands,
                 getString(R.string.calibration_align_accepting, acceptedTarget.label),
                 getString(R.string.calibration_align_accepted, acceptedTarget.label),
                 () -> {
                     alignmentSession.acceptedStars++;
+                    alignmentSession.acceptedTargets.add(acceptedTarget);
+                    alignmentSession.acceptedLabels.add(acceptedTarget.label);
+                    setMountPointing(acceptedTarget.raHours, acceptedTarget.decDegrees);
                     if (alignmentSession.isComplete()) {
                         if (alignmentSession.totalStars >= 3) {
                             hasThreeStarTrackingModel = true;
-                            trackingEnabled = false;
+                            trackingEnabled = true;
                             trackingUsingDualAxis = false;
                         }
                         setCalibrationStatus(getString(R.string.calibration_align_complete, alignmentSession.totalStars));
+                        alignmentSession.currentTarget = null;
                     } else {
                         alignmentSession.currentTarget = null;
                         calibrationTarget = null;
@@ -1927,7 +2185,11 @@ public final class MainActivity extends Activity {
                         ));
                         fillSuggestedCalibrationTarget();
                     }
+                    clearSyncedCurrentTarget();
+                    clearQuickPointingCorrection();
+                    polarRefineSyncedTarget = null;
                     updateCalibrationViews();
+                    updateTrackingViews();
                     refreshMountPointing();
                 }
         );
@@ -1946,9 +2208,12 @@ public final class MainActivity extends Activity {
                 () -> {
                     if (alignmentSession.totalStars >= 3) {
                         hasThreeStarTrackingModel = true;
-                        trackingEnabled = false;
+                        trackingEnabled = true;
                         trackingUsingDualAxis = false;
                     }
+                    clearSyncedCurrentTarget();
+                    clearQuickPointingCorrection();
+                    polarRefineSyncedTarget = null;
                     setCalibrationStatus(getString(R.string.calibration_align_saved));
                     updateTrackingViews();
                 }
@@ -1958,13 +2223,42 @@ public final class MainActivity extends Activity {
     private void cancelAlignmentSession() {
         alignmentSession = null;
         calibrationTarget = null;
+        polarRefineSyncedTarget = null;
         setCalibrationStatus(getString(R.string.calibration_align_cancelled));
         updateCalibrationViews();
+    }
+
+    private void gotoRefinePolarTarget() {
+        if (!hasThreeStarTrackingModel) {
+            setCalibrationStatus(getString(R.string.calibration_refine_requires_three_star));
+            return;
+        }
+        SkyChartView.Target target = resolveCalibrationTarget();
+        if (target == null) {
+            return;
+        }
+        setCalibrationTarget(target);
+        selectSkyTarget(target, true);
+        polarRefineSyncedTarget = null;
+        sendGotoTarget(
+                target,
+                getString(R.string.calibration_refine_goto_sending, target.label),
+                getString(R.string.calibration_refine_goto_sent, target.label),
+                () -> {
+                    polarRefineSyncedTarget = target;
+                    setCalibrationStatus(getString(R.string.calibration_refine_ready_prompt, target.label));
+                    updateCalibrationViews();
+                }
+        );
     }
 
     private void refinePolarAlignment() {
         if (!hasThreeStarTrackingModel) {
             setCalibrationStatus(getString(R.string.calibration_refine_requires_three_star));
+            return;
+        }
+        if (polarRefineSyncedTarget == null) {
+            setCalibrationStatus(getString(R.string.calibration_refine_requires_sync));
             return;
         }
         List<MountCommand> commands = new ArrayList<>();
@@ -1975,10 +2269,12 @@ public final class MainActivity extends Activity {
                 getString(R.string.calibration_refine_sent),
                 () -> {
                     hasThreeStarTrackingModel = true;
-                    trackingEnabled = false;
-                    trackingUsingDualAxis = false;
+                    clearSyncedCurrentTarget();
+                    clearQuickPointingCorrection();
+                    polarRefineSyncedTarget = null;
                     setCalibrationStatus(getString(R.string.calibration_refine_sent));
                     updateTrackingViews();
+                    updateCalibrationViews();
                 }
         );
     }
@@ -2026,7 +2322,50 @@ public final class MainActivity extends Activity {
                 ));
             }
         }
+        if (alignmentCurrentText != null) {
+            if (alignmentSession == null) {
+                alignmentCurrentText.setText(R.string.calibration_align_current_none);
+            } else if (alignmentSession.isComplete()) {
+                alignmentCurrentText.setText(R.string.calibration_align_current_complete);
+            } else if (alignmentSession.currentTarget == null) {
+                alignmentCurrentText.setText(getString(
+                        R.string.calibration_align_current_waiting,
+                        alignmentSession.currentStarNumber(),
+                        alignmentSession.totalStars
+                ));
+            } else {
+                alignmentCurrentText.setText(getString(
+                        R.string.calibration_align_current_status,
+                        alignmentSession.currentStarNumber(),
+                        alignmentSession.totalStars,
+                        alignmentSession.currentTarget.label,
+                        formatRightAscensionDisplay(alignmentSession.currentTarget.raHours),
+                        formatDeclinationDisplay(alignmentSession.currentTarget.decDegrees)
+                ));
+            }
+        }
+        if (alignmentAcceptedText != null) {
+            if (alignmentSession == null || alignmentSession.acceptedLabels.isEmpty()) {
+                alignmentAcceptedText.setText(R.string.calibration_align_accepted_none);
+            } else {
+                alignmentAcceptedText.setText(getString(
+                        R.string.calibration_align_accepted_list,
+                        joinLabels(alignmentSession.acceptedLabels)
+                ));
+            }
+        }
         updateUiState();
+    }
+
+    private static String joinLabels(List<String> labels) {
+        StringBuilder builder = new StringBuilder();
+        for (String label : labels) {
+            if (builder.length() > 0) {
+                builder.append("、");
+            }
+            builder.append(label);
+        }
+        return builder.toString();
     }
 
     private void updateCalibrationModeViews() {
@@ -2130,7 +2469,7 @@ public final class MainActivity extends Activity {
                 runOnUiThread(() -> {
                     mountPointingFailureCount = 0;
                     mountPointingPollingPaused = false;
-                    setMountPointing(raHours, decDegrees);
+                    setMountPointingFromMount(raHours, decDegrees);
                 });
             } catch (SocketTimeoutException ex) {
                 runOnUiThread(() -> handleMountPointingPollFailure(ex));
@@ -2176,6 +2515,11 @@ public final class MainActivity extends Activity {
         updateGotoProgressFromPointing();
     }
 
+    private void setMountPointingFromMount(double raHours, double decDegrees) {
+        EquatorialPoint actualPointing = actualPointingFromMountReport(raHours, decDegrees);
+        setMountPointing(actualPointing.raHours, actualPointing.decDegrees);
+    }
+
     private void clearMountPointing() {
         hasCurrentMountPosition = false;
         if (skyChartView != null) {
@@ -2189,18 +2533,97 @@ public final class MainActivity extends Activity {
     private void setHomePosition(double raHours, double decDegrees) {
         Instant now = Instant.now();
         hasHomePosition = true;
+        homePositionValid = true;
         homeReferenceRaHours = normalizeHours(raHours);
         homeHourAngleHours = signedHourAngleHours(raHours, now);
         homeDecDegrees = clamp(decDegrees, -90.0, 90.0);
         homeReferenceInstant = now;
+        saveHomePosition();
         updateHomeViews();
     }
 
     private double currentHomeRaHours() {
         if (homeReferenceInstant == null) {
-            return homeReferenceRaHours;
+            return homeRaHoursFromHourAngle(Instant.now());
         }
         return normalizeHours(homeReferenceRaHours + siderealDeltaHours(homeReferenceInstant, Instant.now()));
+    }
+
+    private double homeRaHoursFromHourAngle(Instant instant) {
+        return normalizeHours(localSiderealDegrees(instant) / 15.0 - homeHourAngleHours);
+    }
+
+    private void loadHomePosition() {
+        SharedPreferences preferences = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        if (!preferences.getBoolean(PREF_HOME_HAS_POSITION, false)) {
+            hasHomePosition = false;
+            homePositionValid = false;
+            return;
+        }
+        homeHourAngleHours = clampHourAngle(readDoublePreference(preferences, PREF_HOME_HOUR_ANGLE, 0.0));
+        homeDecDegrees = clamp(readDoublePreference(preferences, PREF_HOME_DEC_DEGREES, 0.0), -90.0, 90.0);
+        hasHomePosition = true;
+        homePositionValid = preferences.getBoolean(PREF_HOME_VALID, false);
+        if (preferences.contains(PREF_HOME_REFERENCE_RA) && preferences.contains(PREF_HOME_REFERENCE_EPOCH_MS)) {
+            homeReferenceRaHours = normalizeHours(readDoublePreference(preferences, PREF_HOME_REFERENCE_RA, 0.0));
+            homeReferenceInstant = Instant.ofEpochMilli(preferences.getLong(PREF_HOME_REFERENCE_EPOCH_MS, Instant.now().toEpochMilli()));
+        } else {
+            updateHomeReferenceSnapshot();
+            saveHomePosition();
+        }
+    }
+
+    private void saveHomePosition() {
+        if (hasHomePosition && homeReferenceInstant == null) {
+            updateHomeReferenceSnapshot();
+        }
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .edit()
+                .putBoolean(PREF_HOME_HAS_POSITION, hasHomePosition)
+                .putBoolean(PREF_HOME_VALID, homePositionValid)
+                .putLong(PREF_HOME_REFERENCE_RA, Double.doubleToRawLongBits(homeReferenceRaHours))
+                .putLong(PREF_HOME_REFERENCE_EPOCH_MS, homeReferenceInstant == null ? 0L : homeReferenceInstant.toEpochMilli())
+                .putLong(PREF_HOME_HOUR_ANGLE, Double.doubleToRawLongBits(homeHourAngleHours))
+                .putLong(PREF_HOME_DEC_DEGREES, Double.doubleToRawLongBits(homeDecDegrees))
+                .apply();
+    }
+
+    private void invalidateHomePosition() {
+        if (!hasHomePosition || !homePositionValid) {
+            updateHomeViews();
+            return;
+        }
+        homePositionValid = false;
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .edit()
+                .putBoolean(PREF_HOME_HAS_POSITION, true)
+                .putBoolean(PREF_HOME_VALID, false)
+                .apply();
+        appendLog("HOME invalidated by coordinate model change");
+        updateHomeViews();
+    }
+
+    private void updateHomeReferenceSnapshot() {
+        if (!hasHomePosition) {
+            homeReferenceInstant = null;
+            return;
+        }
+        Instant now = Instant.now();
+        homeReferenceRaHours = currentHomeRaHours();
+        homeReferenceInstant = now;
+        updateHomeViews();
+    }
+
+    private static double readDoublePreference(SharedPreferences preferences, String key, double fallback) {
+        if (!preferences.contains(key)) {
+            return fallback;
+        }
+        return Double.longBitsToDouble(preferences.getLong(key, Double.doubleToRawLongBits(fallback)));
+    }
+
+    private static double clampHourAngle(double hourAngleHours) {
+        double normalized = normalizeHours(hourAngleHours);
+        return normalized > 12.0 ? normalized - 24.0 : normalized;
     }
 
     private void updateTargetViews() {
@@ -2451,6 +2874,10 @@ public final class MainActivity extends Activity {
     private static String formatDeclinationDisplay(double decDegrees) {
         String command = formatDeclinationCommand(decDegrees);
         return command.replace('*', '°');
+    }
+
+    private static String formatSignedDegrees(double degrees) {
+        return String.format(Locale.US, "%+.2f°", degrees);
     }
 
     private static double parseRightAscension(String value) {
@@ -3066,7 +3493,7 @@ public final class MainActivity extends Activity {
             trackingToggleButton.setEnabled(connected && !busy);
         }
         if (gotoHomeButton != null) {
-            gotoHomeButton.setEnabled(connected && !busy && hasHomePosition);
+            gotoHomeButton.setEnabled(connected && !busy && hasHomePosition && homePositionValid);
         }
         if (setHomeButton != null) {
             setHomeButton.setEnabled(connected && !busy);
@@ -3080,8 +3507,8 @@ public final class MainActivity extends Activity {
         if (calibrationShowButton != null) {
             calibrationShowButton.setEnabled(skyChartView != null && !busy);
         }
-        if (quickGotoButton != null) {
-            quickGotoButton.setEnabled(connected && !busy);
+        if (quickSelectButton != null) {
+            quickSelectButton.setEnabled(!busy);
         }
         if (quickSyncButton != null) {
             quickSyncButton.setEnabled(connected && !busy);
@@ -3094,8 +3521,8 @@ public final class MainActivity extends Activity {
             alignStartButton.setEnabled(canStartAlignment && selectedCalibrationMode.starCount > 0);
         }
         boolean alignmentActive = connected && !busy && alignmentSession != null && !alignmentSession.isComplete();
-        if (alignGotoButton != null) {
-            alignGotoButton.setEnabled(alignmentActive);
+        if (alignSelectButton != null) {
+            alignSelectButton.setEnabled(alignmentActive);
         }
         if (alignAcceptButton != null) {
             alignAcceptButton.setEnabled(alignmentActive);
@@ -3106,8 +3533,11 @@ public final class MainActivity extends Activity {
         if (alignCancelButton != null) {
             alignCancelButton.setEnabled(alignmentSession != null && !busy);
         }
+        if (refineGotoButton != null) {
+            refineGotoButton.setEnabled(connected && !busy && hasThreeStarTrackingModel);
+        }
         if (refinePaButton != null) {
-            refinePaButton.setEnabled(connected && !busy && hasThreeStarTrackingModel);
+            refinePaButton.setEnabled(connected && !busy && hasThreeStarTrackingModel && polarRefineSyncedTarget != null);
         }
 
         boolean controlsEnabled = connected && !busy;
@@ -3128,14 +3558,20 @@ public final class MainActivity extends Activity {
 
     private void updateHomeViews() {
         if (homeStatusText != null) {
-            if (hasHomePosition) {
+            if (!hasHomePosition) {
+                homeStatusText.setText(R.string.home_status_none);
+            } else if (!homePositionValid) {
+                homeStatusText.setText(getString(
+                        R.string.home_status_invalid,
+                        formatHourAngleDisplay(homeHourAngleHours),
+                        formatDeclinationDisplay(homeDecDegrees)
+                ));
+            } else {
                 homeStatusText.setText(getString(
                         R.string.home_status,
                         formatHourAngleDisplay(homeHourAngleHours),
                         formatDeclinationDisplay(homeDecDegrees)
                 ));
-            } else {
-                homeStatusText.setText(R.string.home_status_none);
             }
         }
     }
@@ -3362,6 +3798,8 @@ public final class MainActivity extends Activity {
 
     private static final class AlignmentSession {
         final int totalStars;
+        final List<SkyChartView.Target> acceptedTargets = new ArrayList<>();
+        final List<String> acceptedLabels = new ArrayList<>();
         int acceptedStars;
         SkyChartView.Target currentTarget;
 
@@ -3395,6 +3833,16 @@ public final class MainActivity extends Activity {
         HorizontalCoordinates(double altitudeDegrees, double azimuthDegrees) {
             this.altitudeDegrees = altitudeDegrees;
             this.azimuthDegrees = azimuthDegrees;
+        }
+    }
+
+    private static final class EquatorialPoint {
+        final double raHours;
+        final double decDegrees;
+
+        EquatorialPoint(double raHours, double decDegrees) {
+            this.raHours = raHours;
+            this.decDegrees = decDegrees;
         }
     }
 
@@ -3439,10 +3887,8 @@ public final class MainActivity extends Activity {
         MOVE_EAST(":Me#"),
         MOVE_WEST(":Mw#"),
         SYNC_CURRENT_TARGET(":CM#"),
-        ALIGN_ONE(":A1#"),
         ALIGN_TWO(":A2#"),
         ALIGN_THREE(":A3#"),
-        ALIGN_ACCEPT(":A+#"),
         ALIGN_WRITE(":AW#"),
         TRACK_SIDEREAL(":TQ#"),
         TRACK_LUNAR(":TL#"),
@@ -3501,7 +3947,6 @@ public final class MainActivity extends Activity {
 
     private enum CalibrationMode {
         QUICK_SYNC(R.string.calibration_mode_quick_sync, 0),
-        ONE_STAR(R.string.calibration_mode_one_star, 1),
         TWO_STAR(R.string.calibration_mode_two_star, 2),
         THREE_STAR(R.string.calibration_mode_three_star, 3),
         REFINE_POLAR(R.string.calibration_mode_refine_polar, 0);
