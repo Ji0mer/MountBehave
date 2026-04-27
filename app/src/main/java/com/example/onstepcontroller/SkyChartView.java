@@ -16,13 +16,17 @@ import java.util.List;
 import java.util.Locale;
 
 public final class SkyChartView extends View {
-    private static final double MIN_FIELD_OF_VIEW_DEGREES = 28.0;
+    private static final double MIN_FIELD_OF_VIEW_DEGREES = 1.0;
     private static final double MAX_FIELD_OF_VIEW_DEGREES = 135.0;
     private static final double DEFAULT_FIELD_OF_VIEW_DEGREES = 96.0;
     private static final double DEFAULT_VIEW_AZIMUTH_DEGREES = 90.0;
     private static final double DEFAULT_VIEW_ALTITUDE_DEGREES = 32.0;
+    private static final double MIN_VIEW_ALTITUDE_DEGREES = -78.0;
+    private static final double MAX_VIEW_ALTITUDE_DEGREES = 88.0;
     private static final double DEFAULT_MOUNT_AZIMUTH_DEGREES = 90.0;
     private static final double DEFAULT_MOUNT_ALTITUDE_DEGREES = 0.0;
+    private static final double GALACTIC_PLANE_SAMPLE_STEP_DEGREES = 2.0;
+    private static final double GALACTIC_BAND_EDGE_DEGREES = 10.0;
 
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private SkyCatalog catalog;
@@ -107,10 +111,14 @@ public final class SkyChartView extends View {
     }
 
     Target findTarget(String query) {
+        String normalized = normalizeTargetName(query);
+        SolarSystemEphemeris.Body body = SolarSystemEphemeris.findBody(currentInstant, query);
+        if (body != null) {
+            return Target.solarSystemObject(body.id, body.label, body.raHours, body.decDegrees);
+        }
         if (catalog == null) {
             return null;
         }
-        String normalized = normalizeTargetName(query);
         if (normalized.isEmpty()) {
             return null;
         }
@@ -160,14 +168,21 @@ public final class SkyChartView extends View {
         }
         return String.format(
                 Locale.US,
-                "恒星 %d 颗，深空天体 %d 个，星座线 %d 段。%s 本地天空，视场 %.0f°，星等上限 %.1f。",
+                "恒星 %d 颗，深空天体 %d 个，星座线 %d 段。%s 本地天空，视场 %s，星等上限 %.1f。",
                 catalog.stars.size(),
                 catalog.deepSkyObjects.size(),
                 catalog.constellationLines.size(),
                 observer.locationName,
-                fieldOfViewDegrees,
+                formatFieldOfView(fieldOfViewDegrees),
                 visibleStarMagnitudeLimit()
         );
+    }
+
+    private static String formatFieldOfView(double degrees) {
+        if (degrees < 10.0) {
+            return String.format(Locale.US, "%.1f°", degrees);
+        }
+        return String.format(Locale.US, "%.0f°", degrees);
     }
 
     private void init(Context context) {
@@ -191,9 +206,11 @@ public final class SkyChartView extends View {
         CameraBasis basis = cameraBasis();
         drawGround(canvas, basis);
         drawSkyGrid(canvas, basis);
+        drawMilkyWay(canvas, basis);
         drawConstellationLines(canvas, basis);
         drawStars(canvas, basis);
         drawDeepSkyObjects(canvas, basis);
+        drawSolarSystemObjects(canvas, basis);
         drawSelectedTarget(canvas, basis);
         drawMountPointing(canvas, basis);
         drawViewReadout(canvas);
@@ -207,10 +224,13 @@ public final class SkyChartView extends View {
         }
 
         if (event.getActionMasked() == MotionEvent.ACTION_POINTER_UP) {
+            int remainingPointerIndex = event.getActionIndex() == 0 ? 1 : 0;
             pinching = false;
+            touchMoved = true;
             suppressTapAfterPinch = true;
-            lastTouchX = event.getX(0);
-            lastTouchY = event.getY(0);
+            lastPinchDistance = 0f;
+            lastTouchX = event.getX(remainingPointerIndex);
+            lastTouchY = event.getY(remainingPointerIndex);
             return true;
         }
 
@@ -245,6 +265,13 @@ public final class SkyChartView extends View {
                     selectNearestTarget(event.getX(), event.getY());
                 }
                 suppressTapAfterPinch = false;
+                lastPinchDistance = 0f;
+                pinching = false;
+                return true;
+            case MotionEvent.ACTION_CANCEL:
+                suppressTapAfterPinch = false;
+                lastPinchDistance = 0f;
+                pinching = false;
                 return true;
             default:
                 return true;
@@ -255,7 +282,11 @@ public final class SkyChartView extends View {
         double horizontalScale = fieldOfViewDegrees / Math.max(1, getWidth());
         double verticalScale = fieldOfViewDegrees / Math.max(1, getHeight());
         viewAzimuthDegrees = normalizeDegrees(viewAzimuthDegrees - dx * horizontalScale * 1.18);
-        viewAltitudeDegrees = clamp(viewAltitudeDegrees + dy * verticalScale * 1.18, -12.0, 88.0);
+        viewAltitudeDegrees = clamp(
+                viewAltitudeDegrees + dy * verticalScale * 1.18,
+                MIN_VIEW_ALTITUDE_DEGREES,
+                MAX_VIEW_ALTITUDE_DEGREES
+        );
     }
 
     private void handlePinch(MotionEvent event) {
@@ -346,6 +377,97 @@ public final class SkyChartView extends View {
         }
     }
 
+    private void drawMilkyWay(Canvas canvas, CameraBasis basis) {
+        double localSiderealDegrees = localSiderealDegrees();
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeCap(Paint.Cap.ROUND);
+
+        float bandWidth = (float) clamp(
+                getHeight() * 7.0 / Math.max(1.0, fieldOfViewDegrees),
+                dp(8),
+                dp(96)
+        );
+        paint.setStrokeWidth(bandWidth);
+        paint.setColor(Color.argb(30, 226, 232, 240));
+        drawGalacticLatitudeLine(canvas, basis, localSiderealDegrees, 0.0);
+
+        paint.setStrokeWidth(dp(1));
+        paint.setColor(Color.argb(58, 203, 213, 225));
+        drawGalacticLatitudeLine(canvas, basis, localSiderealDegrees, -GALACTIC_BAND_EDGE_DEGREES);
+        drawGalacticLatitudeLine(canvas, basis, localSiderealDegrees, GALACTIC_BAND_EDGE_DEGREES);
+
+        paint.setStrokeWidth(dp(2));
+        paint.setColor(Color.argb(80, 241, 245, 249));
+        drawGalacticLatitudeLine(canvas, basis, localSiderealDegrees, 0.0);
+        paint.setStrokeCap(Paint.Cap.BUTT);
+
+        drawMilkyWayLabel(canvas, basis, localSiderealDegrees);
+    }
+
+    private void drawGalacticLatitudeLine(
+            Canvas canvas,
+            CameraBasis basis,
+            double localSiderealDegrees,
+            double galacticLatitudeDegrees
+    ) {
+        Path path = new Path();
+        ScreenPoint previous = null;
+        boolean active = false;
+        for (double longitude = 0.0; longitude <= 360.0; longitude += GALACTIC_PLANE_SAMPLE_STEP_DEGREES) {
+            EquatorialPoint equatorial = galacticToEquatorial(longitude, galacticLatitudeDegrees);
+            HorizontalPosition position = toHorizontal(equatorial.raHours, equatorial.decDegrees, localSiderealDegrees);
+            if (position.altitudeDegrees < -1.0) {
+                active = false;
+                previous = null;
+                continue;
+            }
+            ScreenPoint point = project(position, basis);
+            if (!usableLinePoint(point)) {
+                active = false;
+                previous = null;
+                continue;
+            }
+            if (!active || previous == null || distance(previous, point) > Math.max(getWidth(), getHeight()) * 0.45f) {
+                path.moveTo(point.x, point.y);
+                active = true;
+            } else {
+                path.lineTo(point.x, point.y);
+            }
+            previous = point;
+        }
+        canvas.drawPath(path, paint);
+    }
+
+    private void drawMilkyWayLabel(Canvas canvas, CameraBasis basis, double localSiderealDegrees) {
+        ScreenPoint bestPoint = null;
+        float bestDistance = Float.MAX_VALUE;
+        float centerX = getWidth() * 0.5f;
+        float centerY = getHeight() * 0.5f;
+        for (double longitude = 0.0; longitude < 360.0; longitude += 5.0) {
+            EquatorialPoint equatorial = galacticToEquatorial(longitude, 0.0);
+            HorizontalPosition position = toHorizontal(equatorial.raHours, equatorial.decDegrees, localSiderealDegrees);
+            if (position.altitudeDegrees < 2.0) {
+                continue;
+            }
+            ScreenPoint point = project(position, basis);
+            if (point == null || !isVisible(point.x, point.y, dp(40))) {
+                continue;
+            }
+            float pointDistance = distance(point.x, point.y, centerX, centerY);
+            if (pointDistance < bestDistance) {
+                bestDistance = pointDistance;
+                bestPoint = point;
+            }
+        }
+        if (bestPoint == null) {
+            return;
+        }
+        paint.setStyle(Paint.Style.FILL);
+        paint.setTextSize(dp(11));
+        paint.setColor(Color.argb(155, 226, 232, 240));
+        canvas.drawText("银河", bestPoint.x + dp(8), bestPoint.y - dp(6), paint);
+    }
+
     private void drawConstellationLines(Canvas canvas, CameraBasis basis) {
         paint.setStyle(Paint.Style.STROKE);
         paint.setStrokeWidth(dp(1));
@@ -434,8 +556,14 @@ public final class SkyChartView extends View {
         paint.setStyle(Paint.Style.FILL);
         double localSiderealDegrees = localSiderealDegrees();
         double magnitudeLimit = visibleStarMagnitudeLimit();
+        EquatorialPoint viewCenter = horizontalToEquatorial(viewAzimuthDegrees, viewAltitudeDegrees, localSiderealDegrees);
+        boolean usePrefilter = shouldPrefilterStars();
+        double prefilterRadiusDegrees = starPrefilterRadiusDegrees();
         for (SkyCatalog.Star star : catalog.stars) {
             if (star.magnitude > magnitudeLimit) {
+                break;
+            }
+            if (usePrefilter && !isWithinStarPrefilter(star, viewCenter, prefilterRadiusDegrees)) {
                 continue;
             }
             HorizontalPosition position = toHorizontal(star.raHours, star.decDegrees, localSiderealDegrees);
@@ -517,6 +645,149 @@ public final class SkyChartView extends View {
         }
     }
 
+    private void drawSolarSystemObjects(Canvas canvas, CameraBasis basis) {
+        double localSiderealDegrees = localSiderealDegrees();
+        for (SolarSystemEphemeris.Body body : SolarSystemEphemeris.bodies(currentInstant)) {
+            HorizontalPosition position = toHorizontal(body.raHours, body.decDegrees, localSiderealDegrees);
+            if (position.altitudeDegrees < -1.0) {
+                continue;
+            }
+            ScreenPoint point = project(position, basis);
+            if (point == null || !isVisible(point.x, point.y, dp(28))) {
+                continue;
+            }
+            float size = solarSystemIconSize(body);
+            drawSolarSystemIcon(canvas, body, point.x, point.y, size);
+            if (shouldLabelSolarSystemObject(body, point)) {
+                paint.setStyle(Paint.Style.FILL);
+                paint.setTextSize(dp(10));
+                paint.setColor(Color.argb(230, 254, 240, 138));
+                canvas.drawText(body.label, point.x + dp(8), point.y - dp(8), paint);
+            }
+        }
+    }
+
+    private void drawSolarSystemIcon(Canvas canvas, SolarSystemEphemeris.Body body, float x, float y, float size) {
+        switch (body.id) {
+            case "sun":
+                drawSunIcon(canvas, x, y, size);
+                break;
+            case "moon":
+                drawMoonIcon(canvas, x, y, size, body.phaseFraction);
+                break;
+            case "saturn":
+                drawSaturnIcon(canvas, x, y, size);
+                break;
+            default:
+                drawPlanetIcon(canvas, body.id, x, y, size);
+                break;
+        }
+    }
+
+    private void drawSunIcon(Canvas canvas, float x, float y, float size) {
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(Color.rgb(250, 204, 21));
+        canvas.drawCircle(x, y, size, paint);
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(dp(1));
+        paint.setColor(Color.argb(225, 250, 204, 21));
+        for (int angle = 0; angle < 360; angle += 45) {
+            double radians = Math.toRadians(angle);
+            float inner = size + dp(2);
+            float outer = size + dp(6);
+            canvas.drawLine(
+                    x + (float) Math.cos(radians) * inner,
+                    y + (float) Math.sin(radians) * inner,
+                    x + (float) Math.cos(radians) * outer,
+                    y + (float) Math.sin(radians) * outer,
+                    paint
+            );
+        }
+    }
+
+    private void drawMoonIcon(Canvas canvas, float x, float y, float size, double phaseFraction) {
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(Color.rgb(226, 232, 240));
+        canvas.drawCircle(x, y, size, paint);
+        paint.setColor(Color.argb(210, 5, 10, 21));
+        float darkWidth = (float) (size * 2.0 * (1.0 - clamp(phaseFraction, 0.0, 1.0)));
+        if (darkWidth > 0.5f) {
+            canvas.drawOval(x + size - darkWidth, y - size, x + size, y + size, paint);
+        }
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(dp(1));
+        paint.setColor(Color.rgb(241, 245, 249));
+        canvas.drawCircle(x, y, size, paint);
+    }
+
+    private void drawSaturnIcon(Canvas canvas, float x, float y, float size) {
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(dp(1));
+        paint.setColor(Color.rgb(251, 191, 36));
+        canvas.save();
+        canvas.rotate(-18f, x, y);
+        canvas.drawOval(x - size * 1.75f, y - size * 0.45f, x + size * 1.75f, y + size * 0.45f, paint);
+        canvas.restore();
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(Color.rgb(245, 158, 11));
+        canvas.drawCircle(x, y, size * 0.72f, paint);
+    }
+
+    private void drawPlanetIcon(Canvas canvas, String id, float x, float y, float size) {
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(planetColor(id));
+        canvas.drawCircle(x, y, size, paint);
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(dp(1));
+        paint.setColor(Color.argb(220, 226, 232, 240));
+        canvas.drawCircle(x, y, size, paint);
+    }
+
+    private int planetColor(String id) {
+        switch (id) {
+            case "mercury":
+                return Color.rgb(203, 213, 225);
+            case "venus":
+                return Color.rgb(253, 224, 171);
+            case "mars":
+                return Color.rgb(248, 113, 113);
+            case "jupiter":
+                return Color.rgb(251, 191, 36);
+            case "uranus":
+                return Color.rgb(103, 232, 249);
+            case "neptune":
+                return Color.rgb(96, 165, 250);
+            default:
+                return Color.rgb(226, 232, 240);
+        }
+    }
+
+    private float solarSystemIconSize(SolarSystemEphemeris.Body body) {
+        if ("sun".equals(body.id)) {
+            return dp(8);
+        }
+        if ("moon".equals(body.id)) {
+            return dp(7);
+        }
+        if ("saturn".equals(body.id)) {
+            return dp(6);
+        }
+        return (float) clamp(6.8 - body.magnitude * 0.35, 3.8, 6.5) * getResources().getDisplayMetrics().density;
+    }
+
+    private boolean shouldLabelSolarSystemObject(SolarSystemEphemeris.Body body, ScreenPoint point) {
+        if ("sun".equals(body.id) || "moon".equals(body.id)) {
+            return fieldOfViewDegrees <= 112.0 || isNearViewCenter(point, 0.42f);
+        }
+        if (fieldOfViewDegrees <= 36.0) {
+            return true;
+        }
+        if (body.magnitude <= 1.0 && isNearViewCenter(point, 0.42f)) {
+            return true;
+        }
+        return fieldOfViewDegrees <= 70.0 && isNearViewCenter(point, 0.30f);
+    }
+
     private void drawSelectedTarget(Canvas canvas, CameraBasis basis) {
         if (selectedTarget == null) {
             return;
@@ -576,11 +847,34 @@ public final class SkyChartView extends View {
     }
 
     private ScreenPoint projectTarget(Target target, CameraBasis basis) {
-        HorizontalPosition position = toHorizontal(target.raHours, target.decDegrees, localSiderealDegrees());
+        EquatorialPoint point = currentTargetEquatorial(target);
+        HorizontalPosition position = toHorizontal(point.raHours, point.decDegrees, localSiderealDegrees());
         if (position.altitudeDegrees < 0.0) {
             return null;
         }
         return project(position, basis);
+    }
+
+    private EquatorialPoint currentTargetEquatorial(Target target) {
+        if (target.solarSystemObject) {
+            SolarSystemEphemeris.Body body = solarSystemBodyById(target.solarSystemId);
+            if (body != null) {
+                return new EquatorialPoint(body.raHours, body.decDegrees);
+            }
+        }
+        return new EquatorialPoint(target.raHours, target.decDegrees);
+    }
+
+    private SolarSystemEphemeris.Body solarSystemBodyById(String id) {
+        if (id == null) {
+            return null;
+        }
+        for (SolarSystemEphemeris.Body body : SolarSystemEphemeris.bodies(currentInstant)) {
+            if (id.equals(body.id)) {
+                return body;
+            }
+        }
+        return null;
     }
 
     private void selectNearestTarget(float x, float y) {
@@ -591,6 +885,22 @@ public final class SkyChartView extends View {
         double localSiderealDegrees = localSiderealDegrees();
         Target nearest = null;
         double nearestDistance = dp(34);
+
+        for (SolarSystemEphemeris.Body body : SolarSystemEphemeris.bodies(currentInstant)) {
+            HorizontalPosition position = toHorizontal(body.raHours, body.decDegrees, localSiderealDegrees);
+            if (position.altitudeDegrees < -1.0) {
+                continue;
+            }
+            ScreenPoint point = project(position, basis);
+            if (point == null || !isVisible(point.x, point.y, dp(28))) {
+                continue;
+            }
+            double targetDistance = distance(point.x, point.y, x, y);
+            if (targetDistance < nearestDistance) {
+                nearestDistance = targetDistance;
+                nearest = Target.solarSystemObject(body.id, body.label, body.raHours, body.decDegrees);
+            }
+        }
 
         for (SkyCatalog.DeepSkyObject object : catalog.deepSkyObjects) {
             if (!shouldDrawDeepSkyObject(object)) {
@@ -612,8 +922,14 @@ public final class SkyChartView extends View {
         }
 
         double starDistanceLimit = nearest == null ? dp(26) : Math.min(nearestDistance, dp(18));
+        EquatorialPoint viewCenter = horizontalToEquatorial(viewAzimuthDegrees, viewAltitudeDegrees, localSiderealDegrees);
+        boolean usePrefilter = shouldPrefilterStars();
+        double prefilterRadiusDegrees = starPrefilterRadiusDegrees();
         for (SkyCatalog.Star star : catalog.stars) {
-            if (star.magnitude > Math.min(visibleStarMagnitudeLimit(), 4.8)) {
+            if (star.magnitude > visibleStarMagnitudeLimit()) {
+                break;
+            }
+            if (usePrefilter && !isWithinStarPrefilter(star, viewCenter, prefilterRadiusDegrees)) {
                 continue;
             }
             HorizontalPosition position = toHorizontal(star.raHours, star.decDegrees, localSiderealDegrees);
@@ -642,9 +958,10 @@ public final class SkyChartView extends View {
     }
 
     private void centerOnTarget(Target target) {
-        HorizontalPosition position = toHorizontal(target.raHours, target.decDegrees, localSiderealDegrees());
+        EquatorialPoint point = currentTargetEquatorial(target);
+        HorizontalPosition position = toHorizontal(point.raHours, point.decDegrees, localSiderealDegrees());
         viewAzimuthDegrees = position.azimuthDegrees;
-        viewAltitudeDegrees = clamp(position.altitudeDegrees, -12.0, 88.0);
+        viewAltitudeDegrees = clamp(position.altitudeDegrees, MIN_VIEW_ALTITUDE_DEGREES, MAX_VIEW_ALTITUDE_DEGREES);
     }
 
     private void addSuggestedAlignmentTargets(List<Target> result, int maxTargets, double minimumAltitude, double maximumMagnitude) {
@@ -691,7 +1008,59 @@ public final class SkyChartView extends View {
         if (fieldOfViewDegrees >= 46.0) {
             return 6.0;
         }
-        return 7.05;
+        if (fieldOfViewDegrees >= 24.0) {
+            return 7.5;
+        }
+        if (fieldOfViewDegrees >= 12.0) {
+            return 8.8;
+        }
+        if (fieldOfViewDegrees >= 6.0) {
+            return 10.0;
+        }
+        if (fieldOfViewDegrees >= 2.0) {
+            return 11.2;
+        }
+        return 12.0;
+    }
+
+    private boolean shouldPrefilterStars() {
+        return fieldOfViewDegrees <= 36.0;
+    }
+
+    private double starPrefilterRadiusDegrees() {
+        double height = Math.max(1.0, getHeight());
+        double width = Math.max(1.0, getWidth());
+        double verticalHalfDegrees = fieldOfViewDegrees * 0.5;
+        double horizontalFieldDegrees = Math.toDegrees(
+                2.0 * Math.atan((width / height) * Math.tan(Math.toRadians(fieldOfViewDegrees) * 0.5))
+        );
+        double horizontalHalfDegrees = horizontalFieldDegrees * 0.5;
+        double diagonalHalfDegrees = Math.sqrt(
+                verticalHalfDegrees * verticalHalfDegrees + horizontalHalfDegrees * horizontalHalfDegrees
+        );
+        return diagonalHalfDegrees + Math.max(2.0, fieldOfViewDegrees * 0.28);
+    }
+
+    private double angularSeparationDegrees(double firstRaHours, double firstDecDegrees, double secondRaHours, double secondDecDegrees) {
+        double firstDec = Math.toRadians(firstDecDegrees);
+        double secondDec = Math.toRadians(secondDecDegrees);
+        double deltaRa = Math.toRadians(wrapDegrees((firstRaHours - secondRaHours) * 15.0));
+        double cosSeparation = Math.sin(firstDec) * Math.sin(secondDec)
+                + Math.cos(firstDec) * Math.cos(secondDec) * Math.cos(deltaRa);
+        return Math.toDegrees(Math.acos(clamp(cosSeparation, -1.0, 1.0)));
+    }
+
+    private boolean isWithinStarPrefilter(SkyCatalog.Star star, EquatorialPoint viewCenter, double radiusDegrees) {
+        if (Math.abs(star.decDegrees - viewCenter.decDegrees) > radiusDegrees) {
+            return false;
+        }
+        double cosDec = Math.max(0.08, Math.cos(Math.toRadians(viewCenter.decDegrees)));
+        double raRadiusDegrees = radiusDegrees / cosDec + 1.5;
+        double raDiffDegrees = Math.abs(wrapDegrees((star.raHours - viewCenter.raHours) * 15.0));
+        if (raDiffDegrees > raRadiusDegrees) {
+            return false;
+        }
+        return angularSeparationDegrees(star.raHours, star.decDegrees, viewCenter.raHours, viewCenter.decDegrees) <= radiusDegrees;
     }
 
     private boolean shouldLabelStar(double magnitude, double magnitudeLimit) {
@@ -758,6 +1127,41 @@ public final class SkyChartView extends View {
                 : (Math.sin(dec) - Math.sin(altitude) * Math.sin(lat)) / (cosAlt * cosLat);
         double azimuth = Math.toDegrees(Math.atan2(sinAz, cosAz));
         return new HorizontalPosition(Math.toDegrees(altitude), normalizeDegrees(azimuth));
+    }
+
+    private EquatorialPoint horizontalToEquatorial(double azimuthDegrees, double altitudeDegrees, double localSiderealDegrees) {
+        double azimuth = Math.toRadians(normalizeDegrees(azimuthDegrees));
+        double altitude = Math.toRadians(altitudeDegrees);
+        double latitude = Math.toRadians(observer.latitudeDegrees);
+        double sinDec = Math.sin(altitude) * Math.sin(latitude)
+                + Math.cos(altitude) * Math.cos(latitude) * Math.cos(azimuth);
+        double dec = Math.asin(clamp(sinDec, -1.0, 1.0));
+        double y = -Math.cos(altitude) * Math.sin(azimuth);
+        double x = Math.sin(altitude) * Math.cos(latitude)
+                - Math.cos(altitude) * Math.sin(latitude) * Math.cos(azimuth);
+        double hourAngleDegrees = Math.toDegrees(Math.atan2(y, x));
+        double raHours = normalizeHours((localSiderealDegrees - hourAngleDegrees) / 15.0);
+        return new EquatorialPoint(raHours, Math.toDegrees(dec));
+    }
+
+    private EquatorialPoint galacticToEquatorial(double longitudeDegrees, double latitudeDegrees) {
+        double longitude = Math.toRadians(normalizeDegrees(longitudeDegrees));
+        double latitude = Math.toRadians(latitudeDegrees);
+        double cosLatitude = Math.cos(latitude);
+        double xGalactic = cosLatitude * Math.cos(longitude);
+        double yGalactic = cosLatitude * Math.sin(longitude);
+        double zGalactic = Math.sin(latitude);
+
+        double xEquatorial = -0.0548755604 * xGalactic + 0.4941094279 * yGalactic - 0.8676661490 * zGalactic;
+        double yEquatorial = -0.8734370902 * xGalactic - 0.4448296300 * yGalactic - 0.1980763734 * zGalactic;
+        double zEquatorial = -0.4838350155 * xGalactic + 0.7469822445 * yGalactic + 0.4559837762 * zGalactic;
+
+        double raDegrees = normalizeDegrees(Math.toDegrees(Math.atan2(yEquatorial, xEquatorial)));
+        double decDegrees = Math.toDegrees(Math.atan2(
+                zEquatorial,
+                Math.sqrt(xEquatorial * xEquatorial + yEquatorial * yEquatorial)
+        ));
+        return new EquatorialPoint(raDegrees / 15.0, decDegrees);
     }
 
     private double localSiderealDegrees() {
@@ -952,24 +1356,49 @@ public final class SkyChartView extends View {
         final double raHours;
         final double decDegrees;
         final boolean deepSkyObject;
+        final boolean solarSystemObject;
+        final String solarSystemId;
 
-        private Target(String label, double raHours, double decDegrees, boolean deepSkyObject) {
+        private Target(
+                String label,
+                double raHours,
+                double decDegrees,
+                boolean deepSkyObject,
+                boolean solarSystemObject,
+                String solarSystemId
+        ) {
             this.label = label;
             this.raHours = raHours;
             this.decDegrees = decDegrees;
             this.deepSkyObject = deepSkyObject;
+            this.solarSystemObject = solarSystemObject;
+            this.solarSystemId = solarSystemId;
         }
 
         static Target deepSkyObject(String label, double raHours, double decDegrees) {
-            return new Target(label, raHours, decDegrees, true);
+            return new Target(label, raHours, decDegrees, true, false, null);
         }
 
         static Target star(String label, double raHours, double decDegrees) {
-            return new Target(label, raHours, decDegrees, false);
+            return new Target(label, raHours, decDegrees, false, false, null);
+        }
+
+        static Target solarSystemObject(String id, String label, double raHours, double decDegrees) {
+            return new Target(label, raHours, decDegrees, false, true, id);
         }
 
         static Target custom(String label, double raHours, double decDegrees) {
-            return new Target(label, raHours, decDegrees, false);
+            return new Target(label, raHours, decDegrees, false, false, null);
+        }
+    }
+
+    private static final class EquatorialPoint {
+        final double raHours;
+        final double decDegrees;
+
+        EquatorialPoint(double raHours, double decDegrees) {
+            this.raHours = raHours;
+            this.decDegrees = decDegrees;
         }
     }
 

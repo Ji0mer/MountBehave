@@ -23,6 +23,14 @@
     <string name="calibration_target_hint">Vega / M31 / 05:35 -05:23</string>
     <string name="calibration_suggest_star">推荐亮星</string>
     <string name="calibration_show_in_sky">显示在星图</string>
+    <string name="calibration_select_in_sky">在星图中选择</string>
+    <string name="calibration_select_in_sky_prompt">请在星图中点选一颗校准星或目标；选择后会自动返回校准页。</string>
+    <string name="calibration_confirm_target_title">确认校准目标</string>
+    <string name="calibration_confirm_target_message">已选择：%1$s\nRA %2$s  Dec %3$s</string>
+    <string name="calibration_accept_target">接受</string>
+    <string name="calibration_reselect_target">重选</string>
+    <string name="calibration_solar_system_not_allowed">太阳、月亮和行星的位置为低精度动态计算，不能作为校准目标。请改选恒星或深空天体。</string>
+    <string name="calibration_reselect_after_solar_system">太阳系天体不能用于校准，请在星图中重选恒星或深空天体。</string>
     <string name="calibration_status_idle">请选择一颗可见亮星，或输入目标名/RA Dec 坐标。</string>
     <string name="calibration_no_suggestion">当前星图没有找到合适的可见亮星，请手动输入。</string>
     <string name="calibration_suggested_status">推荐：%1$s  RA %2$s  Dec %3$s</string>
@@ -157,7 +165,7 @@
     <string name="sky_reset">重置视图</string>
     <string name="sky_goto_target">Goto 目标</string>
     <string name="sky_find_target">查找目标</string>
-    <string name="sky_target_none">目标：点击星图中的恒星或深空天体进行选择。</string>
+    <string name="sky_target_none">目标：点击星图中的恒星、深空天体或太阳系天体进行选择。</string>
     <string name="sky_target_status">目标：%1$s  RA %2$s  Dec %3$s</string>
     <string name="goto_status_idle">GOTO 状态：空闲。</string>
     <string name="goto_status_sent">GOTO 状态：已发送到 %1$s；可刷新状态或随时取消。</string>
@@ -177,7 +185,7 @@
     <string name="meridian_before">约 %1$.0f 分钟后过中天</string>
     <string name="meridian_after">已过中天约 %1$.0f 分钟</string>
     <string name="target_dialog_title">目标选择</string>
-    <string name="target_input_hint">M31 / Rigel / NGC 1976 / 05:35:17 -05:23:28</string>
+    <string name="target_input_hint">M31 / Rigel / Jupiter / 太阳 / 05:35:17 -05:23:28</string>
     <string name="target_show_only">仅显示</string>
     <string name="target_show_and_goto">显示并 GOTO</string>
     <string name="target_not_found">未找到目标，请输入目标名或 RA Dec 坐标。</string>
@@ -185,7 +193,7 @@
     <string name="cancel_button">取消</string>
     <string name="mount_pointing_default">赤道仪指向：正东（未连接默认）</string>
     <string name="mount_pointing_status">赤道仪指向：RA %1$s  Dec %2$s</string>
-    <string name="sky_planet_note">天球使用本地经纬度和当前 UTC 时刻计算；本地时间显示由系统时区规则处理夏令时。当前版本暂未内置行星星历。</string>
+    <string name="sky_planet_note">太阳、月亮和行星使用离线低精度星历按当前 UTC 时刻实时计算；本地时间显示由系统时区规则处理夏令时。</string>
     <string name="host_label">OnStep IP 地址</string>
     <string name="port_label">端口</string>
     <string name="default_onstep_host">192.168.0.1</string>

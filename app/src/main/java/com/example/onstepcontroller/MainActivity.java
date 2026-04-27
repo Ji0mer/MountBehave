@@ -21,7 +21,9 @@ import android.net.wifi.WifiManager;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.text.Editable;
 import android.text.InputType;
+import android.text.TextWatcher;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
@@ -195,6 +197,8 @@ public final class MainActivity extends Activity {
     private SkyChartView.Target calibrationTarget;
     private SkyChartView.Target syncedCurrentTarget;
     private SkyChartView.Target polarRefineSyncedTarget;
+    private boolean selectingCalibrationTargetFromSky;
+    private AlertDialog calibrationTargetConfirmDialog;
     private boolean quickPointingCorrectionActive;
     private double quickPointingRaOffsetHours;
     private double quickPointingDecOffsetDegrees;
@@ -387,6 +391,9 @@ public final class MainActivity extends Activity {
         skyChartView.setTargetSelectionListener(target -> {
             selectedSkyTarget = target;
             updateTargetViews();
+            if (selectingCalibrationTargetFromSky) {
+                handleCalibrationTargetSelectedInSky(target);
+            }
         });
         skyChartView.setViewStateListener(() -> skySummaryText.setText(skyChartView.summary()));
         if (selectedSkyTarget != null) {
@@ -505,6 +512,22 @@ public final class MainActivity extends Activity {
         calibrationTargetField.setSingleLine(true);
         calibrationTargetField.setInputType(InputType.TYPE_CLASS_TEXT);
         calibrationTargetField.setHint(R.string.calibration_target_hint);
+        calibrationTargetField.addTextChangedListener(new TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+                // No-op.
+            }
+
+            @Override
+            public void onTextChanged(CharSequence s, int start, int before, int count) {
+                updateCalibrationTargetActionButton();
+            }
+
+            @Override
+            public void afterTextChanged(Editable s) {
+                // No-op.
+            }
+        });
         targetPanel.addView(calibrationTargetField, matchWrap());
 
         LinearLayout targetActions = new LinearLayout(this);
@@ -517,8 +540,9 @@ public final class MainActivity extends Activity {
         targetActions.addView(calibrationSuggestButton, weightWrap(1f));
 
         calibrationShowButton = actionButton(R.string.calibration_show_in_sky);
-        calibrationShowButton.setOnClickListener(v -> showCalibrationTargetInSky());
+        calibrationShowButton.setOnClickListener(v -> handleCalibrationTargetAction());
         targetActions.addView(calibrationShowButton, weightWrapWithLeftMargin(1f, 8));
+        updateCalibrationTargetActionButton();
 
         targetPanel.addView(targetActions, matchWrap());
 
@@ -1893,6 +1917,132 @@ public final class MainActivity extends Activity {
         return false;
     }
 
+    private void handleCalibrationTargetAction() {
+        if (calibrationTargetField == null || calibrationTargetField.getText().toString().trim().isEmpty()) {
+            beginCalibrationTargetSelectionInSky();
+        } else {
+            showCalibrationTargetInSky();
+        }
+    }
+
+    private void beginCalibrationTargetSelectionInSky() {
+        if (skyChartView == null || busy) {
+            return;
+        }
+        selectingCalibrationTargetFromSky = true;
+        setCalibrationStatus(getString(R.string.calibration_select_in_sky_prompt));
+        updatePageTabs(Page.SKY);
+        setSideMenuExpanded(false);
+    }
+
+    private void handleCalibrationTargetSelectedInSky(SkyChartView.Target target) {
+        if (target == null) {
+            return;
+        }
+        showCalibrationTargetConfirmDialog(target);
+    }
+
+    private void showCalibrationTargetConfirmDialog(SkyChartView.Target target) {
+        if (calibrationTargetConfirmDialog != null && calibrationTargetConfirmDialog.isShowing()) {
+            calibrationTargetConfirmDialog.dismiss();
+        }
+        String message = getString(
+                R.string.calibration_confirm_target_message,
+                target.label,
+                formatRightAscensionDisplay(target.raHours),
+                formatDeclinationDisplay(target.decDegrees)
+        );
+        if (target.solarSystemObject) {
+            message = message + "\n\n" + getString(R.string.calibration_solar_system_not_allowed);
+        }
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle(R.string.calibration_confirm_target_title)
+                .setMessage(message)
+                .setNegativeButton(R.string.calibration_reselect_target, null)
+                .create();
+        if (!target.solarSystemObject) {
+            dialog.setButton(Dialog.BUTTON_POSITIVE, getString(R.string.calibration_accept_target), (openedDialog, which) -> {
+                calibrationTargetConfirmDialog = null;
+                acceptCalibrationTargetFromSky(target);
+            });
+        }
+        dialog.setOnShowListener(openedDialog -> {
+            Button reselectButton = dialog.getButton(Dialog.BUTTON_NEGATIVE);
+            if (reselectButton != null) {
+                reselectButton.setOnClickListener(v -> {
+                    calibrationTargetConfirmDialog = null;
+                    dialog.dismiss();
+                    selectingCalibrationTargetFromSky = true;
+                    setCalibrationStatus(target.solarSystemObject
+                            ? getString(R.string.calibration_reselect_after_solar_system)
+                            : getString(R.string.calibration_select_in_sky_prompt));
+                });
+            }
+        });
+        dialog.setOnDismissListener(openedDialog -> {
+            if (calibrationTargetConfirmDialog == dialog) {
+                calibrationTargetConfirmDialog = null;
+            }
+        });
+        calibrationTargetConfirmDialog = dialog;
+        dialog.show();
+    }
+
+    private void acceptCalibrationTargetFromSky(SkyChartView.Target target) {
+        selectingCalibrationTargetFromSky = false;
+        setCalibrationTarget(target);
+        selectedSkyTarget = target;
+        if (skyChartView != null) {
+            skyChartView.setSelectedTarget(target, false);
+        }
+        updateTargetViews();
+        applyCalibrationTargetFromSky(target);
+        updatePageTabs(Page.MANUAL);
+    }
+
+    private void applyCalibrationTargetFromSky(SkyChartView.Target target) {
+        if (selectedCalibrationMode == CalibrationMode.QUICK_SYNC) {
+            setCalibrationStatus(getString(R.string.calibration_quick_selected_manual, target.label));
+            return;
+        }
+        if (selectedCalibrationMode.isStarAlignment()) {
+            if (alignmentSession == null || alignmentSession.isComplete()) {
+                setCalibrationStatus(getString(
+                        R.string.calibration_suggested_status,
+                        target.label,
+                        formatRightAscensionDisplay(target.raHours),
+                        formatDeclinationDisplay(target.decDegrees)
+                ));
+                updateCalibrationViews();
+                return;
+            }
+            if (isAcceptedAlignmentTarget(target)) {
+                setCalibrationStatus(getString(R.string.calibration_align_duplicate_target, target.label));
+                updateCalibrationViews();
+                return;
+            }
+            alignmentSession.currentTarget = target;
+            setCalibrationStatus(getString(
+                    R.string.calibration_align_selected_manual,
+                    alignmentSession.currentStarNumber(),
+                    alignmentSession.totalStars,
+                    target.label
+            ));
+            updateCalibrationViews();
+            return;
+        }
+        if (selectedCalibrationMode == CalibrationMode.REFINE_POLAR) {
+            polarRefineSyncedTarget = null;
+        }
+        setCalibrationStatus(getString(
+                R.string.calibration_suggested_status,
+                target.label,
+                formatRightAscensionDisplay(target.raHours),
+                formatDeclinationDisplay(target.decDegrees)
+        ));
+        updateCalibrationViews();
+    }
+
     private void showCalibrationTargetInSky() {
         SkyChartView.Target target = resolveCalibrationTarget();
         if (target == null) {
@@ -2285,6 +2435,10 @@ public final class MainActivity extends Activity {
             setCalibrationStatus(getString(R.string.target_not_found));
             return null;
         }
+        if (target.solarSystemObject) {
+            setCalibrationStatus(getString(R.string.calibration_solar_system_not_allowed));
+            return null;
+        }
         return target;
     }
 
@@ -2294,6 +2448,7 @@ public final class MainActivity extends Activity {
             calibrationTargetField.setText(target.label);
             calibrationTargetField.setSelection(calibrationTargetField.getText().length());
         }
+        updateCalibrationTargetActionButton();
     }
 
     private void setCalibrationStatus(String status) {
@@ -2304,6 +2459,7 @@ public final class MainActivity extends Activity {
     }
 
     private void updateCalibrationViews() {
+        updateCalibrationTargetActionButton();
         if (calibrationStepText != null) {
             if (alignmentSession == null) {
                 calibrationStepText.setText(R.string.calibration_align_idle);
@@ -2355,6 +2511,15 @@ public final class MainActivity extends Activity {
             }
         }
         updateUiState();
+    }
+
+    private void updateCalibrationTargetActionButton() {
+        if (calibrationShowButton == null || calibrationTargetField == null) {
+            return;
+        }
+        boolean hasInput = calibrationTargetField.getText() != null
+                && !calibrationTargetField.getText().toString().trim().isEmpty();
+        calibrationShowButton.setText(hasInput ? R.string.calibration_show_in_sky : R.string.calibration_select_in_sky);
     }
 
     private static String joinLabels(List<String> labels) {
@@ -3506,6 +3671,7 @@ public final class MainActivity extends Activity {
         }
         if (calibrationShowButton != null) {
             calibrationShowButton.setEnabled(skyChartView != null && !busy);
+            updateCalibrationTargetActionButton();
         }
         if (quickSelectButton != null) {
             quickSelectButton.setEnabled(!busy);
@@ -3693,6 +3859,12 @@ public final class MainActivity extends Activity {
     }
 
     private void selectPageFromMenu(Page selectedPage) {
+        if (selectingCalibrationTargetFromSky && selectedPage != Page.SKY) {
+            selectingCalibrationTargetFromSky = false;
+            if (calibrationTargetConfirmDialog != null && calibrationTargetConfirmDialog.isShowing()) {
+                calibrationTargetConfirmDialog.dismiss();
+            }
+        }
         updatePageTabs(selectedPage);
         setSideMenuExpanded(false);
     }
