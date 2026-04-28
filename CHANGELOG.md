@@ -2,12 +2,45 @@
 
 ## 未发布(开发分支)
 
+### UI 压缩与说明折叠
+
+- 将星图、校准、跟踪、安全与夜视、小行星 / 彗星、晴空配置等长期说明文本折叠到标题旁的 `?` 帮助按钮中，点击后用弹窗查看说明；校准进度、连接状态、目标状态等操作状态仍直接显示。
+- 收紧主页面边距、卡片内边距、按钮高度、方向键间距和设置页分组间距，让手机竖屏下的手控/校准/设置内容更紧凑。
+
 ### Codex 审查后回滚 / 修正
 
 - **回滚 H4(OnStepClient 自动重试)**:之前对所有命令无条件重试一次会让 `:CM#`、`:MS#`、`:A+#` 等状态修改命令在"已执行 + 回包丢失"时被双发(可能把同一颗星接受两次)。改回每个命令只发一次;ESP8266 抖动场景由用户手动重试处理。
 - **修正 C4(ObserverState.boston 时区)**:`boston()` 恢复 `BOSTON_ZONE`(`America/New_York`)——Boston 这个**坐标本身**对应美东时区,与手机所在地无关。`withLocation()` 仍用 `ZoneId.systemDefault()`(手动输入坐标=用户在该地附近)。GPS 路径已正确。
 - **代码层修复 C2(取消校准)**:不仅是文案。`OnStepCommand` 新增 `ALIGN_ABORT(":A0#")`(OnStep 公开但少被宣传的 abort alignment 命令,固件不识别时静默忽略);`cancelAlignmentSession` 同时入队 `:Q#`(停运动) + `:A0#`(abort align);`startAlignment` 入口在 `:Q#` 之后、观测地同步之前,也补一次 `:A0#` 作为防御性 reset,确保新的 `:A2#`/`:A3#` 起手干净。
 - **修正:校准全程输入框保持空白由用户从星图选星**:之前两处自动填推荐星——`startAlignment` 的 onSuccess(开始时)和 `finishAcceptedAlignmentStar` 的下一颗分支(每接受一颗星之后)——都已删掉。`fillSuggestedCalibrationTarget()` 函数本身保留,仅作为"推荐亮星"按钮的显式 handler;用户主动点该按钮才会触发推荐。
+- **修正:校准按钮恢复紧凑布局**:`alignActionsOne`(包含"设为当前校准星" + "设置架台侧 / GOTO")从 VERTICAL 改回 HORIZONTAL 双列;主操作"手动居中后同步接受"和"保存模型 / 结束"已是 2 列。整组校准操作从 5 行收紧到 3 行。
+- **重写彗星导入流程,修复 "下载彗星元素" 后所有彗星堆叠在天图同一位置** 的 bug:删除 `startCometDownload`(批量调用 SBDB Query API,因高 e 长周期彗星元素精度/解析问题导致位置异常)。新增 `showAddCometDialog` 弹出输入框,用户输入彗星编号或名称 → 单条 `sbdb.api?...&full-prec=true` 请求 → `parseSbdbSingleRecord` 解析单体 JSON → `SmallBodyCatalog.addUserBody` 累加(同名去重)→ 立即在星图出现。仿 Stellarium "Solar System Editor"流程,逐颗按需下载。
+
+### Codex 第三轮反馈修正(彗星添加)
+
+- **HTTP 300 多重匹配处理**:JPL 对歧义查询(如 `1P/Halley`、`Halley`)返回 HTTP 300 + JSON `list` 候选数组,而非错误。新加 `httpGetAllowMultiChoice` 同时接受 200/300;`fetchSbdbResolvingMultiMatch` 检测到 `code==300` 时取 `list[0].pdes` 用 `des=` 重查;输入像编号(数字、C/PD 前缀)时优先走 `des=`。
+- **支持抛物 / 双曲轨道**(让 C/2023 A3 等近抛物彗星可用):`SmallBodyEphemeris.heliocentric` 按 e 三段分支:
+  - e &lt; 0.999:经典椭圆 Kepler
+  - 0.999 ≤ e ≤ 1.001:抛物 Barker 闭式解 `s = 2 sinh(asinh(3W/2)/3)`
+  - e &gt; 1.001:双曲 Kepler `M = e·sinh F − F`,Newton-Raphson
+  - 拒绝条件从 `e >= 1.0` 放宽到 `e > 4.0`(只挡深度双曲星际过客)
+- **用户元素覆盖内嵌**(`SmallBodyCatalog.combined()`):之前 user body 与 bundled 同 designation 时被跳过,导致用户刷新 1P/Halley 看不到效果。改为 user 覆盖 bundled,以"designation+kind"为合并键。
+- **空输入校验**(`showAddCometDialog`):用 `setOnShowListener` 重接管 positive button 的 click,空输入时 `setError` + 不 dismiss;非空才查询并关闭对话框。
+- **示例文案更新**:对话框说明改为"支持椭圆/抛物/双曲三类轨道,深度双曲(e&gt;4)的星际过客除外。歧义名称(如 Halley)JPL 会返回候选列表,本程序自动取第一个。"
+
+### Codex 第四轮反馈修正(同名小行星污染 + C/ designation 截断)
+
+- **HTTP 300 候选过滤按 `isComet` 匹配**:JPL 对 `Halley` 返回的 `list` 第一项是 2688 Halley(同名小行星),`Encke` 同样第一项是 9134 Encke,导致之前直接取 `list[0].pdes` 把小行星当彗星持久化。新加 `pdesLooksLikeComet(pdes)` 用正则 `\d+[PDXAI]$` 或 `[CPDXAI]/.*` 判定彗星格式;`fetchSbdbResolvingMultiMatch(query, wantComet)` 遍历候选只取与 `wantComet` 匹配的第一项。
+- **`parseSbdbSingleRecord` 用 `object.des` 作 designation,不再切斜杠**:之前的 `extractDesignation` 对 `C/2023 A3 (Tsuchinshan-ATLAS)` 会取斜杠前 = `"C"`,导致所有 C 类长周期彗星撞到同一 designation,持久化/覆盖/搜索/图层去重全部互相污染。改用 JPL 已标准化好的 `object.des`("1"、"1P"、"C/2023 A3" 都直接拿来用),斜杠是 designation 自身的一部分,不再人工切割。
+- **加 `object.kind` 防御校验**:即使 multi-match 过滤误放过一颗类型不符的天体,`parseSbdbSingleRecord` 在解析时会查 `object.kind`(`an`/`au` = 小行星,`cn`/`cu` = 彗星)与 `isComet` 期望对比;不一致则返回 null,调用方走 "未找到该类型" 路径,绝不会写入用户列表。
+
+### Codex 第五轮反馈修正(非编号彗星 designation 与候选过滤)
+
+- **非编号彗星拼回 IAU 前缀**:JPL 单体响应把 `C/2023 A3` 拆成 `des="2023 A3"` + `prefix="C"`(prefix 单独一字段),前一轮直接用 `object.des` 会丢掉 `C/`。`parseSbdbSingleRecord` 现在按以下规则组装 designation:
+  - `desRaw` 已含斜杠 → 用 desRaw(已经是完整 IAU)
+  - isComet + prefix 非空 + desRaw 形如 `\d{4}.*`(年份开头) → `prefix + "/" + desRaw` → `"C/2023 A3"`
+  - 其他(`1P`、`1`)→ desRaw 原样
+- **300 候选过滤同时看 `name` 字段**:JPL 在 list 里给非编号彗星的 pdes 是裸 `"2023 A3"`(无前缀),只有 `name` 字段含 `C/2023 A3 (...)`。新加 `candidateLooksLikeComet(JSONObject)` 同时检查 pdes(`pdesLooksLikeComet`)和 name(`nameLooksLikeComet`,正则 `^[CPDXAI]/.*`),命中任一即视为彗星候选,避免漏掉 `C/...`/`P/...` 非编号彗星。
 - **修正:晴空配置文案**:`mount_profile_title` 从"晴空 ST17 测试配置"改回"晴空赤道仪配置";`mount_profile_body` 从"仅覆盖 ST17 的 WiFi/手控/停止"改为"理论上能够控制晴空系列全部赤道仪。仅在晴空 ST17 上进行过实机测试。"
 
 ### 修复

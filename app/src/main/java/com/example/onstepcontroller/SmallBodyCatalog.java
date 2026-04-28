@@ -106,6 +106,23 @@ final class SmallBodyCatalog {
         saveUserBodies(snapshot);
     }
 
+    /** Append a single body to the user list, replacing any prior entry with
+     *  the same designation+kind. Persists to disk. */
+    synchronized void addUserBody(SmallBody body) throws IOException {
+        if (body == null) {
+            return;
+        }
+        List<SmallBody> next = new ArrayList<>(userDownloaded.size() + 1);
+        for (SmallBody u : userDownloaded) {
+            if (!(u.designation.equalsIgnoreCase(body.designation) && u.isComet == body.isComet)) {
+                next.add(u);
+            }
+        }
+        next.add(body);
+        this.userDownloaded = Collections.unmodifiableList(next);
+        saveUserBodies(this.userDownloaded);
+    }
+
     /** Replace only user-downloaded asteroids; preserve user-downloaded comets. */
     synchronized void replaceUserAsteroids(List<SmallBody> asteroids) throws IOException {
         List<SmallBody> next = new ArrayList<>();
@@ -178,18 +195,24 @@ final class SmallBodyCatalog {
         if (users.isEmpty()) {
             return bundled;
         }
-        List<SmallBody> merged = new ArrayList<>(bundled.size() + users.size());
-        merged.addAll(bundled);
-        Set<String> bundledIds = new HashSet<>();
-        for (SmallBody body : bundled) {
-            bundledIds.add(body.designation);
-        }
+        // User entries override bundled entries with the same designation+kind so
+        // that a refreshed comet/asteroid uploaded by the user is the one rendered.
+        Set<String> userKeys = new HashSet<>(users.size() * 2);
         for (SmallBody user : users) {
-            if (!bundledIds.contains(user.designation)) {
-                merged.add(user);
+            userKeys.add(combinedKey(user));
+        }
+        List<SmallBody> merged = new ArrayList<>(bundled.size() + users.size());
+        for (SmallBody body : bundled) {
+            if (!userKeys.contains(combinedKey(body))) {
+                merged.add(body);
             }
         }
+        merged.addAll(users);
         return merged;
+    }
+
+    private static String combinedKey(SmallBody body) {
+        return (body.isComet ? "c:" : "a:") + body.designation.toLowerCase(Locale.US);
     }
 
     private static boolean matches(SmallBody body, String trimmed, String normalized) {

@@ -18,8 +18,8 @@ final class SmallBodyEphemeris {
     private static final double DAYS_PER_MILLENNIUM = 365250.0;
     private static final double LIGHT_AU_PER_DAY = 173.144632674240;
     private static final double ABERRATION_DEG = 20.49552 / 3600.0;
-    // Gauss gravitational constant: 0.01720209895 rad/day = 0.9856076686 deg/day.
-    private static final double GAUSS_DEG_PER_DAY = 0.9856076686;
+    // Gauss gravitational constant in rad/day.
+    private static final double GAUSS_RAD_PER_DAY = 0.01720209895;
 
     private SmallBodyEphemeris() {
     }
@@ -45,7 +45,13 @@ final class SmallBodyEphemeris {
 
         List<SolarSystemEphemeris.Body> result = new ArrayList<>(sources.size());
         for (SmallBody body : sources) {
-            if (body.eccentricity >= 1.0 || body.perihelionDistanceAu <= 0.0) {
+            if (body.perihelionDistanceAu <= 0.0 || !Double.isFinite(body.eccentricity)) {
+                continue;
+            }
+            // Reject only deeply hyperbolic interlopers (e ≫ 1) where Newton-Raphson
+            // on the hyperbolic Kepler equation no longer converges meaningfully and
+            // the body is likely a one-pass interstellar object (Oumuamua-class).
+            if (body.eccentricity > 4.0) {
                 continue;
             }
             ApparentPosition pos = apparent(body, jd, earthXyz, sunGeometricLongitude, nutation, trueObliquity, precessionDeg);
@@ -79,20 +85,20 @@ final class SmallBodyEphemeris {
     private static ApparentPosition apparent(SmallBody body, double jd, double[] earthXyz,
                                              double sunGeometricLongitude, Nutation nutation,
                                              double trueObliquityDeg, double precessionDeg) {
-        double a = body.perihelionDistanceAu / (1.0 - body.eccentricity);
-        if (!Double.isFinite(a) || a <= 0.0) {
+        double dtDays = jd - body.tpJd;
+
+        double[] geocentric = geocentric(body, dtDays, earthXyz, precessionDeg);
+        if (geocentric == null) {
             return null;
         }
-        double n = GAUSS_DEG_PER_DAY / Math.pow(a, 1.5);
-
-        double meanAnomalyDeg = n * (jd - body.tpJd);
-        double[] geocentric = geocentric(body, a, meanAnomalyDeg, earthXyz, precessionDeg);
         double distance0 = Math.sqrt(geocentric[0] * geocentric[0] + geocentric[1] * geocentric[1] + geocentric[2] * geocentric[2]);
         double tauDays = distance0 / LIGHT_AU_PER_DAY;
 
         // Iterate once with light-time correction.
-        double meanAnomalyEmissionDeg = n * (jd - tauDays - body.tpJd);
-        double[] heliocentricJ2000 = heliocentric(body, a, meanAnomalyEmissionDeg);
+        double[] heliocentricJ2000 = heliocentric(body, dtDays - tauDays);
+        if (heliocentricJ2000 == null) {
+            return null;
+        }
         double[] heliocentric = rotateAroundZ(heliocentricJ2000, precessionDeg);
         double[] geo = {
                 heliocentric[0] - earthXyz[0],
@@ -122,8 +128,11 @@ final class SmallBodyEphemeris {
         return out;
     }
 
-    private static double[] geocentric(SmallBody body, double a, double meanAnomalyDeg, double[] earthXyz, double precessionDeg) {
-        double[] helioJ2000 = heliocentric(body, a, meanAnomalyDeg);
+    private static double[] geocentric(SmallBody body, double dtDays, double[] earthXyz, double precessionDeg) {
+        double[] helioJ2000 = heliocentric(body, dtDays);
+        if (helioJ2000 == null) {
+            return null;
+        }
         double[] helio = rotateAroundZ(helioJ2000, precessionDeg);
         return new double[]{helio[0] - earthXyz[0], helio[1] - earthXyz[1], helio[2] - earthXyz[2]};
     }
@@ -155,10 +164,50 @@ final class SmallBodyEphemeris {
         return arcsec / 3600.0;
     }
 
-    private static double[] heliocentric(SmallBody body, double a, double meanAnomalyDeg) {
-        double E = eccentricAnomaly(meanAnomalyDeg, body.eccentricity);
-        double xv = a * (Math.cos(E) - body.eccentricity);
-        double yv = a * Math.sqrt(1.0 - body.eccentricity * body.eccentricity) * Math.sin(E);
+    /**
+     * Heliocentric ecliptic Cartesian position (J2000 frame, AU) at time
+     * {@code dtDays} relative to perihelion. Branches by eccentricity:
+     * <ul>
+     *  <li>e &lt; 0.999 — elliptical, classical Kepler equation Newton-Raphson
+     *  <li>0.999 ≤ e ≤ 1.001 — parabolic, closed-form Barker's equation
+     *  <li>e &gt; 1.001 — hyperbolic, hyperbolic Kepler Newton-Raphson
+     * </ul>
+     * Returns {@code null} if Kepler iteration fails to converge.
+     */
+    private static double[] heliocentric(SmallBody body, double dtDays) {
+        double e = body.eccentricity;
+        double q = body.perihelionDistanceAu;
+        double k = GAUSS_RAD_PER_DAY;
+        double xv;
+        double yv;
+        if (e < 0.999) {
+            double a = q / (1.0 - e);
+            double n = k / Math.pow(a, 1.5);
+            double meanAnomaly = n * dtDays;
+            double eA = solveKeplerElliptic(meanAnomaly, e);
+            xv = a * (Math.cos(eA) - e);
+            yv = a * Math.sqrt(1.0 - e * e) * Math.sin(eA);
+        } else if (e > 1.001) {
+            double absA = q / (e - 1.0);
+            double n = k / Math.pow(absA, 1.5);
+            double M = n * dtDays;
+            double F = solveKeplerHyperbolic(M, e);
+            if (!Double.isFinite(F)) {
+                return null;
+            }
+            xv = absA * (e - Math.cosh(F));
+            yv = absA * Math.sqrt(e * e - 1.0) * Math.sinh(F);
+        } else {
+            // Barker's equation: tan(ν/2) = 2 sinh(asinh(3W/2) / 3)
+            // where W = k * sqrt(1 / (2 q^3)) * (t - tp).
+            double W = k * Math.sqrt(1.0 / (2.0 * q * q * q)) * dtDays;
+            double s = 2.0 * Math.sinh(asinh(1.5 * W) / 3.0);
+            double r = q * (1.0 + s * s);
+            double cosNu = (1.0 - s * s) / (1.0 + s * s);
+            double sinNu = 2.0 * s / (1.0 + s * s);
+            xv = r * cosNu;
+            yv = r * sinNu;
+        }
         double trueAnomaly = Math.atan2(yv, xv);
         double r = Math.sqrt(xv * xv + yv * yv);
 
@@ -177,6 +226,47 @@ final class SmallBodyEphemeris {
                 r * (sinNode * cosArg + cosNode * sinArg * cosInc),
                 r * (sinArg * sinInc)
         };
+    }
+
+    private static double solveKeplerElliptic(double meanAnomalyRad, double eccentricity) {
+        double M = meanAnomalyRad;
+        // Normalise M to [-π, π] for better starter.
+        M = M - 2.0 * Math.PI * Math.floor((M + Math.PI) / (2.0 * Math.PI));
+        double E = M + eccentricity * Math.sin(M) * (1.0 + eccentricity * Math.cos(M));
+        for (int i = 0; i < 12; i++) {
+            double delta = (E - eccentricity * Math.sin(E) - M) / (1.0 - eccentricity * Math.cos(E));
+            E -= delta;
+            if (Math.abs(delta) < 1.0e-12) {
+                break;
+            }
+        }
+        return E;
+    }
+
+    private static double solveKeplerHyperbolic(double M, double eccentricity) {
+        // Hyperbolic Kepler: M = e·sinh(F) - F. M can be ±large; pick a sane starter.
+        double F;
+        if (Math.abs(M) <= eccentricity) {
+            F = M / (eccentricity - 1.0);
+        } else {
+            F = Math.signum(M) * Math.log(2.0 * Math.abs(M) / eccentricity + 1.8);
+        }
+        for (int i = 0; i < 60; i++) {
+            double f = eccentricity * Math.sinh(F) - F - M;
+            double fp = eccentricity * Math.cosh(F) - 1.0;
+            double dF = f / fp;
+            F -= dF;
+            if (Math.abs(dF) < 1.0e-12) {
+                return F;
+            }
+        }
+        return Double.NaN;
+    }
+
+    private static double asinh(double x) {
+        // Math.asinh is JDK 1.8+ on standard JVM but Android API 26+ adds Math.asinh.
+        // Use the explicit identity to stay portable.
+        return Math.log(x + Math.sqrt(x * x + 1.0));
     }
 
     private static double phaseAngleDegrees(double r, double delta, double earthDistance) {
@@ -258,19 +348,6 @@ final class SmallBodyEphemeris {
         double ra = normalizeDegrees(degrees(Math.atan2(y, x))) / 15.0;
         double dec = degrees(Math.asin(clamp(sinBeta * Math.cos(obliquity) + cosBeta * Math.sin(obliquity) * Math.sin(lambda), -1.0, 1.0)));
         return new EquatorialPoint(ra, dec);
-    }
-
-    private static double eccentricAnomaly(double meanAnomalyDegrees, double eccentricity) {
-        double meanAnomaly = radians(normalizeDegrees(meanAnomalyDegrees));
-        double E = meanAnomaly + eccentricity * Math.sin(meanAnomaly) * (1.0 + eccentricity * Math.cos(meanAnomaly));
-        for (int i = 0; i < 8; i++) {
-            double delta = (E - eccentricity * Math.sin(E) - meanAnomaly) / (1.0 - eccentricity * Math.cos(E));
-            E -= delta;
-            if (Math.abs(delta) < 1.0e-10) {
-                break;
-            }
-        }
-        return E;
     }
 
     private static double julianDay(Instant instant) {

@@ -1,13 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="help_button_content_description">查看说明</string>
     <string name="app_name">MountBehave</string>
     <string name="small_bodies_section">小行星 / 彗星</string>
-    <string name="small_bodies_intro">内置精选 17 个著名小行星 / 彗星;在星图工具栏的"图层"对话框可独立显隐小行星与彗星。下载更多小天体后,新数据会自动并入本地缓存。</string>
+    <string name="small_bodies_intro">内置精选 17 个著名小行星 / 彗星;在星图工具栏的"图层"对话框可独立显隐小行星与彗星。亮小行星按视星等批量下载,彗星逐颗按名称添加(避免大量长周期彗星拥挤地堆在天图)。</string>
     <string name="small_bodies_mag_limit_label">视星等上限</string>
     <string name="small_bodies_mag_limit_value">视星等上限：%1$.1f mag</string>
     <string name="small_bodies_status">基线 %1$d 颗 + 已下载小行星 %2$d 颗、彗星 %3$d 颗</string>
     <string name="small_bodies_download_asteroids">下载亮小行星</string>
     <string name="small_bodies_download_comets">下载彗星元素</string>
+    <string name="small_bodies_add_comet_button">添加彗星…</string>
+    <string name="small_bodies_add_comet_title">添加彗星</string>
+    <string name="small_bodies_add_comet_message">输入彗星编号或名称,从 JPL SBDB 拉取轨道元素。例如:1P、2P、67P、C/2023 A3、Halley、Encke。支持椭圆/抛物/双曲三类轨道,深度双曲(e&gt;4)的星际过客除外。歧义名称(如 Halley)JPL 会返回候选列表,本程序自动取第一个匹配彗星类型的候选。</string>
+    <string name="small_bodies_add_comet_hint">1P 或 C/2023 A3 …</string>
+    <string name="small_bodies_add_comet_ok">查询并添加</string>
+    <string name="small_bodies_add_comet_empty">请输入彗星编号或名称</string>
+    <string name="small_bodies_add_done">已添加 %1$s。</string>
+    <string name="small_bodies_add_not_found">未找到符合 \"%1$s\" 的彗星。请检查拼写或编号。</string>
     <string name="small_bodies_clear_user">清空已下载</string>
     <string name="small_bodies_download_starting">正在请求 JPL SBDB……</string>
     <string name="small_bodies_download_done">下载完成，更新 %1$d 个元素。</string>

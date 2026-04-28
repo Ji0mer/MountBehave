@@ -311,13 +311,13 @@ public final class MainActivity extends Activity {
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(wideLayout ? 24 : 12), dp(18), dp(wideLayout ? 24 : 12), dp(24));
+        root.setPadding(dp(wideLayout ? 20 : 10), dp(14), dp(wideLayout ? 20 : 10), dp(18));
         scrollView.addView(root, matchWrap());
 
         LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.VERTICAL);
-        header.setPadding(dp(64), 0, 0, dp(12));
-        TextView title = titleText(R.string.app_name, 24);
+        header.setPadding(dp(60), 0, 0, dp(8));
+        TextView title = titleText(R.string.app_name, 23);
         header.addView(title, matchWrap());
 
         TextView subtitle = bodyText(R.string.app_subtitle);
@@ -330,13 +330,13 @@ public final class MainActivity extends Activity {
         manualStatusText = bodyText(R.string.status_disconnected);
         manualStatusText.setTextColor(labelTextColor());
         manualStatusText.setBackgroundColor(cardBackgroundColor());
-        manualStatusText.setPadding(dp(12), dp(10), dp(12), dp(10));
+        manualStatusText.setPadding(dp(10), dp(8), dp(10), dp(8));
         if (currentStatusMessage != null) {
             manualStatusText.setText(currentStatusMessage);
         }
         manualPage.addView(manualStatusText, matchWrap());
-        manualPage.addView(createCalibrationPage(), matchWrapWithTopMargin(12));
-        manualPage.addView(sectionTitle(R.string.manual_control_section), matchWrapWithTopMargin(12));
+        manualPage.addView(createCalibrationPage(), matchWrapWithTopMargin(8));
+        manualPage.addView(sectionTitle(R.string.manual_control_section), matchWrapWithTopMargin(8));
         manualPage.addView(createControlPanel(), matchWrap());
         root.addView(manualPage, matchWrap());
 
@@ -406,11 +406,11 @@ public final class MainActivity extends Activity {
         LinearLayout page = new LinearLayout(this);
         page.setOrientation(LinearLayout.VERTICAL);
 
-        page.addView(sectionTitle(R.string.sky_section), matchWrap());
+        page.addView(sectionTitleWithHelp(R.string.sky_section, R.string.sky_planet_note), matchWrap());
 
         LinearLayout panel = card();
         skySummaryText = bodyText(R.string.sky_loading);
-        skySummaryText.setPadding(0, 0, 0, dp(10));
+        skySummaryText.setPadding(0, 0, 0, dp(6));
         panel.addView(skySummaryText, matchWrap());
 
         skyChartView = new SkyChartView(this);
@@ -437,7 +437,7 @@ public final class MainActivity extends Activity {
         panel.addView(targetStatusText, matchWrap());
 
         mountPointingText = bodyText(R.string.mount_pointing_default);
-        mountPointingText.setPadding(0, dp(4), 0, 0);
+        mountPointingText.setPadding(0, dp(3), 0, 0);
         if (hasCurrentMountPosition) {
             mountPointingText.setText(getString(
                     R.string.mount_pointing_status,
@@ -448,23 +448,24 @@ public final class MainActivity extends Activity {
         panel.addView(mountPointingText, matchWrap());
 
         gotoStatusText = bodyText(R.string.goto_status_idle);
-        gotoStatusText.setPadding(0, dp(4), 0, 0);
+        gotoStatusText.setPadding(0, dp(3), 0, 0);
         if (gotoStatusMessage != null) {
             gotoStatusText.setText(gotoStatusMessage);
         }
         panel.addView(gotoStatusText, matchWrap());
 
         observingAlertText = bodyText(R.string.observing_alert_no_target);
-        observingAlertText.setPadding(0, dp(4), 0, 0);
+        observingAlertText.setPadding(0, dp(3), 0, 0);
         panel.addView(observingAlertText, matchWrap());
 
         LinearLayout actions = new LinearLayout(this);
         actions.setOrientation(LinearLayout.HORIZONTAL);
         actions.setGravity(Gravity.CENTER_VERTICAL);
-        actions.setPadding(0, dp(10), 0, 0);
+        actions.setPadding(0, dp(8), 0, 0);
 
         Button resetButton = new Button(this);
         resetButton.setAllCaps(false);
+        compactButton(resetButton);
         resetButton.setText(R.string.sky_reset);
         resetButton.setOnClickListener(v -> {
             skyChartView.resetView();
@@ -474,29 +475,28 @@ public final class MainActivity extends Activity {
 
         gotoButton = new Button(this);
         gotoButton.setAllCaps(false);
+        compactButton(gotoButton);
         gotoButton.setText(R.string.sky_goto_target);
         gotoButton.setOnClickListener(v -> showTargetDialog());
-        actions.addView(gotoButton, weightWrapWithLeftMargin(1f, 10));
+        actions.addView(gotoButton, weightWrapWithLeftMargin(1f, 6));
 
         skyCancelGotoButton = new Button(this);
         skyCancelGotoButton.setAllCaps(false);
+        compactButton(skyCancelGotoButton);
         skyCancelGotoButton.setText(R.string.goto_cancel);
         skyCancelGotoButton.setOnClickListener(v -> cancelGoto());
-        actions.addView(skyCancelGotoButton, weightWrapWithLeftMargin(1f, 10));
+        actions.addView(skyCancelGotoButton, weightWrapWithLeftMargin(1f, 6));
 
         Button layersButton = new Button(this);
         layersButton.setAllCaps(false);
+        compactButton(layersButton);
         layersButton.setText(R.string.sky_layers);
         layersButton.setOnClickListener(v -> showLayerDialog());
-        actions.addView(layersButton, weightWrapWithLeftMargin(1f, 10));
+        actions.addView(layersButton, weightWrapWithLeftMargin(1f, 6));
 
         panel.addView(actions, matchWrap());
 
         panel.addView(skyChartView, matchFixedHeight(isWideLayout() ? 620 : 480));
-
-        TextView note = bodyText(R.string.sky_planet_note);
-        note.setPadding(0, dp(10), 0, 0);
-        panel.addView(note, matchWrap());
 
         page.addView(panel, matchWrap());
         return page;
@@ -506,13 +506,9 @@ public final class MainActivity extends Activity {
         LinearLayout page = new LinearLayout(this);
         page.setOrientation(LinearLayout.VERTICAL);
 
-        page.addView(sectionTitle(R.string.calibration_section), matchWrap());
+        page.addView(sectionTitleWithHelp(R.string.calibration_section, R.string.calibration_intro), matchWrap());
 
         LinearLayout targetPanel = card();
-        TextView intro = bodyText(R.string.calibration_intro);
-        intro.setPadding(0, 0, 0, dp(10));
-        targetPanel.addView(intro, matchWrap());
-
         targetPanel.addView(labelText(R.string.calibration_mode_label), matchWrap());
         calibrationModeSpinner = new Spinner(this);
         List<String> modeLabels = new ArrayList<>();
@@ -567,7 +563,7 @@ public final class MainActivity extends Activity {
         LinearLayout targetActions = new LinearLayout(this);
         targetActions.setOrientation(LinearLayout.HORIZONTAL);
         targetActions.setGravity(Gravity.CENTER_VERTICAL);
-        targetActions.setPadding(0, dp(10), 0, 0);
+        targetActions.setPadding(0, dp(8), 0, 0);
 
         calibrationSuggestButton = actionButton(R.string.calibration_suggest_star);
         calibrationSuggestButton.setOnClickListener(v -> fillSuggestedCalibrationTarget());
@@ -581,16 +577,17 @@ public final class MainActivity extends Activity {
         targetPanel.addView(targetActions, matchWrap());
 
         calibrationStatusText = bodyText(R.string.calibration_status_idle);
-        calibrationStatusText.setPadding(0, dp(10), 0, 0);
+        calibrationStatusText.setPadding(0, dp(8), 0, 0);
         targetPanel.addView(calibrationStatusText, matchWrap());
         page.addView(targetPanel, matchWrap());
 
-        page.addView(sectionTitle(R.string.calibration_mode_settings), matchWrapWithTopMargin(12));
+        page.addView(sectionTitle(R.string.calibration_mode_settings), matchWrapWithTopMargin(8));
 
         quickCalibrationPanel = card();
-        TextView quickIntro = bodyText(R.string.calibration_quick_intro);
-        quickIntro.setPadding(0, 0, 0, dp(10));
-        quickCalibrationPanel.addView(quickIntro, matchWrap());
+        quickCalibrationPanel.addView(panelTitleWithHelp(
+                R.string.calibration_quick_section,
+                R.string.calibration_quick_intro
+        ), matchWrap());
 
         LinearLayout quickActions = new LinearLayout(this);
         quickActions.setOrientation(LinearLayout.HORIZONTAL);
@@ -608,9 +605,10 @@ public final class MainActivity extends Activity {
         page.addView(quickCalibrationPanel, matchWrap());
 
         alignCalibrationPanel = card();
-        TextView alignIntro = bodyText(R.string.calibration_align_intro);
-        alignIntro.setPadding(0, 0, 0, dp(10));
-        alignCalibrationPanel.addView(alignIntro, matchWrap());
+        alignCalibrationPanel.addView(panelTitleWithHelp(
+                R.string.calibration_align_section,
+                R.string.calibration_align_intro
+        ), matchWrap());
 
         alignStartButton = actionButton(R.string.calibration_align_start);
         alignStartButton.setOnClickListener(v -> {
@@ -621,35 +619,35 @@ public final class MainActivity extends Activity {
         alignCalibrationPanel.addView(alignStartButton, matchWrap());
 
         calibrationStepText = bodyText(R.string.calibration_align_idle);
-        calibrationStepText.setPadding(0, dp(10), 0, dp(10));
+        calibrationStepText.setPadding(0, dp(8), 0, dp(8));
         alignCalibrationPanel.addView(calibrationStepText, matchWrap());
 
         alignmentCurrentText = bodyText(R.string.calibration_align_current_none);
-        alignmentCurrentText.setPadding(0, 0, 0, dp(8));
+        alignmentCurrentText.setPadding(0, 0, 0, dp(6));
         alignCalibrationPanel.addView(alignmentCurrentText, matchWrap());
 
         alignmentAcceptedText = bodyText(R.string.calibration_align_accepted_none);
-        alignmentAcceptedText.setPadding(0, 0, 0, dp(10));
+        alignmentAcceptedText.setPadding(0, 0, 0, dp(8));
         alignCalibrationPanel.addView(alignmentAcceptedText, matchWrap());
 
         LinearLayout alignActionsOne = new LinearLayout(this);
-        alignActionsOne.setOrientation(LinearLayout.VERTICAL);
+        alignActionsOne.setOrientation(LinearLayout.HORIZONTAL);
         alignActionsOne.setGravity(Gravity.CENTER_VERTICAL);
 
         alignSelectButton = actionButton(R.string.calibration_align_select_current);
         alignSelectButton.setOnClickListener(v -> selectAlignmentTargetOnly());
-        alignActionsOne.addView(alignSelectButton, matchWrap());
+        alignActionsOne.addView(alignSelectButton, weightWrap(1f));
 
         alignGotoButton = actionButton(R.string.calibration_align_goto);
         alignGotoButton.setOnClickListener(v -> gotoAlignmentTarget());
-        alignActionsOne.addView(alignGotoButton, matchWrapWithTopMargin(8));
+        alignActionsOne.addView(alignGotoButton, weightWrapWithLeftMargin(1f, 8));
 
         alignCalibrationPanel.addView(alignActionsOne, matchWrap());
 
         LinearLayout alignActionsTwo = new LinearLayout(this);
         alignActionsTwo.setOrientation(LinearLayout.VERTICAL);
         alignActionsTwo.setGravity(Gravity.CENTER_VERTICAL);
-        alignActionsTwo.setPadding(0, dp(8), 0, 0);
+        alignActionsTwo.setPadding(0, dp(6), 0, 0);
 
         alignAcceptButton = actionButton(R.string.calibration_align_accept);
         alignAcceptButton.setOnClickListener(v -> acceptAlignmentStar());
@@ -658,7 +656,7 @@ public final class MainActivity extends Activity {
         LinearLayout alignFinishActions = new LinearLayout(this);
         alignFinishActions.setOrientation(LinearLayout.HORIZONTAL);
         alignFinishActions.setGravity(Gravity.CENTER_VERTICAL);
-        alignFinishActions.setPadding(0, dp(8), 0, 0);
+        alignFinishActions.setPadding(0, dp(6), 0, 0);
 
         alignSaveButton = actionButton(R.string.calibration_align_save);
         alignSaveButton.setOnClickListener(v -> saveAlignmentModel());
@@ -674,9 +672,10 @@ public final class MainActivity extends Activity {
         page.addView(alignCalibrationPanel, matchWrap());
 
         refineCalibrationPanel = card();
-        TextView refineIntro = bodyText(R.string.calibration_refine_intro);
-        refineIntro.setPadding(0, 0, 0, dp(10));
-        refineCalibrationPanel.addView(refineIntro, matchWrap());
+        refineCalibrationPanel.addView(panelTitleWithHelp(
+                R.string.calibration_mode_refine_polar,
+                R.string.calibration_refine_intro
+        ), matchWrap());
 
         refineGotoButton = actionButton(R.string.calibration_refine_goto);
         refineGotoButton.setOnClickListener(v -> gotoRefinePolarTarget());
@@ -684,7 +683,7 @@ public final class MainActivity extends Activity {
 
         refinePaButton = actionButton(R.string.calibration_refine_pa);
         refinePaButton.setOnClickListener(v -> refinePolarAlignment());
-        refineCalibrationPanel.addView(refinePaButton, matchWrapWithTopMargin(8));
+        refineCalibrationPanel.addView(refinePaButton, matchWrapWithTopMargin(6));
 
         page.addView(refineCalibrationPanel, matchWrap());
         updateCalibrationModeViews();
@@ -704,26 +703,26 @@ public final class MainActivity extends Activity {
             left.setOrientation(LinearLayout.VERTICAL);
             left.addView(sectionTitle(R.string.connection_section), matchWrap());
             left.addView(createConnectionPanel(), matchWrap());
-            left.addView(sectionTitle(R.string.observer_section), matchWrapWithTopMargin(12));
+            left.addView(sectionTitle(R.string.observer_section), matchWrapWithTopMargin(8));
             left.addView(createObserverPanel(), matchWrap());
             columns.addView(left, weightWrap(1f));
 
             LinearLayout right = new LinearLayout(this);
             right.setOrientation(LinearLayout.VERTICAL);
-            right.addView(sectionTitle(R.string.tracking_section), matchWrap());
+            right.addView(sectionTitleWithHelp(R.string.tracking_section, R.string.tracking_intro), matchWrap());
             right.addView(createTrackingPanel(), matchWrap());
             addMoreSettingsGroup(right);
-            columns.addView(right, weightWrapWithLeftMargin(1f, 16));
+            columns.addView(right, weightWrapWithLeftMargin(1f, 12));
 
             page.addView(columns, matchWrap());
         } else {
             page.addView(sectionTitle(R.string.connection_section), matchWrap());
             page.addView(createConnectionPanel(), matchWrap());
 
-            page.addView(sectionTitle(R.string.observer_section), matchWrapWithTopMargin(12));
+            page.addView(sectionTitle(R.string.observer_section), matchWrapWithTopMargin(8));
             page.addView(createObserverPanel(), matchWrap());
 
-            page.addView(sectionTitle(R.string.tracking_section), matchWrapWithTopMargin(12));
+            page.addView(sectionTitleWithHelp(R.string.tracking_section, R.string.tracking_intro), matchWrapWithTopMargin(8));
             page.addView(createTrackingPanel(), matchWrap());
 
             addMoreSettingsGroup(page);
@@ -735,19 +734,20 @@ public final class MainActivity extends Activity {
     private void addMoreSettingsGroup(LinearLayout parent) {
         Button toggle = new Button(this);
         toggle.setAllCaps(false);
+        compactButton(toggle);
         toggle.setText(R.string.more_settings_collapsed);
         LinearLayout.LayoutParams toggleParams = matchWrap();
-        toggleParams.topMargin = dp(12);
+        toggleParams.topMargin = dp(8);
         parent.addView(toggle, toggleParams);
 
         LinearLayout container = new LinearLayout(this);
         container.setOrientation(LinearLayout.VERTICAL);
         container.setVisibility(View.GONE);
-        container.addView(sectionTitle(R.string.command_log_section), matchWrapWithTopMargin(12));
+        container.addView(sectionTitle(R.string.command_log_section), matchWrapWithTopMargin(8));
         container.addView(createCommandLogPanel(), matchWrap());
-        container.addView(sectionTitle(R.string.safety_section), matchWrapWithTopMargin(12));
+        container.addView(sectionTitleWithHelp(R.string.safety_section, R.string.safety_intro), matchWrapWithTopMargin(8));
         container.addView(createSafetyPanel(), matchWrap());
-        container.addView(sectionTitle(R.string.small_bodies_section), matchWrapWithTopMargin(12));
+        container.addView(sectionTitleWithHelp(R.string.small_bodies_section, R.string.small_bodies_intro), matchWrapWithTopMargin(8));
         container.addView(createSmallBodiesPanel(), matchWrap());
         parent.addView(container, matchWrap());
 
@@ -760,10 +760,6 @@ public final class MainActivity extends Activity {
 
     private View createSafetyPanel() {
         LinearLayout panel = card();
-
-        TextView intro = bodyText(R.string.safety_intro);
-        intro.setPadding(0, 0, 0, dp(10));
-        panel.addView(intro, matchWrap());
 
         LinearLayout stopActions = new LinearLayout(this);
         stopActions.setOrientation(LinearLayout.HORIZONTAL);
@@ -784,7 +780,7 @@ public final class MainActivity extends Activity {
         LinearLayout gotoActions = new LinearLayout(this);
         gotoActions.setOrientation(LinearLayout.HORIZONTAL);
         gotoActions.setGravity(Gravity.CENTER_VERTICAL);
-        gotoActions.setPadding(0, dp(8), 0, 0);
+        gotoActions.setPadding(0, dp(6), 0, 0);
 
         gotoStatusRefreshButton = actionButton(R.string.goto_refresh_status);
         gotoStatusRefreshButton.setOnClickListener(v -> refreshGotoStatus());
@@ -798,7 +794,7 @@ public final class MainActivity extends Activity {
         LinearLayout parkActions = new LinearLayout(this);
         parkActions.setOrientation(LinearLayout.HORIZONTAL);
         parkActions.setGravity(Gravity.CENTER_VERTICAL);
-        parkActions.setPadding(0, dp(8), 0, 0);
+        parkActions.setPadding(0, dp(6), 0, 0);
 
         parkButton = actionButton(R.string.park_mount);
         parkButton.setOnClickListener(v -> parkMount());
@@ -810,7 +806,7 @@ public final class MainActivity extends Activity {
         panel.addView(parkActions, matchWrap());
 
         safetyStatusText = bodyText(R.string.safety_status_idle);
-        safetyStatusText.setPadding(0, dp(10), 0, 0);
+        safetyStatusText.setPadding(0, dp(8), 0, 0);
         if (safetyStatusMessage != null) {
             safetyStatusText.setText(safetyStatusMessage);
         }
@@ -833,16 +829,12 @@ public final class MainActivity extends Activity {
     private View createSmallBodiesPanel() {
         LinearLayout panel = card();
 
-        TextView intro = bodyText(R.string.small_bodies_intro);
-        intro.setPadding(0, 0, 0, dp(8));
-        panel.addView(intro, matchWrap());
-
         smallBodyStatusText = bodyText(R.string.app_name);
-        smallBodyStatusText.setPadding(0, 0, 0, dp(8));
+        smallBodyStatusText.setPadding(0, 0, 0, dp(6));
         panel.addView(smallBodyStatusText, matchWrap());
 
         TextView magLabel = bodyText(R.string.small_bodies_mag_limit_label);
-        magLabel.setPadding(0, dp(8), 0, dp(2));
+        magLabel.setPadding(0, dp(6), 0, 0);
         panel.addView(magLabel, matchWrap());
 
         SeekBar magSlider = new SeekBar(this);
@@ -876,14 +868,14 @@ public final class MainActivity extends Activity {
         LinearLayout buttonRow = new LinearLayout(this);
         buttonRow.setOrientation(LinearLayout.HORIZONTAL);
         buttonRow.setGravity(Gravity.CENTER_VERTICAL);
-        buttonRow.setPadding(0, dp(8), 0, 0);
+        buttonRow.setPadding(0, dp(6), 0, 0);
 
         smallBodyDownloadAsteroidsButton = actionButton(R.string.small_bodies_download_asteroids);
         smallBodyDownloadAsteroidsButton.setOnClickListener(v -> startAsteroidDownload());
         buttonRow.addView(smallBodyDownloadAsteroidsButton, weightWrap(1f));
 
-        smallBodyDownloadCometsButton = actionButton(R.string.small_bodies_download_comets);
-        smallBodyDownloadCometsButton.setOnClickListener(v -> startCometDownload());
+        smallBodyDownloadCometsButton = actionButton(R.string.small_bodies_add_comet_button);
+        smallBodyDownloadCometsButton.setOnClickListener(v -> showAddCometDialog());
         buttonRow.addView(smallBodyDownloadCometsButton, weightWrapWithLeftMargin(1f, 8));
         panel.addView(buttonRow, matchWrap());
 
@@ -945,24 +937,69 @@ public final class MainActivity extends Activity {
         });
     }
 
-    private void startCometDownload() {
-        if (smallBodyCatalog == null || smallBodyDownloadCometsButton == null) {
+    private void showAddCometDialog() {
+        if (smallBodyCatalog == null) {
             return;
         }
-        smallBodyDownloadCometsButton.setEnabled(false);
+        EditText input = new EditText(this);
+        input.setHint(R.string.small_bodies_add_comet_hint);
+        input.setSingleLine(true);
+        input.setInputType(InputType.TYPE_CLASS_TEXT);
+        FrameLayout wrapper = new FrameLayout(this);
+        int padding = dp(16);
+        wrapper.setPadding(padding, dp(8), padding, 0);
+        wrapper.addView(input);
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle(R.string.small_bodies_add_comet_title)
+                .setMessage(R.string.small_bodies_add_comet_message)
+                .setView(wrapper)
+                .setPositiveButton(R.string.small_bodies_add_comet_ok, null)
+                .setNegativeButton(android.R.string.cancel, null)
+                .create();
+        dialog.setOnShowListener(d -> {
+            // Override the positive button's click so we can validate input
+            // and only dismiss the dialog after a non-empty name is submitted.
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+                String name = input.getText() == null ? "" : input.getText().toString().trim();
+                if (name.isEmpty()) {
+                    input.setError(getString(R.string.small_bodies_add_comet_empty));
+                    input.requestFocus();
+                    return;
+                }
+                dialog.dismiss();
+                fetchSingleSmallBody(name, true);
+            });
+        });
+        dialog.show();
+    }
+
+    private void fetchSingleSmallBody(String query, boolean isComet) {
+        if (smallBodyCatalog == null) {
+            return;
+        }
+        if (smallBodyDownloadCometsButton != null) {
+            smallBodyDownloadCometsButton.setEnabled(false);
+        }
         setStatus(getString(R.string.small_bodies_download_starting));
         ioExecutor.execute(() -> {
             try {
-                String url = "https://ssd-api.jpl.nasa.gov/sbdb_query.api"
-                        + "?fields=full_name,e,i,om,w,q,tp,M1,K1"
-                        + "&sb-kind=c"
-                        + "&full-prec=true";
-                String json = httpGet(url);
-                List<SmallBody> parsed = parseSbdbJson(json, true);
-                smallBodyCatalog.replaceUserComets(parsed);
+                String json = fetchSbdbResolvingMultiMatch(query, isComet);
+                SmallBody body = parseSbdbSingleRecord(json, isComet);
+                if (body == null) {
+                    runOnUiThread(() -> {
+                        setStatus(getString(R.string.small_bodies_add_not_found, query));
+                        if (smallBodyDownloadCometsButton != null) {
+                            smallBodyDownloadCometsButton.setEnabled(true);
+                        }
+                    });
+                    return;
+                }
+                smallBodyCatalog.addUserBody(body);
                 runOnUiThread(() -> {
-                    setStatus(getString(R.string.small_bodies_download_done, parsed.size()));
-                    smallBodyDownloadCometsButton.setEnabled(true);
+                    setStatus(getString(R.string.small_bodies_add_done, body.displayLabel()));
+                    if (smallBodyDownloadCometsButton != null) {
+                        smallBodyDownloadCometsButton.setEnabled(true);
+                    }
                     updateSmallBodyStatusText();
                     if (skyChartView != null) {
                         skyChartView.invalidate();
@@ -972,10 +1009,122 @@ public final class MainActivity extends Activity {
                 runOnUiThread(() -> {
                     setStatus(getString(R.string.small_bodies_download_failed,
                             t.getMessage() == null ? t.getClass().getSimpleName() : t.getMessage()));
-                    smallBodyDownloadCometsButton.setEnabled(true);
+                    if (smallBodyDownloadCometsButton != null) {
+                        smallBodyDownloadCometsButton.setEnabled(true);
+                    }
                 });
             }
         });
+    }
+
+    /**
+     * Parse a single-body SBDB API response (sbdb.api?sstr=...). The single-body
+     * endpoint returns object/orbit/phys_par as nested objects with named
+     * elements, not the positional rows that the bulk Query API uses, so we
+     * cannot share the parser.
+     */
+    private static SmallBody parseSbdbSingleRecord(String json, boolean isComet) throws JSONException {
+        JSONObject root = new JSONObject(json);
+        JSONObject object = root.optJSONObject("object");
+        JSONObject orbit = root.optJSONObject("orbit");
+        if (object == null || orbit == null) {
+            return null;
+        }
+        // Defense-in-depth: SBDB sets object.kind to "an"/"au" for asteroids
+        // and "cn"/"cu" for comets (numbered/unnumbered). Reject responses
+        // whose kind disagrees with what the caller asked for, so a stray
+        // asteroid never lands in the comet pool even if the multi-match
+        // filter let it slip.
+        String kind = object.optString("kind", "").toLowerCase(Locale.US);
+        if (!kind.isEmpty()) {
+            boolean responseIsComet = kind.startsWith("c");
+            if (responseIsComet != isComet) {
+                return null;
+            }
+        }
+        // Build the canonical IAU designation. JPL stores it split between
+        // object.des (the body part) and object.prefix (the leading IAU letter)
+        // for non-numbered comets:
+        //   periodic comet "1P/Halley":      des="1P",       prefix=""    -> "1P"
+        //   non-numbered comet "C/2023 A3":  des="2023 A3",  prefix="C"   -> "C/2023 A3"
+        //   asteroid "1 Ceres":              des="1",        prefix=""    -> "1"
+        // Earlier versions used the slash-truncating extractDesignation(fullname)
+        // which collapsed every C/... comet into a single "C" bucket; using the
+        // structured object.* fields avoids that.
+        String desRaw = object.optString("des", "").trim();
+        if (desRaw.isEmpty()) {
+            return null;
+        }
+        String prefix = object.optString("prefix", "").trim();
+        String designation;
+        if (isComet && !desRaw.contains("/") && !prefix.isEmpty()
+                && desRaw.matches("\\d{4}.*")) {
+            designation = prefix + "/" + desRaw;
+        } else {
+            designation = desRaw;
+        }
+        String fullName = object.optString("fullname", designation).trim();
+        String displayName = extractDisplayName(fullName);
+
+        JSONArray elements = orbit.optJSONArray("elements");
+        if (elements == null) {
+            return null;
+        }
+        double e = sbdbElementValue(elements, "e", Double.NaN);
+        double a = sbdbElementValue(elements, "a", Double.NaN);
+        double q = sbdbElementValue(elements, "q", Double.NaN);
+        double inc = sbdbElementValue(elements, "i", Double.NaN);
+        double om = sbdbElementValue(elements, "om", Double.NaN);
+        double w = sbdbElementValue(elements, "w", Double.NaN);
+        double tp = sbdbElementValue(elements, "tp", Double.NaN);
+        double epoch = parseDouble(orbit.optString("epoch", ""), Double.NaN);
+        if (!Double.isFinite(q) && Double.isFinite(a) && Double.isFinite(e) && e < 1.0) {
+            q = a * (1.0 - e);
+        }
+        if (!Double.isFinite(e) || !Double.isFinite(q) || !Double.isFinite(tp)
+                || q <= 0.0 || e < 0.0 || e > 4.0) {
+            return null;
+        }
+
+        JSONArray physPar = root.optJSONArray("phys_par");
+        double absMag;
+        double slope;
+        if (isComet) {
+            absMag = sbdbPhysParValue(physPar, "M1", sbdbPhysParValue(physPar, "M2", 12.0));
+            slope = sbdbPhysParValue(physPar, "K1", sbdbPhysParValue(physPar, "K2", 8.0));
+        } else {
+            absMag = sbdbPhysParValue(physPar, "H", 14.0);
+            slope = sbdbPhysParValue(physPar, "G", 0.15);
+        }
+        return new SmallBody(designation, "", displayName, isComet,
+                Double.isFinite(epoch) ? epoch : tp,
+                q, e, inc, om, w, tp, absMag, slope);
+    }
+
+    private static double sbdbElementValue(JSONArray elements, String name, double fallback) {
+        if (elements == null) {
+            return fallback;
+        }
+        for (int i = 0; i < elements.length(); i++) {
+            JSONObject entry = elements.optJSONObject(i);
+            if (entry != null && name.equals(entry.optString("name"))) {
+                return parseDouble(entry.optString("value", ""), fallback);
+            }
+        }
+        return fallback;
+    }
+
+    private static double sbdbPhysParValue(JSONArray physPar, String name, double fallback) {
+        if (physPar == null) {
+            return fallback;
+        }
+        for (int i = 0; i < physPar.length(); i++) {
+            JSONObject entry = physPar.optJSONObject(i);
+            if (entry != null && name.equals(entry.optString("name"))) {
+                return parseDouble(entry.optString("value", ""), fallback);
+            }
+        }
+        return fallback;
     }
 
     private void clearUserSmallBodies() {
@@ -1029,6 +1178,19 @@ public final class MainActivity extends Activity {
     }
 
     private static String httpGet(String urlStr) throws IOException {
+        return httpGetAcceptingCodes(urlStr, false);
+    }
+
+    /**
+     * GET that returns the body for both 200 and 300 (Multiple Choices). JPL
+     * SBDB returns 300 with a JSON {@code "list"} of candidate matches when
+     * the input string is ambiguous (e.g. "Halley" matches multiple bodies).
+     */
+    private static String httpGetAllowMultiChoice(String urlStr) throws IOException {
+        return httpGetAcceptingCodes(urlStr, true);
+    }
+
+    private static String httpGetAcceptingCodes(String urlStr, boolean allow300) throws IOException {
         HttpURLConnection conn = (HttpURLConnection) new URL(urlStr).openConnection();
         try {
             conn.setConnectTimeout(15000);
@@ -1036,12 +1198,18 @@ public final class MainActivity extends Activity {
             conn.setRequestMethod("GET");
             conn.setRequestProperty("Accept", "application/json");
             conn.setRequestProperty("User-Agent", "MountBehave-Android");
+            conn.setInstanceFollowRedirects(false);
             int code = conn.getResponseCode();
-            if (code != 200) {
+            boolean ok = code == 200 || (allow300 && code == 300);
+            if (!ok) {
                 throw new IOException("HTTP " + code);
             }
+            java.io.InputStream stream = (code >= 400) ? conn.getErrorStream() : conn.getInputStream();
+            if (stream == null) {
+                throw new IOException("HTTP " + code + " (empty body)");
+            }
             StringBuilder sb = new StringBuilder();
-            try (BufferedReader r = new BufferedReader(new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
+            try (BufferedReader r = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
                 char[] buf = new char[4096];
                 int n;
                 while ((n = r.read(buf)) > 0) {
@@ -1051,6 +1219,94 @@ public final class MainActivity extends Activity {
             return sb.toString();
         } finally {
             conn.disconnect();
+        }
+    }
+
+    /**
+     * Resolve the user-typed query against the SBDB single-body endpoint.
+     * Strategy:
+     * <ol>
+     *  <li>If the query looks like a designation, try {@code des=} first.
+     *  <li>Otherwise try {@code sstr=}.
+     *  <li>On HTTP 300 (JPL's "multiple matches" envelope), filter the
+     *      {@code list} by {@code wantComet} since names like {@code Halley}
+     *      and {@code Encke} match BOTH a same-named asteroid (2688 Halley,
+     *      9134 Encke) AND the comet — JPL returns the asteroid first.
+     * </ol>
+     */
+    private static String fetchSbdbResolvingMultiMatch(String query, boolean wantComet) throws IOException, JSONException {
+        String trimmed = query.trim();
+        // Many designations contain a slash (e.g. "1P/Halley"); strip the name suffix
+        // for the des= retry path.
+        String stripped = trimmed;
+        int slash = stripped.indexOf('/');
+        if (slash > 0 && stripped.indexOf(' ') < 0) {
+            stripped = stripped.substring(0, slash);
+        }
+        boolean looksLikeDesignation = stripped.matches("(?i)^[CPDXAI]?/?\\s*\\d.*");
+        String firstUrl = sbdbUrl(looksLikeDesignation ? "des" : "sstr", looksLikeDesignation ? stripped : trimmed);
+        String json = httpGetAllowMultiChoice(firstUrl);
+        JSONObject root = new JSONObject(json);
+        if ("300".equals(root.optString("code"))) {
+            JSONArray list = root.optJSONArray("list");
+            if (list != null) {
+                for (int i = 0; i < list.length(); i++) {
+                    JSONObject candidate = list.getJSONObject(i);
+                    String pdes = candidate.optString("pdes", "").trim();
+                    if (pdes.isEmpty()) {
+                        continue;
+                    }
+                    if (candidateLooksLikeComet(candidate) == wantComet) {
+                        return httpGet(sbdbUrl("des", pdes));
+                    }
+                }
+            }
+            throw new IOException("Multiple matches but none of the requested kind");
+        }
+        return json;
+    }
+
+    /**
+     * Whether a 300-envelope candidate refers to a comet. We must check both
+     * fields because JPL returns non-numbered comets with bare year-format
+     * {@code pdes} like {@code 2023 A3} (no prefix) and only the comet
+     * provenance shows up in {@code name} like {@code C/2023 A3 (Tsuchinshan-ATLAS)}.
+     */
+    private static boolean candidateLooksLikeComet(JSONObject candidate) {
+        String pdes = candidate.optString("pdes", "");
+        String name = candidate.optString("name", "");
+        return pdesLooksLikeComet(pdes) || nameLooksLikeComet(name);
+    }
+
+    /**
+     * Comet primary-designation patterns: {@code N[PDXAI]} (numbered periodic)
+     * or {@code [CPDXAI]/...} (IAU-format with prefix already present).
+     */
+    private static boolean pdesLooksLikeComet(String pdes) {
+        if (pdes == null || pdes.isEmpty()) {
+            return false;
+        }
+        return pdes.matches("\\d+[PDXAIpdxai]") || pdes.matches("[CPDXAIcpdxai]/.*");
+    }
+
+    /**
+     * Detect comet from JPL display name: anything beginning with one of the
+     * IAU comet prefix letters followed by a slash, e.g. {@code C/2023 A3 (...)}.
+     */
+    private static boolean nameLooksLikeComet(String name) {
+        if (name == null || name.isEmpty()) {
+            return false;
+        }
+        return name.matches("(?i)^[CPDXAI]/.*");
+    }
+
+    private static String sbdbUrl(String key, String value) {
+        try {
+            return "https://ssd-api.jpl.nasa.gov/sbdb.api?"
+                    + key + "=" + java.net.URLEncoder.encode(value, StandardCharsets.UTF_8.name())
+                    + "&full-prec=true&phys-par=true";
+        } catch (java.io.UnsupportedEncodingException ex) {
+            throw new IllegalStateException(ex);
         }
     }
 
@@ -1075,7 +1331,8 @@ public final class MainActivity extends Activity {
             double tp = parseDouble(row.optString(6, ""), Double.NaN);
             double h = parseDouble(row.optString(7, ""), Double.NaN);
             double slope = parseDouble(row.optString(8, ""), isComet ? 4.0 : 0.15);
-            if (!Double.isFinite(e) || !Double.isFinite(q) || !Double.isFinite(tp) || e >= 1.0) {
+            if (!Double.isFinite(e) || !Double.isFinite(q) || !Double.isFinite(tp)
+                    || q <= 0.0 || e < 0.0 || e > 4.0) {
                 continue;
             }
             if (!Double.isFinite(h)) {
@@ -1126,16 +1383,12 @@ public final class MainActivity extends Activity {
     private View createTrackingPanel() {
         LinearLayout panel = card();
 
-        TextView intro = bodyText(R.string.tracking_intro);
-        intro.setPadding(0, 0, 0, dp(10));
-        panel.addView(intro, matchWrap());
-
         panel.addView(labelText(R.string.tracking_rate_label), matchWrap());
 
         LinearLayout rateActions = new LinearLayout(this);
         rateActions.setOrientation(LinearLayout.HORIZONTAL);
         rateActions.setGravity(Gravity.CENTER_VERTICAL);
-        rateActions.setPadding(0, dp(8), 0, dp(10));
+        rateActions.setPadding(0, dp(6), 0, dp(8));
 
         trackingSiderealButton = trackingRateButton(TrackingRate.SIDEREAL);
         rateActions.addView(trackingSiderealButton, weightWrap(1f));
@@ -1153,7 +1406,7 @@ public final class MainActivity extends Activity {
         panel.addView(trackingToggleButton, matchWrap());
 
         trackingStatusText = bodyText(R.string.tracking_status_off);
-        trackingStatusText.setPadding(0, dp(10), 0, 0);
+        trackingStatusText.setPadding(0, dp(8), 0, 0);
         panel.addView(trackingStatusText, matchWrap());
 
         updateTrackingViews();
@@ -1202,23 +1455,25 @@ public final class MainActivity extends Activity {
         longitudeBox.addView(labelText(R.string.longitude_label), matchWrap());
         longitudeField = coordinateField(ObserverState.BOSTON_LONGITUDE);
         longitudeBox.addView(longitudeField, matchWrap());
-        fields.addView(longitudeBox, weightWrapWithLeftMargin(1f, 10));
+        fields.addView(longitudeBox, weightWrapWithLeftMargin(1f, 8));
 
         panel.addView(fields, matchWrap());
 
         LinearLayout actions = new LinearLayout(this);
         actions.setOrientation(LinearLayout.HORIZONTAL);
         actions.setGravity(Gravity.CENTER_VERTICAL);
-        actions.setPadding(0, dp(10), 0, 0);
+        actions.setPadding(0, dp(8), 0, 0);
 
         Button gpsButton = new Button(this);
         gpsButton.setAllCaps(false);
+        compactButton(gpsButton);
         gpsButton.setText(R.string.use_gps);
         gpsButton.setOnClickListener(v -> requestGpsLocation());
         actions.addView(gpsButton, weightWrap(1f));
 
         Button applyButton = new Button(this);
         applyButton.setAllCaps(false);
+        compactButton(applyButton);
         applyButton.setText(R.string.apply_location);
         applyButton.setOnClickListener(v -> applyManualLocation());
         actions.addView(applyButton, weightWrapWithLeftMargin(1f, 8));
@@ -1227,17 +1482,18 @@ public final class MainActivity extends Activity {
 
         syncMountButton = new Button(this);
         syncMountButton.setAllCaps(false);
+        compactButton(syncMountButton);
         syncMountButton.setText(R.string.sync_observer_to_mount);
         syncMountButton.setOnClickListener(v -> syncObserverToMount());
-        LinearLayout.LayoutParams syncParams = matchWrapWithTopMargin(10);
+        LinearLayout.LayoutParams syncParams = matchWrapWithTopMargin(8);
         panel.addView(syncMountButton, syncParams);
 
         observerStatusText = bodyText(R.string.sky_loading);
-        observerStatusText.setPadding(0, dp(10), 0, 0);
+        observerStatusText.setPadding(0, dp(8), 0, 0);
         panel.addView(observerStatusText, matchWrap());
 
         timeStatusText = bodyText(R.string.sky_loading);
-        timeStatusText.setPadding(0, dp(4), 0, 0);
+        timeStatusText.setPadding(0, dp(3), 0, 0);
         panel.addView(timeStatusText, matchWrap());
 
         return panel;
@@ -1260,7 +1516,7 @@ public final class MainActivity extends Activity {
         connectionForm.addView(hostField, matchWrap());
 
         TextView portLabel = labelText(R.string.port_label);
-        portLabel.setPadding(0, dp(12), 0, 0);
+        portLabel.setPadding(0, dp(8), 0, 0);
         connectionForm.addView(portLabel, matchWrap());
 
         portField = new EditText(this);
@@ -1273,24 +1529,26 @@ public final class MainActivity extends Activity {
         LinearLayout actions = new LinearLayout(this);
         actions.setOrientation(LinearLayout.HORIZONTAL);
         actions.setGravity(Gravity.CENTER_VERTICAL);
-        actions.setPadding(0, dp(10), 0, 0);
+        actions.setPadding(0, dp(8), 0, 0);
 
         connectButton = new Button(this);
         connectButton.setAllCaps(false);
+        compactButton(connectButton);
         connectButton.setText(R.string.connect_button);
         connectButton.setOnClickListener(v -> connect());
         actions.addView(connectButton, weightWrap(1f));
 
         disconnectButton = new Button(this);
         disconnectButton.setAllCaps(false);
+        compactButton(disconnectButton);
         disconnectButton.setText(R.string.disconnect_button);
         disconnectButton.setOnClickListener(v -> disconnect());
-        actions.addView(disconnectButton, weightWrapWithLeftMargin(1f, 10));
+        actions.addView(disconnectButton, weightWrapWithLeftMargin(1f, 8));
 
         panel.addView(actions, matchWrap());
 
         statusText = bodyText(R.string.status_disconnected);
-        statusText.setPadding(0, dp(10), 0, 0);
+        statusText.setPadding(0, dp(8), 0, 0);
         if (currentStatusMessage != null) {
             statusText.setText(currentStatusMessage);
         }
@@ -1303,25 +1561,20 @@ public final class MainActivity extends Activity {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(0, 0, 0, dp(12));
+        row.setPadding(0, 0, 0, dp(8));
 
         ImageView badge = new ImageView(this);
         badge.setImageResource(R.drawable.clearsky_badge);
         badge.setAdjustViewBounds(true);
         badge.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        row.addView(badge, new LinearLayout.LayoutParams(dp(64), dp(64)));
+        row.addView(badge, new LinearLayout.LayoutParams(dp(52), dp(52)));
 
         LinearLayout textColumn = new LinearLayout(this);
         textColumn.setOrientation(LinearLayout.VERTICAL);
 
-        TextView title = titleText(R.string.mount_profile_title, 16);
-        textColumn.addView(title, matchWrap());
+        textColumn.addView(panelTitleWithHelp(R.string.mount_profile_title, R.string.mount_profile_body), matchWrap());
 
-        TextView body = bodyText(R.string.mount_profile_body);
-        body.setPadding(0, dp(3), 0, 0);
-        textColumn.addView(body, matchWrap());
-
-        row.addView(textColumn, weightWrapWithLeftMargin(1f, 12));
+        row.addView(textColumn, weightWrapWithLeftMargin(1f, 10));
         return row;
     }
 
@@ -1333,7 +1586,7 @@ public final class MainActivity extends Activity {
 
         LinearLayout ratePanel = new LinearLayout(this);
         ratePanel.setOrientation(LinearLayout.VERTICAL);
-        ratePanel.setPadding(0, dp(6), 0, dp(12));
+        ratePanel.setPadding(0, dp(4), 0, dp(8));
 
         manualRateSpinner = new Spinner(this);
         List<String> rateLabels = new ArrayList<>();
@@ -1395,9 +1648,9 @@ public final class MainActivity extends Activity {
         stopButton.setAllCaps(false);
         stopButton.setText(R.string.stop_button);
         stopButton.setTextColor(Color.WHITE);
-        stopButton.setTextSize(18);
+        stopButton.setTextSize(17);
         stopButton.setTypeface(Typeface.DEFAULT_BOLD);
-        stopButton.setMinHeight(dp(58));
+        stopButton.setMinHeight(dp(54));
         stopButton.setBackground(createStopButtonBackground());
         stopButton.setOnClickListener(v -> {
             activeDirection = null;
@@ -4041,7 +4294,7 @@ public final class MainActivity extends Activity {
     private LinearLayout card() {
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
-        panel.setPadding(dp(12), dp(12), dp(12), dp(12));
+        panel.setPadding(dp(10), dp(10), dp(10), dp(10));
         panel.setBackgroundColor(cardBackgroundColor());
         return panel;
     }
@@ -4056,9 +4309,56 @@ public final class MainActivity extends Activity {
     }
 
     private TextView sectionTitle(int textRes) {
-        TextView textView = titleText(textRes, 17);
-        textView.setPadding(0, 0, 0, dp(6));
+        TextView textView = titleText(textRes, 16);
+        textView.setPadding(0, 0, 0, dp(4));
         return textView;
+    }
+
+    private LinearLayout sectionTitleWithHelp(int titleRes, int helpRes) {
+        LinearLayout row = titleWithHelp(titleRes, helpRes, 16);
+        row.setPadding(0, 0, 0, dp(4));
+        return row;
+    }
+
+    private LinearLayout panelTitleWithHelp(int titleRes, int helpRes) {
+        LinearLayout row = titleWithHelp(titleRes, helpRes, 15);
+        row.setPadding(0, 0, 0, dp(6));
+        return row;
+    }
+
+    private LinearLayout titleWithHelp(int titleRes, int helpRes, int sp) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+
+        TextView title = titleText(titleRes, sp);
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        row.addView(title, weightWrap(1f));
+
+        Button help = new Button(this);
+        help.setAllCaps(false);
+        help.setText("?");
+        help.setTextSize(13);
+        help.setTypeface(Typeface.DEFAULT_BOLD);
+        help.setTextColor(selectedAccentColor());
+        help.setMinWidth(0);
+        help.setMinHeight(0);
+        help.setMinimumWidth(0);
+        help.setMinimumHeight(0);
+        help.setPadding(0, 0, 0, dp(1));
+        help.setContentDescription(getString(R.string.help_button_content_description));
+        help.setBackground(createHelpButtonBackground());
+        help.setOnClickListener(v -> showHelpDialog(titleRes, helpRes));
+        row.addView(help, squareParams(30));
+        return row;
+    }
+
+    private void showHelpDialog(int titleRes, int helpRes) {
+        new AlertDialog.Builder(this)
+                .setTitle(titleRes)
+                .setMessage(helpRes)
+                .setPositiveButton(android.R.string.ok, null)
+                .show();
     }
 
     private TextView labelText(int textRes) {
@@ -4071,7 +4371,7 @@ public final class MainActivity extends Activity {
     private TextView bodyText(int textRes) {
         TextView textView = new TextView(this);
         textView.setText(textRes);
-        textView.setTextSize(15);
+        textView.setTextSize(14);
         textView.setTextColor(bodyTextColor());
         textView.setGravity(Gravity.START);
         return textView;
@@ -4081,7 +4381,17 @@ public final class MainActivity extends Activity {
         Button button = new Button(this);
         button.setAllCaps(false);
         button.setText(textRes);
+        compactButton(button);
         return button;
+    }
+
+    private void compactButton(Button button) {
+        button.setTextSize(14);
+        button.setMinHeight(dp(40));
+        button.setMinimumHeight(dp(40));
+        button.setMinWidth(0);
+        button.setMinimumWidth(0);
+        button.setPadding(dp(6), 0, dp(6), 0);
     }
 
     private LinearLayout centeredRow() {
@@ -4177,9 +4487,13 @@ public final class MainActivity extends Activity {
         return params;
     }
 
+    private LinearLayout.LayoutParams squareParams(int sizeDp) {
+        return new LinearLayout.LayoutParams(dp(sizeDp), dp(sizeDp));
+    }
+
     private LinearLayout.LayoutParams controlButtonParams() {
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(68), dp(68));
-        params.setMargins(dp(4), dp(4), dp(4), dp(4));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(64), dp(64));
+        params.setMargins(dp(3), dp(3), dp(3), dp(3));
         return params;
     }
 
@@ -4207,6 +4521,14 @@ public final class MainActivity extends Activity {
         drawable.setColor(enabled ? Color.rgb(139, 0, 0) : Color.rgb(190, 90, 90));
         drawable.setStroke(dp(1), enabled ? Color.rgb(90, 0, 0) : Color.rgb(150, 70, 70));
         drawable.setCornerRadius(0);
+        return drawable;
+    }
+
+    private GradientDrawable createHelpButtonBackground() {
+        GradientDrawable drawable = new GradientDrawable();
+        drawable.setShape(GradientDrawable.OVAL);
+        drawable.setColor(nightModeEnabled ? Color.rgb(48, 10, 10) : Color.rgb(238, 244, 248));
+        drawable.setStroke(dp(1), selectedAccentColor());
         return drawable;
     }
 
