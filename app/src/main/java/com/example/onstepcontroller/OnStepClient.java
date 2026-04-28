@@ -129,10 +129,9 @@ final class OnStepClient implements Closeable {
                 throw ex;
             }
             if (next < 0) {
-                if (reply.length() > 0) {
-                    return reply.toString();
-                }
-                throw new IOException("Connection closed");
+                throw new IOException(reply.length() > 0
+                        ? "Connection closed mid-reply: " + reply
+                        : "Connection closed");
             }
             if (next == '#') {
                 return reply.toString();

@@ -30,7 +30,31 @@ public final class SkyChartView extends View {
 
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private SkyCatalog catalog;
+    private SmallBodyCatalog smallBodyCatalog;
     private String loadError;
+
+    /**
+     * Layers the user can toggle from the chart layer dialog. Stars and the
+     * Milky Way band are intentionally absent because they are always drawn —
+     * users cannot turn them off.
+     */
+    enum LayerType {
+        CONSTELLATION_LINES,
+        SOLAR_SYSTEM,
+        CLUSTERS,
+        NEBULAE,
+        GALAXIES,
+        ASTEROIDS,
+        COMETS
+    }
+
+    private boolean showConstellationLines = true;
+    private boolean showSolarSystem = true;
+    private boolean showClusters = false;
+    private boolean showNebulae = false;
+    private boolean showGalaxies = false;
+    private boolean showAsteroids = false;
+    private boolean showComets = false;
 
     private ObserverState observer = ObserverState.boston();
     private Instant currentInstant = Instant.now();
@@ -66,6 +90,38 @@ public final class SkyChartView extends View {
         this.observer = observer;
         this.currentInstant = instant;
         invalidate();
+    }
+
+    void setSmallBodyCatalog(SmallBodyCatalog catalog) {
+        this.smallBodyCatalog = catalog;
+        invalidate();
+    }
+
+    boolean isLayerVisible(LayerType layer) {
+        switch (layer) {
+            case CONSTELLATION_LINES: return showConstellationLines;
+            case SOLAR_SYSTEM: return showSolarSystem;
+            case CLUSTERS: return showClusters;
+            case NEBULAE: return showNebulae;
+            case GALAXIES: return showGalaxies;
+            case ASTEROIDS: return showAsteroids;
+            case COMETS: return showComets;
+            default: return false;
+        }
+    }
+
+    void setLayerVisible(LayerType layer, boolean visible) {
+        switch (layer) {
+            case CONSTELLATION_LINES: showConstellationLines = visible; break;
+            case SOLAR_SYSTEM: showSolarSystem = visible; break;
+            case CLUSTERS: showClusters = visible; break;
+            case NEBULAE: showNebulae = visible; break;
+            case GALAXIES: showGalaxies = visible; break;
+            case ASTEROIDS: showAsteroids = visible; break;
+            case COMETS: showComets = visible; break;
+        }
+        invalidate();
+        notifyViewStateChanged();
     }
 
     void setCurrentInstant(Instant instant) {
@@ -115,6 +171,12 @@ public final class SkyChartView extends View {
         SolarSystemEphemeris.Body body = SolarSystemEphemeris.findBody(currentInstant, query);
         if (body != null) {
             return Target.solarSystemObject(body.id, body.label, body.raHours, body.decDegrees);
+        }
+        if (smallBodyCatalog != null) {
+            SolarSystemEphemeris.Body sb = smallBodyCatalog.findByName(currentInstant, query);
+            if (sb != null) {
+                return Target.solarSystemObject(sb.id, sb.label, sb.raHours, sb.decDegrees);
+            }
         }
         if (catalog == null) {
             return null;
@@ -166,7 +228,7 @@ public final class SkyChartView extends View {
         if (catalog == null) {
             return loadError == null ? "星图数据加载中" : loadError;
         }
-        return String.format(
+        StringBuilder text = new StringBuilder(String.format(
                 Locale.US,
                 "恒星 %d 颗，深空天体 %d 个，星座线 %d 段。%s 本地天空，视场 %s，星等上限 %.1f。",
                 catalog.stars.size(),
@@ -175,7 +237,11 @@ public final class SkyChartView extends View {
                 observer.locationName,
                 formatFieldOfView(fieldOfViewDegrees),
                 visibleStarMagnitudeLimit()
-        );
+        ));
+        if (!showClusters || !showNebulae || !showGalaxies || !showAsteroids || !showComets) {
+            text.append(" 提示：点击「图层」按钮可开启星团/星云/星系/小行星/彗星等图层。");
+        }
+        return text.toString();
     }
 
     private static String formatFieldOfView(double degrees) {
@@ -206,11 +272,22 @@ public final class SkyChartView extends View {
         CameraBasis basis = cameraBasis();
         drawGround(canvas, basis);
         drawSkyGrid(canvas, basis);
+        // Stars and the Milky Way are always drawn; only constellation lines,
+        // DSO categories, and solar-system / small-body layers are toggleable.
         drawMilkyWay(canvas, basis);
-        drawConstellationLines(canvas, basis);
+        if (showConstellationLines) {
+            drawConstellationLines(canvas, basis);
+        }
         drawStars(canvas, basis);
-        drawDeepSkyObjects(canvas, basis);
-        drawSolarSystemObjects(canvas, basis);
+        if (showClusters || showNebulae || showGalaxies) {
+            drawDeepSkyObjects(canvas, basis);
+        }
+        if (showSolarSystem) {
+            drawSolarSystemObjects(canvas, basis);
+        }
+        if (showAsteroids || showComets) {
+            drawSmallBodiesLayer(canvas, basis);
+        }
         drawSelectedTarget(canvas, basis);
         drawMountPointing(canvas, basis);
         drawViewReadout(canvas);
@@ -594,6 +671,12 @@ public final class SkyChartView extends View {
             if (!shouldDrawDeepSkyObject(object)) {
                 continue;
             }
+            boolean cluster = isCluster(object.type);
+            boolean nebula = !cluster && isNebula(object.type);
+            boolean galaxy = !cluster && !nebula;
+            if (cluster && !showClusters) continue;
+            if (nebula && !showNebulae) continue;
+            if (galaxy && !showGalaxies) continue;
             HorizontalPosition position = toHorizontal(object.raHours, object.decDegrees, localSiderealDegrees);
             if (position.altitudeDegrees < 0.0) {
                 continue;
@@ -603,7 +686,7 @@ public final class SkyChartView extends View {
                 continue;
             }
 
-            float size = object.magnitude == object.magnitude ? (float) clamp(10.5 - object.magnitude * 0.35, 4.5, 9.0) : dp(6);
+            float size = !Double.isNaN(object.magnitude) ? (float) clamp(10.5 - object.magnitude * 0.35, 4.5, 9.0) : dp(6);
             drawDeepSkyIcon(canvas, object.type, point.x, point.y, size);
 
             if (shouldLabelDeepSkyObject(object, position.altitudeDegrees, point)) {
@@ -665,6 +748,99 @@ public final class SkyChartView extends View {
                 canvas.drawText(body.label, point.x + dp(8), point.y - dp(8), paint);
             }
         }
+    }
+
+    private void drawSmallBodiesLayer(Canvas canvas, CameraBasis basis) {
+        if (smallBodyCatalog == null || (!showAsteroids && !showComets)) {
+            return;
+        }
+        double localSiderealDegrees = localSiderealDegrees();
+
+        // Locate Sun's screen position so comet tails point anti-sunward in 2D.
+        // project() may return null if the Sun is outside the view frustum; the
+        // tail then falls back to the chart-centre direction.
+        ScreenPoint sunScreen = null;
+        for (SolarSystemEphemeris.Body body : SolarSystemEphemeris.bodies(currentInstant)) {
+            if ("sun".equals(body.id)) {
+                HorizontalPosition position = toHorizontal(body.raHours, body.decDegrees, localSiderealDegrees);
+                sunScreen = project(position, basis);
+                break;
+            }
+        }
+
+        for (SolarSystemEphemeris.Body body : smallBodyCatalog.bodies(currentInstant)) {
+            boolean isComet = body.id != null && body.id.startsWith("comet:");
+            if (isComet && !showComets) continue;
+            if (!isComet && !showAsteroids) continue;
+            HorizontalPosition position = toHorizontal(body.raHours, body.decDegrees, localSiderealDegrees);
+            if (position.altitudeDegrees < -1.0) {
+                continue;
+            }
+            ScreenPoint point = project(position, basis);
+            if (point == null || !isVisible(point.x, point.y, dp(20))) {
+                continue;
+            }
+            if (isComet) {
+                drawCometIcon(canvas, point.x, point.y, sunScreen);
+            } else {
+                drawAsteroidIcon(canvas, point.x, point.y);
+            }
+            if (fieldOfViewDegrees < 32.0) {
+                paint.setStyle(Paint.Style.FILL);
+                paint.setTextSize(dp(9));
+                paint.setColor(Color.argb(220, isComet ? 165 : 248, isComet ? 220 : 180, isComet ? 252 : 140));
+                canvas.drawText(body.label, point.x + dp(6), point.y - dp(5), paint);
+            }
+        }
+    }
+
+    private void drawAsteroidIcon(Canvas canvas, float x, float y) {
+        Path diamond = new Path();
+        float s = dp(3);
+        diamond.moveTo(x, y - s);
+        diamond.lineTo(x + s * 0.7f, y);
+        diamond.lineTo(x, y + s);
+        diamond.lineTo(x - s * 0.7f, y);
+        diamond.close();
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(Color.rgb(248, 180, 100));
+        canvas.drawPath(diamond, paint);
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(1f);
+        paint.setColor(Color.argb(220, 250, 204, 121));
+        canvas.drawPath(diamond, paint);
+    }
+
+    private void drawCometIcon(Canvas canvas, float x, float y, ScreenPoint sunScreen) {
+        // Tail direction in screen space — away from the Sun, fall back to up.
+        float dx = 0f;
+        float dy = -dp(8);
+        if (sunScreen != null) {
+            float vx = x - sunScreen.x;
+            float vy = y - sunScreen.y;
+            float len = (float) Math.sqrt(vx * vx + vy * vy);
+            if (len > 0.5f) {
+                float scale = dp(11) / len;
+                dx = vx * scale;
+                dy = vy * scale;
+            }
+        }
+        // Tail (two strokes, fading outward).
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(dp(1));
+        paint.setColor(Color.argb(190, 165, 220, 252));
+        canvas.drawLine(x, y, x + dx, y + dy, paint);
+        paint.setStrokeWidth(dp(1) * 0.55f);
+        paint.setColor(Color.argb(110, 165, 220, 252));
+        canvas.drawLine(x + dx * 0.6f, y + dy * 0.6f, x + dx * 1.6f, y + dy * 1.6f, paint);
+        // Coma halo and bright nucleus.
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(1f);
+        paint.setColor(Color.argb(140, 165, 220, 252));
+        canvas.drawCircle(x, y, dp(3), paint);
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(Color.rgb(220, 240, 252));
+        canvas.drawCircle(x, y, dp(2) * 0.7f, paint);
     }
 
     private void drawSolarSystemIcon(Canvas canvas, SolarSystemEphemeris.Body body, float x, float y, float size) {
@@ -869,6 +1045,9 @@ public final class SkyChartView extends View {
         if (id == null) {
             return null;
         }
+        if ((id.startsWith("asteroid:") || id.startsWith("comet:")) && smallBodyCatalog != null) {
+            return smallBodyCatalog.findByName(currentInstant, id.substring(id.indexOf(':') + 1));
+        }
         for (SolarSystemEphemeris.Body body : SolarSystemEphemeris.bodies(currentInstant)) {
             if (id.equals(body.id)) {
                 return body;
@@ -899,6 +1078,27 @@ public final class SkyChartView extends View {
             if (targetDistance < nearestDistance) {
                 nearestDistance = targetDistance;
                 nearest = Target.solarSystemObject(body.id, body.label, body.raHours, body.decDegrees);
+            }
+        }
+
+        if (smallBodyCatalog != null && (showAsteroids || showComets)) {
+            for (SolarSystemEphemeris.Body body : smallBodyCatalog.bodies(currentInstant)) {
+                boolean isComet = body.id != null && body.id.startsWith("comet:");
+                if (isComet && !showComets) continue;
+                if (!isComet && !showAsteroids) continue;
+                HorizontalPosition position = toHorizontal(body.raHours, body.decDegrees, localSiderealDegrees);
+                if (position.altitudeDegrees < -1.0) {
+                    continue;
+                }
+                ScreenPoint point = project(position, basis);
+                if (point == null || !isVisible(point.x, point.y, dp(20))) {
+                    continue;
+                }
+                double targetDistance = distance(point.x, point.y, x, y);
+                if (targetDistance < nearestDistance) {
+                    nearestDistance = targetDistance;
+                    nearest = Target.solarSystemObject(body.id, body.label, body.raHours, body.decDegrees);
+                }
             }
         }
 
@@ -1079,11 +1279,11 @@ public final class SkyChartView extends View {
         }
         if (fieldOfViewDegrees >= 86.0) {
             return isShowpiece(object)
-                    || object.name.startsWith("M") && object.magnitude == object.magnitude && object.magnitude <= 6.8;
+                    || object.name.startsWith("M") && !Double.isNaN(object.magnitude) && object.magnitude <= 6.8;
         }
         if (fieldOfViewDegrees >= 58.0) {
             return isShowpiece(object)
-                    || object.name.startsWith("M") && object.magnitude == object.magnitude && object.magnitude <= 9.5;
+                    || object.name.startsWith("M") && !Double.isNaN(object.magnitude) && object.magnitude <= 9.5;
         }
         return true;
     }

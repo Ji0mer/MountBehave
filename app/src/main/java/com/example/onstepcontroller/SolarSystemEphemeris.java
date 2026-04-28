@@ -9,40 +9,65 @@ import java.util.Locale;
 final class SolarSystemEphemeris {
     private static final double J2000_JULIAN_DAY = 2_451_545.0;
     private static final double SCHLYTER_EPOCH_JULIAN_DAY = 2_451_543.5;
+    // Speed of light in AU/day (1/c·86400, with c = 299792.458 km/s, 1 AU = 149597870.7 km)
+    private static final double LIGHT_AU_PER_DAY = 173.144632674240;
+    // Annual aberration constant κ in degrees (20.49552″).
+    private static final double ABERRATION_DEG = 20.49552 / 3600.0;
+    private static final double DAYS_PER_MILLENNIUM = 365250.0;
 
     private SolarSystemEphemeris() {
     }
 
     static List<Body> bodies(Instant instant) {
         double jd = julianDay(instant);
+        double centuries = (jd - J2000_JULIAN_DAY) / 36525.0;
+        double millennia = (jd - J2000_JULIAN_DAY) / DAYS_PER_MILLENNIUM;
         double days = jd - SCHLYTER_EPOCH_JULIAN_DAY;
-        double j2000Days = jd - J2000_JULIAN_DAY;
 
-        EclipticVector sun = sunVector(days);
-        EquatorialPoint sunEquatorial = toEquatorial(sun, days);
-        EclipticVector moon = moonVector(days, sun);
-        EquatorialPoint moonEquatorial = toEquatorial(moon, days);
+        Nutation nutation = nutation(centuries);
+        double meanObliquity = meanObliquityDegrees(centuries);
+        double trueObliquity = meanObliquity + nutation.deltaEpsilonDeg;
+
+        double[] earth = Vsop87Tables.earthCoordinates(millennia);
+        double earthLDeg = normalizeDegrees(degrees(earth[0]));
+        double earthBDeg = degrees(earth[1]);
+        double earthR = earth[2];
+        EclipticVector earthHelio = EclipticVector.fromSpherical(earthLDeg, earthBDeg, earthR);
+
+        double sunGeometricLongitude = normalizeDegrees(earthLDeg + 180.0);
+        double sunGeometricLatitude = -earthBDeg;
+        double sunApparentLongitude = normalizeDegrees(
+                sunGeometricLongitude - ABERRATION_DEG + nutation.deltaPsiDeg);
+        EquatorialPoint sunEquatorial = eclipticToEquatorial(sunApparentLongitude, sunGeometricLatitude, trueObliquity);
+
+        double sunMeanAnomalyDeg = normalizeDegrees(
+                357.52911 + 35999.05029 * centuries - 0.0001537 * centuries * centuries);
+
+        MoonPosition moon = moonPosition(days, sunGeometricLongitude, sunMeanAnomalyDeg, nutation);
+        EquatorialPoint moonEquatorial = eclipticToEquatorial(moon.apparentLongitudeDeg, moon.latitudeDeg, trueObliquity);
 
         List<Body> result = new ArrayList<>();
-        result.add(new Body("sun", "\u592a\u9633", "Sun", sunEquatorial.raHours, sunEquatorial.decDegrees, -26.7, 1.0));
-        result.add(new Body("moon", "\u6708\u4eae", "Moon", moonEquatorial.raHours, moonEquatorial.decDegrees, -12.0, phaseFraction(sun, moon)));
+        result.add(new Body("sun", "太阳", "Sun", sunEquatorial.raHours, sunEquatorial.decDegrees, -26.7, 1.0));
+        result.add(new Body("moon", "月亮", "Moon", moonEquatorial.raHours, moonEquatorial.decDegrees, -12.0,
+                phaseFraction(sunGeometricLongitude, moon.longitudeDeg)));
 
-        addPlanet(result, "mercury", "\u6c34\u661f", "Mercury", Planet.MERCURY, days, j2000Days, sun);
-        addPlanet(result, "venus", "\u91d1\u661f", "Venus", Planet.VENUS, days, j2000Days, sun);
-        addPlanet(result, "mars", "\u706b\u661f", "Mars", Planet.MARS, days, j2000Days, sun);
-        addPlanet(result, "jupiter", "\u6728\u661f", "Jupiter", Planet.JUPITER, days, j2000Days, sun);
-        addPlanet(result, "saturn", "\u571f\u661f", "Saturn", Planet.SATURN, days, j2000Days, sun);
-        addPlanet(result, "uranus", "\u5929\u738b\u661f", "Uranus", Planet.URANUS, days, j2000Days, sun);
-        addPlanet(result, "neptune", "\u6d77\u738b\u661f", "Neptune", Planet.NEPTUNE, days, j2000Days, sun);
+        double j2000Days = jd - J2000_JULIAN_DAY;
+        addPlanet(result, "mercury", "水星", "Mercury", Planet.MERCURY, millennia, j2000Days, earthHelio, sunGeometricLongitude, nutation, trueObliquity);
+        addPlanet(result, "venus", "金星", "Venus", Planet.VENUS, millennia, j2000Days, earthHelio, sunGeometricLongitude, nutation, trueObliquity);
+        addPlanet(result, "mars", "火星", "Mars", Planet.MARS, millennia, j2000Days, earthHelio, sunGeometricLongitude, nutation, trueObliquity);
+        addPlanet(result, "jupiter", "木星", "Jupiter", Planet.JUPITER, millennia, j2000Days, earthHelio, sunGeometricLongitude, nutation, trueObliquity);
+        addPlanet(result, "saturn", "土星", "Saturn", Planet.SATURN, millennia, j2000Days, earthHelio, sunGeometricLongitude, nutation, trueObliquity);
+        addPlanet(result, "uranus", "天王星", "Uranus", Planet.URANUS, millennia, j2000Days, earthHelio, sunGeometricLongitude, nutation, trueObliquity);
+        addPlanet(result, "neptune", "海王星", "Neptune", Planet.NEPTUNE, millennia, j2000Days, earthHelio, sunGeometricLongitude, nutation, trueObliquity);
         return Collections.unmodifiableList(result);
     }
 
     static Body findBody(Instant instant, String query) {
-        String normalized = normalizeName(query);
-        if (normalized.isEmpty() && (query == null || query.trim().isEmpty())) {
+        if (query == null || query.trim().isEmpty()) {
             return null;
         }
-        String trimmed = query == null ? "" : query.trim();
+        String normalized = normalizeName(query);
+        String trimmed = query.trim();
         for (Body body : bodies(instant)) {
             if (body.label.equals(trimmed)
                     || body.englishName.equalsIgnoreCase(trimmed)
@@ -56,43 +81,7 @@ final class SolarSystemEphemeris {
         return null;
     }
 
-    private static void addPlanet(
-            List<Body> result,
-            String id,
-            String label,
-            String englishName,
-            Planet planet,
-            double days,
-            double j2000Days,
-            EclipticVector sun
-    ) {
-        EclipticVector heliocentric = planetHeliocentric(planet, days);
-        if (planet == Planet.JUPITER || planet == Planet.SATURN || planet == Planet.URANUS) {
-            heliocentric = applyOuterPlanetPerturbations(planet, heliocentric, days);
-        }
-        EclipticVector geocentric = new EclipticVector(
-                heliocentric.x + sun.x,
-                heliocentric.y + sun.y,
-                heliocentric.z
-        );
-        EquatorialPoint equatorial = toEquatorial(geocentric, days);
-        result.add(new Body(id, label, englishName, equatorial.raHours, equatorial.decDegrees, approximateMagnitude(planet, j2000Days), 1.0));
-    }
-
-    private static EclipticVector sunVector(double days) {
-        double meanAnomaly = normalizeDegrees(356.0470 + 0.9856002585 * days);
-        double perihelion = normalizeDegrees(282.9404 + 0.0000470935 * days);
-        double eccentricity = 0.016709 - 0.000000001151 * days;
-        double eccentricAnomaly = eccentricAnomaly(meanAnomaly, eccentricity);
-        double xv = Math.cos(eccentricAnomaly) - eccentricity;
-        double yv = Math.sqrt(1.0 - eccentricity * eccentricity) * Math.sin(eccentricAnomaly);
-        double trueAnomaly = Math.atan2(yv, xv);
-        double radius = Math.sqrt(xv * xv + yv * yv);
-        double longitude = trueAnomaly + radians(perihelion);
-        return EclipticVector.fromSpherical(degrees(longitude), 0.0, radius);
-    }
-
-    private static EclipticVector moonVector(double days, EclipticVector sun) {
+    private static MoonPosition moonPosition(double days, double sunGeometricLongitude, double sunMeanAnomaly, Nutation nutation) {
         double ascendingNode = normalizeDegrees(125.1228 - 0.0529538083 * days);
         double inclination = 5.1454;
         double perihelion = normalizeDegrees(318.0634 + 0.1643573223 * days);
@@ -101,83 +90,128 @@ final class SolarSystemEphemeris {
         EclipticVector base = orbitalToEcliptic(ascendingNode, inclination, perihelion, 60.2666, eccentricity, meanAnomaly);
 
         SphericalEcliptic spherical = base.toSpherical();
-        double sunLongitude = sun.toSpherical().longitudeDegrees;
-        double sunMeanAnomaly = normalizeDegrees(356.0470 + 0.9856002585 * days);
         double moonMeanLongitude = normalizeDegrees(ascendingNode + perihelion + meanAnomaly);
-        double elongation = normalizeDegrees(moonMeanLongitude - sunLongitude);
+        double elongation = normalizeDegrees(moonMeanLongitude - sunGeometricLongitude);
         double argumentOfLatitude = normalizeDegrees(moonMeanLongitude - ascendingNode);
 
-        double longitudeCorrection =
-                -1.274 * sinDegrees(meanAnomaly - 2.0 * elongation)
-                        + 0.658 * sinDegrees(2.0 * elongation)
-                        - 0.186 * sinDegrees(sunMeanAnomaly)
-                        - 0.059 * sinDegrees(2.0 * meanAnomaly - 2.0 * elongation)
-                        - 0.057 * sinDegrees(meanAnomaly - 2.0 * elongation + sunMeanAnomaly)
-                        + 0.053 * sinDegrees(meanAnomaly + 2.0 * elongation)
-                        + 0.046 * sinDegrees(2.0 * elongation - sunMeanAnomaly)
-                        + 0.041 * sinDegrees(meanAnomaly - sunMeanAnomaly)
-                        - 0.035 * sinDegrees(elongation)
-                        - 0.031 * sinDegrees(meanAnomaly + sunMeanAnomaly)
-                        - 0.015 * sinDegrees(2.0 * argumentOfLatitude - 2.0 * elongation)
-                        + 0.011 * sinDegrees(meanAnomaly - 4.0 * elongation);
-        double latitudeCorrection =
-                -0.173 * sinDegrees(argumentOfLatitude - 2.0 * elongation)
-                        - 0.055 * sinDegrees(meanAnomaly - argumentOfLatitude - 2.0 * elongation)
-                        - 0.046 * sinDegrees(meanAnomaly + argumentOfLatitude - 2.0 * elongation)
-                        + 0.033 * sinDegrees(argumentOfLatitude + 2.0 * elongation)
-                        + 0.017 * sinDegrees(2.0 * meanAnomaly + argumentOfLatitude);
-        double distanceCorrection =
-                -0.58 * cosDegrees(meanAnomaly - 2.0 * elongation)
-                        - 0.46 * cosDegrees(2.0 * elongation);
+        double Mp = meanAnomaly;
+        double Ms = sunMeanAnomaly;
+        double D = elongation;
+        double F = argumentOfLatitude;
 
-        return EclipticVector.fromSpherical(
-                spherical.longitudeDegrees + longitudeCorrection,
-                spherical.latitudeDegrees + latitudeCorrection,
-                spherical.radius + distanceCorrection
+        double dl =
+                -1.274 * sinDegrees(Mp - 2.0 * D)
+                        + 0.658 * sinDegrees(2.0 * D)
+                        - 0.186 * sinDegrees(Ms)
+                        - 0.059 * sinDegrees(2.0 * Mp - 2.0 * D)
+                        - 0.057 * sinDegrees(Mp - 2.0 * D + Ms)
+                        + 0.053 * sinDegrees(Mp + 2.0 * D)
+                        + 0.046 * sinDegrees(2.0 * D - Ms)
+                        + 0.041 * sinDegrees(Mp - Ms)
+                        - 0.035 * sinDegrees(D)
+                        - 0.031 * sinDegrees(Mp + Ms)
+                        - 0.015 * sinDegrees(2.0 * F - 2.0 * D)
+                        + 0.011 * sinDegrees(Mp - 4.0 * D)
+                        + 0.0214 * sinDegrees(2.0 * Mp)
+                        - 0.0066 * sinDegrees(2.0 * Mp - 2.0 * Ms)
+                        - 0.0058 * sinDegrees(2.0 * F)
+                        + 0.0057 * sinDegrees(Mp + 2.0 * D - 2.0 * Ms)
+                        + 0.0053 * sinDegrees(Mp - 2.0 * D - Ms);
+
+        double db =
+                -0.173 * sinDegrees(F - 2.0 * D)
+                        - 0.055 * sinDegrees(Mp - F - 2.0 * D)
+                        - 0.046 * sinDegrees(Mp + F - 2.0 * D)
+                        + 0.033 * sinDegrees(F + 2.0 * D)
+                        + 0.017 * sinDegrees(2.0 * Mp + F)
+                        - 0.0090 * sinDegrees(F - 2.0 * D - Ms)
+                        - 0.0080 * sinDegrees(F - 2.0 * D + Ms)
+                        + 0.0070 * sinDegrees(F + 2.0 * D - Ms)
+                        + 0.0050 * sinDegrees(F - Mp + 2.0 * D);
+
+        double dr =
+                -0.58 * cosDegrees(Mp - 2.0 * D)
+                        - 0.46 * cosDegrees(2.0 * D)
+                        - 0.058 * cosDegrees(2.0 * Mp);
+
+        double longitudeDeg = normalizeDegrees(spherical.longitudeDegrees + dl);
+        double latitudeDeg = spherical.latitudeDegrees + db;
+        double distance = spherical.radius + dr;
+        double apparentLongitudeDeg = normalizeDegrees(longitudeDeg + nutation.deltaPsiDeg);
+        return new MoonPosition(longitudeDeg, apparentLongitudeDeg, latitudeDeg, distance);
+    }
+
+    private static void addPlanet(
+            List<Body> result,
+            String id,
+            String label,
+            String englishName,
+            Planet planet,
+            double millennia,
+            double j2000Days,
+            EclipticVector earthHelio,
+            double sunLongitudeDeg,
+            Nutation nutation,
+            double trueObliquityDeg
+    ) {
+        EclipticVector geocentric = geocentricFromHelio(planet, millennia, earthHelio);
+        double distance = Math.sqrt(geocentric.x * geocentric.x + geocentric.y * geocentric.y + geocentric.z * geocentric.z);
+        double tauDays = distance / LIGHT_AU_PER_DAY;
+        double millenniaAtEmission = millennia - tauDays / DAYS_PER_MILLENNIUM;
+        EclipticVector geocentricCorrected = geocentricFromHelio(planet, millenniaAtEmission, earthHelio);
+
+        SphericalEcliptic spherical = geocentricCorrected.toSpherical();
+        double apparentLongitude = applyAberration(spherical.longitudeDegrees, spherical.latitudeDegrees, sunLongitudeDeg);
+        apparentLongitude = normalizeDegrees(apparentLongitude + nutation.deltaPsiDeg);
+
+        EquatorialPoint equatorial = eclipticToEquatorial(apparentLongitude, spherical.latitudeDegrees, trueObliquityDeg);
+        result.add(new Body(id, label, englishName, equatorial.raHours, equatorial.decDegrees, approximateMagnitude(planet, j2000Days), 1.0));
+    }
+
+    private static EclipticVector geocentricFromHelio(Planet planet, double millennia, EclipticVector earthHelio) {
+        double[] lbr = Vsop87Tables.coordinates(planet, millennia);
+        double longitudeDeg = normalizeDegrees(degrees(lbr[0]));
+        double latitudeDeg = degrees(lbr[1]);
+        EclipticVector helio = EclipticVector.fromSpherical(longitudeDeg, latitudeDeg, lbr[2]);
+        return new EclipticVector(
+                helio.x - earthHelio.x,
+                helio.y - earthHelio.y,
+                helio.z - earthHelio.z
         );
     }
 
-    private static EclipticVector planetHeliocentric(Planet planet, double days) {
-        Elements elements = elements(planet, days);
-        return orbitalToEcliptic(
-                elements.ascendingNodeDegrees,
-                elements.inclinationDegrees,
-                elements.perihelionDegrees,
-                elements.semiMajorAxisAu,
-                elements.eccentricity,
-                elements.meanAnomalyDegrees
-        );
-    }
-
-    private static EclipticVector applyOuterPlanetPerturbations(Planet planet, EclipticVector geocentric, double days) {
-        double jupiterMeanAnomaly = normalizeDegrees(19.8950 + 0.0830853001 * days);
-        double saturnMeanAnomaly = normalizeDegrees(316.9670 + 0.0334442282 * days);
-        double uranusMeanAnomaly = normalizeDegrees(142.5905 + 0.011725806 * days);
-        SphericalEcliptic spherical = geocentric.toSpherical();
-        double longitude = spherical.longitudeDegrees;
-        double latitude = spherical.latitudeDegrees;
-        if (planet == Planet.JUPITER) {
-            longitude += -0.332 * sinDegrees(2.0 * jupiterMeanAnomaly - 5.0 * saturnMeanAnomaly - 67.6)
-                    - 0.056 * sinDegrees(2.0 * jupiterMeanAnomaly - 2.0 * saturnMeanAnomaly + 21.0)
-                    + 0.042 * sinDegrees(3.0 * jupiterMeanAnomaly - 5.0 * saturnMeanAnomaly + 21.0)
-                    - 0.036 * sinDegrees(jupiterMeanAnomaly - 2.0 * saturnMeanAnomaly)
-                    + 0.022 * cosDegrees(jupiterMeanAnomaly - saturnMeanAnomaly)
-                    + 0.023 * sinDegrees(2.0 * jupiterMeanAnomaly - 3.0 * saturnMeanAnomaly + 52.0)
-                    - 0.016 * sinDegrees(jupiterMeanAnomaly - 5.0 * saturnMeanAnomaly - 69.0);
-        } else if (planet == Planet.SATURN) {
-            longitude += 0.812 * sinDegrees(2.0 * jupiterMeanAnomaly - 5.0 * saturnMeanAnomaly - 67.6)
-                    - 0.229 * cosDegrees(2.0 * jupiterMeanAnomaly - 4.0 * saturnMeanAnomaly - 2.0)
-                    + 0.119 * sinDegrees(jupiterMeanAnomaly - 2.0 * saturnMeanAnomaly - 3.0)
-                    + 0.046 * sinDegrees(2.0 * jupiterMeanAnomaly - 6.0 * saturnMeanAnomaly - 69.0)
-                    + 0.014 * sinDegrees(jupiterMeanAnomaly - 3.0 * saturnMeanAnomaly + 32.0);
-            latitude += -0.020 * cosDegrees(2.0 * jupiterMeanAnomaly - 4.0 * saturnMeanAnomaly - 2.0)
-                    + 0.018 * sinDegrees(2.0 * jupiterMeanAnomaly - 6.0 * saturnMeanAnomaly - 49.0);
-        } else if (planet == Planet.URANUS) {
-            longitude += 0.040 * sinDegrees(saturnMeanAnomaly - 2.0 * uranusMeanAnomaly + 6.0)
-                    + 0.035 * sinDegrees(saturnMeanAnomaly - 3.0 * uranusMeanAnomaly + 33.0)
-                    - 0.015 * sinDegrees(jupiterMeanAnomaly - uranusMeanAnomaly + 20.0);
+    private static double applyAberration(double longitudeDeg, double latitudeDeg, double sunLongitudeDeg) {
+        double cosBeta = cosDegrees(latitudeDeg);
+        if (Math.abs(cosBeta) < 1.0e-9) {
+            return longitudeDeg;
         }
-        return EclipticVector.fromSpherical(longitude, latitude, spherical.radius);
+        double deltaLongitude = -ABERRATION_DEG * cosDegrees(sunLongitudeDeg - longitudeDeg) / cosBeta;
+        return longitudeDeg + deltaLongitude;
+    }
+
+    private static Nutation nutation(double centuries) {
+        double T = centuries;
+        double Omega = normalizeDegrees(125.04452 - 1934.136261 * T);
+        double Lsun = normalizeDegrees(280.4665 + 36000.7698 * T);
+        double Lmoon = normalizeDegrees(218.3165 + 481267.8813 * T);
+
+        double deltaPsiArcsec =
+                -17.20 * sinDegrees(Omega)
+                        - 1.32 * sinDegrees(2.0 * Lsun)
+                        - 0.23 * sinDegrees(2.0 * Lmoon)
+                        + 0.21 * sinDegrees(2.0 * Omega);
+        double deltaEpsilonArcsec =
+                9.20 * cosDegrees(Omega)
+                        + 0.57 * cosDegrees(2.0 * Lsun)
+                        + 0.10 * cosDegrees(2.0 * Lmoon)
+                        - 0.09 * cosDegrees(2.0 * Omega);
+        return new Nutation(deltaPsiArcsec / 3600.0, deltaEpsilonArcsec / 3600.0);
+    }
+
+    private static double meanObliquityDegrees(double centuries) {
+        double T = centuries;
+        double seconds = 21.448 - 46.8150 * T - 0.00059 * T * T + 0.001813 * T * T * T;
+        return 23.0 + (26.0 + seconds / 60.0) / 60.0;
     }
 
     private static EclipticVector orbitalToEcliptic(
@@ -211,19 +245,23 @@ final class SolarSystemEphemeris {
         );
     }
 
-    private static EquatorialPoint toEquatorial(EclipticVector vector, double days) {
-        double obliquity = radians(23.4393 - 0.0000003563 * days);
-        double x = vector.x;
-        double y = vector.y * Math.cos(obliquity) - vector.z * Math.sin(obliquity);
-        double z = vector.y * Math.sin(obliquity) + vector.z * Math.cos(obliquity);
+    private static EquatorialPoint eclipticToEquatorial(double longitudeDeg, double latitudeDeg, double obliquityDeg) {
+        double lambda = radians(longitudeDeg);
+        double beta = radians(latitudeDeg);
+        double obliquity = radians(obliquityDeg);
+        double sinBeta = Math.sin(beta);
+        double cosBeta = Math.cos(beta);
+        double y = Math.sin(lambda) * Math.cos(obliquity) - Math.tan(beta) * Math.sin(obliquity);
+        double x = Math.cos(lambda);
         double ra = normalizeDegrees(degrees(Math.atan2(y, x))) / 15.0;
-        double dec = degrees(Math.atan2(z, Math.sqrt(x * x + y * y)));
+        double dec = degrees(Math.asin(clamp(sinBeta * Math.cos(obliquity) + cosBeta * Math.sin(obliquity) * Math.sin(lambda), -1.0, 1.0)));
         return new EquatorialPoint(ra, dec);
     }
 
-    private static double phaseFraction(EclipticVector sun, EclipticVector moon) {
-        double dot = sun.normalized().dot(moon.normalized());
-        return clamp((1.0 - dot) * 0.5, 0.0, 1.0);
+    private static double phaseFraction(double sunLongitudeDeg, double moonLongitudeDeg) {
+        double elongation = normalizeDegrees(moonLongitudeDeg - sunLongitudeDeg);
+        double radians = radians(elongation);
+        return clamp((1.0 - Math.cos(radians)) * 0.5, 0.0, 1.0);
     }
 
     private static double approximateMagnitude(Planet planet, double j2000Days) {
@@ -244,76 +282,6 @@ final class SolarSystemEphemeris {
                 return 7.8;
             default:
                 return 0.0;
-        }
-    }
-
-    private static Elements elements(Planet planet, double days) {
-        switch (planet) {
-            case MERCURY:
-                return new Elements(
-                        48.3313 + 0.0000324587 * days,
-                        7.0047 + 0.00000005 * days,
-                        29.1241 + 0.0000101444 * days,
-                        0.387098,
-                        0.205635 + 0.000000000559 * days,
-                        168.6562 + 4.0923344368 * days
-                );
-            case VENUS:
-                return new Elements(
-                        76.6799 + 0.0000246590 * days,
-                        3.3946 + 0.0000000275 * days,
-                        54.8910 + 0.0000138374 * days,
-                        0.723330,
-                        0.006773 - 0.000000001302 * days,
-                        48.0052 + 1.6021302244 * days
-                );
-            case MARS:
-                return new Elements(
-                        49.5574 + 0.0000211081 * days,
-                        1.8497 - 0.0000000178 * days,
-                        286.5016 + 0.0000292961 * days,
-                        1.523688,
-                        0.093405 + 0.000000002516 * days,
-                        18.6021 + 0.5240207766 * days
-                );
-            case JUPITER:
-                return new Elements(
-                        100.4542 + 0.0000276854 * days,
-                        1.3030 - 0.0000001557 * days,
-                        273.8777 + 0.0000164505 * days,
-                        5.20256,
-                        0.048498 + 0.000000004469 * days,
-                        19.8950 + 0.0830853001 * days
-                );
-            case SATURN:
-                return new Elements(
-                        113.6634 + 0.0000238980 * days,
-                        2.4886 - 0.0000001081 * days,
-                        339.3939 + 0.0000297661 * days,
-                        9.55475,
-                        0.055546 - 0.000000009499 * days,
-                        316.9670 + 0.0334442282 * days
-                );
-            case URANUS:
-                return new Elements(
-                        74.0005 + 0.000013978 * days,
-                        0.7733 + 0.000000019 * days,
-                        96.6612 + 0.000030565 * days,
-                        19.18171 - 0.0000000155 * days,
-                        0.047318 + 0.00000000745 * days,
-                        142.5905 + 0.011725806 * days
-                );
-            case NEPTUNE:
-                return new Elements(
-                        131.7806 + 0.000030173 * days,
-                        1.7700 - 0.000000255 * days,
-                        272.8461 - 0.000006027 * days,
-                        30.05826 + 0.00000003313 * days,
-                        0.008606 + 0.00000000215 * days,
-                        260.2471 + 0.005995147 * days
-                );
-            default:
-                throw new IllegalArgumentException("Unsupported planet " + planet);
         }
     }
 
@@ -397,31 +365,6 @@ final class SolarSystemEphemeris {
         }
     }
 
-    private static final class Elements {
-        final double ascendingNodeDegrees;
-        final double inclinationDegrees;
-        final double perihelionDegrees;
-        final double semiMajorAxisAu;
-        final double eccentricity;
-        final double meanAnomalyDegrees;
-
-        Elements(
-                double ascendingNodeDegrees,
-                double inclinationDegrees,
-                double perihelionDegrees,
-                double semiMajorAxisAu,
-                double eccentricity,
-                double meanAnomalyDegrees
-        ) {
-            this.ascendingNodeDegrees = ascendingNodeDegrees;
-            this.inclinationDegrees = inclinationDegrees;
-            this.perihelionDegrees = perihelionDegrees;
-            this.semiMajorAxisAu = semiMajorAxisAu;
-            this.eccentricity = eccentricity;
-            this.meanAnomalyDegrees = meanAnomalyDegrees;
-        }
-    }
-
     private static final class EclipticVector {
         final double x;
         final double y;
@@ -455,18 +398,6 @@ final class SolarSystemEphemeris {
                     radius
             );
         }
-
-        EclipticVector normalized() {
-            double radius = Math.sqrt(x * x + y * y + z * z);
-            if (radius < 1.0e-12) {
-                return new EclipticVector(1.0, 0.0, 0.0);
-            }
-            return new EclipticVector(x / radius, y / radius, z / radius);
-        }
-
-        double dot(EclipticVector other) {
-            return x * other.x + y * other.y + z * other.z;
-        }
     }
 
     private static final class SphericalEcliptic {
@@ -488,6 +419,30 @@ final class SolarSystemEphemeris {
         EquatorialPoint(double raHours, double decDegrees) {
             this.raHours = raHours;
             this.decDegrees = decDegrees;
+        }
+    }
+
+    private static final class Nutation {
+        final double deltaPsiDeg;
+        final double deltaEpsilonDeg;
+
+        Nutation(double deltaPsiDeg, double deltaEpsilonDeg) {
+            this.deltaPsiDeg = deltaPsiDeg;
+            this.deltaEpsilonDeg = deltaEpsilonDeg;
+        }
+    }
+
+    private static final class MoonPosition {
+        final double longitudeDeg;
+        final double apparentLongitudeDeg;
+        final double latitudeDeg;
+        final double distanceEarthRadii;
+
+        MoonPosition(double longitudeDeg, double apparentLongitudeDeg, double latitudeDeg, double distanceEarthRadii) {
+            this.longitudeDeg = longitudeDeg;
+            this.apparentLongitudeDeg = apparentLongitudeDeg;
+            this.latitudeDeg = latitudeDeg;
+            this.distanceEarthRadii = distanceEarthRadii;
         }
     }
 }

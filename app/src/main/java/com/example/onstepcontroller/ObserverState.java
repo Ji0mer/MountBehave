@@ -31,7 +31,7 @@ final class ObserverState {
     }
 
     ObserverState withLocation(double latitudeDegrees, double longitudeDegrees, String locationName) {
-        return new ObserverState(latitudeDegrees, longitudeDegrees, zoneId, locationName);
+        return new ObserverState(latitudeDegrees, longitudeDegrees, ZoneId.systemDefault(), locationName);
     }
 
     ObserverState withDeviceZone() {

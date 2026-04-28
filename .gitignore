@@ -1,6 +1,7 @@
 .gradle/
 .toolchain/
 .avd/
+.claude/
 data/raw/
 build/
 app/build/
@@ -11,3 +12,6 @@ local.properties
 *.aab
 preview-*.png
 window.xml
+scripts/data/
+scripts/__pycache__/
+**/__pycache__/

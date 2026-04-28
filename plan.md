@@ -153,3 +153,167 @@ cd D:\Android_projects\controller
 - [Yale Bright Star Catalog](https://tdc-www.harvard.edu/catalogs/bsc5.html)：亮星数据来源候选。
 - [HYG Database](https://astronexus.com/projects/hyg)：亮星/近星综合数据来源和许可证。
 - [Stellarium skycultures](https://github.com/Stellarium/stellarium-skycultures)：星座连线数据格式和授权注意事项。
+
+---
+
+# 极轴对齐方案改进研究(2026-04-28 增补)
+
+## 背景
+
+v0.1.0 已实现"三星校准 + `:MP#` 极轴精调"流程,但实际使用反馈步骤偏多。本研究目的:在**目视使用、不依赖相机解析**的约束下,探索更短/更易用的对极轴方案,作为后续版本的实施参考。
+
+### 当前实现回顾(已逐行核对源码)
+
+`app/src/main/java/com/example/onstepcontroller/MainActivity.java` 中的极轴流程:
+
+- **三星校准**:`startAlignment(3)` → `:A3#` → 对每颗星 `:Sr<RA># :Sd<Dec># :CM#`(3 次)→ `:AW#` 保存模型(`MainActivity.java:2567-2913`)
+- **三星极轴精调**:`gotoRefinePolarAlignmentTarget()` GOTO 一颗精调星 → 用户**手控居中** → `refinePolarAlignment()` 发 `:MP#` → 提示用户**只用方位/高度螺丝**把星移回中心(`MainActivity.java:2929-2976`)
+- **校准星推荐**(`SkyChartView.java:214-224`,`1162-1176`):一阶 ≥20° + 星等 ≤3.0;二阶 ≥10° + 星等 ≤4.0;无显式三星几何分布检查
+- **架台侧检测**(`MainActivity.java:3217-3220`):`:Gm#` 查询 + `signedHourAngle ≥ 0 ? "E" : "W"` 推算期望
+
+### 当前流程操作量
+
+从启动到极轴 OK:**~12 次按钮 + 4 次 GOTO + 4-5 次手控调节**(其中 3 次电机居中 + 1 次纯机械调螺丝)。
+
+### 痛点与场景
+
+- **主要痛点**:步骤太多
+- **场景**:兼顾"野外重新起架"(初始 ±10° 偏差)与"定点小修"(亚度量级偏差)
+
+---
+
+## 候选方案对比
+
+| ID | 方案 | 星数 | 步数 | 精度上限 | 起始容错 | 实施难度 |
+|---|---|---|---|---|---|---|
+| 0 | 现行(3 星 + `:MP#`) | 3 | 12+ | ~30″ | 中(±2°) | 已实现 |
+| **A** | **2 星 + `:MP#` 精调** | 2 | ~8 | ~30″ | 中 | **低**(主要改 UI/状态机) |
+| B | All-Star(1 同步 + 1 测量) | 2 | ~6 | ~1′ | 高(±10°+) | 中(app 端解极轴误差) |
+| C | 双星残差解(2 星都做模型) | 2 | ~7 | ~1′ | 高 | 中 |
+| **D** | **漂移法向导(Bigourdan)** | 1-2 | 1 GOTO + 5-15 min 实时 | **<10″** | 任意 | 中(实时漂移率 UI) |
+| **E** | **现行 + 量化残差显示** | 同 0 | 同 0 | 同 0 | 同 0 | 低(加 OnStepX 扩展查询) |
+
+### 各方案要点
+
+**A. 2 星 + `:MP#`(快速路径)**
+- 流程:`:A2#` → 2 颗星(`:Sr/:Sd/:CM`)→ `:AW#` → GOTO 精调星 → 手控居中 → `:MP#` → 螺丝调节
+- 数学上 OnStep 仅需 ≥2 个独立指向约束就能算极轴 alt/az 误差,理论可行
+- 风险:需在 mock + 实机上验证 OnStep 固件**确实接受 `:A2#` 之后的 `:MP#`**(经典 OnStep 4.x 通常支持;需复测)
+- 节省:相对现行 ≈ -4 次按钮、-1 次 GOTO、-1 次手控居中
+
+**B. All-Star(SkyWatcher / Celestron 算法)**
+- 步骤:
+  1. 用户选一颗显眼亮星 → GOTO → 手控居中 → `:CM#` 同步
+  2. App 推荐第二颗"极轴敏感"星(典型选南方近子午圈或东方近地平,Az/Alt 误差敏感度互补)
+  3. GOTO 第二颗星 → 看望远镜里星偏离视场中心多少
+  4. **App 端反算极轴 alt/az 误差**(球面三角解,~30 行核心 + 50 行测试)
+  5. 提示:"方位调 X′,高度调 Y′" → 用户拧螺丝直到星回中心
+- 完全独立于 OnStep 极轴指令,跨固件可移植
+- 容忍最大初始误差(只需第 1 颗星看得见就能起手)
+- 适合野外冷启动
+
+**C. 双星残差解**
+- 与 B 类似,但做完整 2 星 OnStep 模型,然后从模型残差读 polar 误差
+- 比 A 多一步保存模型,意义不大;**不推荐独立采用**
+
+**D. 漂移法向导**
+- 经典 Bigourdan/King 法:看星在 Dec 上漂移率
+  - **东方近赤道**星 → Dec 北漂 = 极轴方位偏西(反之偏东)→ 调方位螺丝
+  - **子午圈**星 → Dec 北漂 = 极轴高度偏低(反之偏高)→ 调高度螺丝
+- App 实现:每 1-2 秒查询 `:GR# :GD#`,记录 Dec 时间序列,显示漂移率(arcsec/min)
+- 用户实时看着漂移率边调螺丝直到归零
+- 1 次 GOTO + 长时间观察(5-15 分钟/轴)
+- **精度最好**(可到 <10″),适合定点架并需要长曝光跟踪
+- 不依赖 OnStep 校准模型
+
+**E. 量化残差显示(增量改进)**
+- 用 OnStepX `:GX91#`/`:GX92#`(polar align azimuth/altitude correction,arcsec)读残差
+- 把现有"凭感觉调螺丝"换成"方位向东 X′ Y″,高度向上 P′ Q″"
+- 不改流程,纯文案增强;失败安全(查询不到时回退原文案)
+
+---
+
+## 推荐(主+辅 双方案)
+
+### 主方案:**A(2 星 + `:MP#`) + E(量化残差)**
+
+理由:对"步数太多"痛点最直接,且改动局限在 UI/文案/查询命令,不引入新数学。新流程:
+
+1. 选第 1 颗校准星 → GOTO → 手控居中 → 接受
+2. 选第 2 颗校准星 → GOTO → 手控居中 → 接受 → 自动 `:AW#`
+3. App 自动 `:GX91#`/`:GX92#` → 显示"方位向东 X′,高度向上 Y′"
+4. 用户拧螺丝(可选:GOTO 校准星 #2 看是否回中,验证调整效果)
+
+总步数:**~7 次按钮 + 2 次 GOTO + 2 次手控居中 + 1 次拧螺丝**(对比现行 12+/4/4-5)。
+
+### 辅方案:**D(漂移法向导)** 作为高精度选项
+
+在校准模式枚举里新增"漂移法极轴(高精度)",作为定点台/长曝光场景的可选项。流程:
+
+1. 选东方近赤道星 → GOTO → 手控居中 → 启动漂移监测
+2. App 显示 Dec 漂移率(arcsec/min)及方向提示("偏西 → 方位螺丝向东微调")
+3. 用户调螺丝,实时看漂移率减小到 0
+4. 切换到子午圈星,重复调高度
+
+总时长 5-15 分钟/轴,但精度可达 <10″。
+
+### 不动现行三星模式
+
+保留作为"完整指向模型 + 极轴精调"路径,适合愿意花时间换 GOTO 精度的用户。
+
+---
+
+## 实施步骤
+
+### 文件改动清单(预估)
+
+- `app/src/main/java/.../MainActivity.java`(主体)
+  - `CalibrationMode` 增加 `TWO_STAR_REFINE_POLAR`、`DRIFT_POLAR`(辅方案)
+  - 新增 `queryPolarResiduals()`:发 `:GX91#`/`:GX92#`,解析 arcsec → 角分/角秒文案
+  - 新增 `startDriftMonitor()` / `stopDriftMonitor()`:周期 1 Hz 查 `:GR# :GD#`,维护一个最近 60 个采样的 ring buffer,算线性回归得 arcsec/min 漂移率
+  - `refinePolarAlignment()` 增加成功后自动调 `queryPolarResiduals()` 把残差填到状态文案
+- `app/src/main/res/values/strings.xml`
+  - 新模式名:`calibration_mode_two_star_refine_polar`、`calibration_mode_drift_polar`
+  - 量化模板:`polar_residual_hint = "建议:方位向%1$s调 %2$s,高度向%3$s调 %4$s"`
+  - 漂移法说明文案
+- `scripts/mock-onstep.ps1`
+  - 加 `:GX91#`/`:GX92#` mock 响应(返回固定 arcsec 值便于测试)
+  - 加 `:MP#` mock(成功响应)
+  - 加 `:GR#`/`:GD#` 周期性返回带漂移的位置(用于漂移法 UI 测试)
+- 文档
+  - 新增 `docs/polar-alignment.md`:三种模式说明 + 选择指南
+  - `README.md` 校准流程段落更新
+  - `CHANGELOG.md` 添加新条目
+
+### 风险与回退
+
+- **`:MP#` 可能仅在 3 星模型后才工作**:实机或 mock 验证不通过时,A 退回 3 星,只保留 E(量化残差)的改进
+- **`:GX91#`/`:GX92#` 经典 OnStep 不支持**:查询失败时静默回退到原"凭感觉"文案,UI 不报错
+- **漂移法实现复杂**:可分阶段;初版只显示漂移率,不做调螺丝方向智能提示,留给用户经验判断;后续再加方向语义
+
+### 验证(端到端)
+
+1. `scripts/mock-onstep.ps1` 加上 mock 命令后:
+   - 跑 2 星模式 → 完成后看到"方位向东 4′,高度向上 2′"文案 ✓
+   - 切到漂移法 → 监测窗口里看到漂移率刷新 ✓
+2. 实机(晴空 ST17)夜晚:
+   - 大初始误差(故意把方位偏 5°)→ 2 星模式能在 <10 分钟收敛到 <1′ ✓
+   - 小初始误差 → 漂移法 15 分钟内调到 <30″ ✓
+
+### 不在范围
+
+- 相机解析路线(用户已明确排除)
+- 改 OnStep 固件本身
+- 添加新硬件(极轴镜、电子寻星)
+
+---
+
+## 关键文件路径速查
+
+- 主活动:`app/src/main/java/com/example/onstepcontroller/MainActivity.java`
+  - 校准状态机 lines 2567-2976
+  - LX200 命令枚举 lines 4758-4773
+- 星图视图:`app/src/main/java/com/example/onstepcontroller/SkyChartView.java`
+  - 校准星推荐 lines 214-224, 1162-1176
+- 字符串资源:`app/src/main/res/values/strings.xml`
+- Mock OnStep:`scripts/mock-onstep.ps1`

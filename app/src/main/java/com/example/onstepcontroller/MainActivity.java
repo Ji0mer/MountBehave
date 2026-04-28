@@ -34,13 +34,23 @@ import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
+import android.widget.SeekBar;
 import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.ArrayAdapter;
 import android.widget.AdapterView;
 
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
 import java.net.SocketTimeoutException;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.ArrayDeque;
@@ -53,6 +63,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import javax.net.SocketFactory;
 
@@ -167,11 +178,11 @@ public final class MainActivity extends Activity {
     private WifiManager.WifiLock wifiLock;
     private Network boundWifiNetwork;
 
-    private boolean connected;
-    private boolean busy;
+    private volatile boolean connected;
+    private volatile boolean busy;
     private boolean sideMenuExpanded;
     private boolean nightModeEnabled;
-    private boolean gotoInProgress;
+    private volatile boolean gotoInProgress;
     private boolean parked;
     private String connectedHost;
     private int connectedPort = DEFAULT_PORT;
@@ -193,7 +204,7 @@ public final class MainActivity extends Activity {
     private boolean hasThreeStarTrackingModel;
     private boolean trackingUsingDualAxis;
     private TrackingRate selectedTrackingRate = TrackingRate.SIDEREAL;
-    private Direction activeDirection;
+    private volatile Direction activeDirection;
     private SkyChartView.Target selectedSkyTarget;
     private SkyChartView.Target calibrationTarget;
     private SkyChartView.Target syncedCurrentTarget;
@@ -206,8 +217,13 @@ public final class MainActivity extends Activity {
     private ManualRate selectedManualRate = ManualRate.CENTER;
     private CalibrationMode selectedCalibrationMode = CalibrationMode.QUICK_SYNC;
     private Page currentPage = Page.SETTINGS;
-    private AlignmentSession alignmentSession;
+    private volatile AlignmentSession alignmentSession;
     private int suggestedCalibrationIndex;
+    private SmallBodyCatalog smallBodyCatalog;
+    private TextView smallBodyStatusText;
+    private Button smallBodyDownloadAsteroidsButton;
+    private Button smallBodyDownloadCometsButton;
+    private Button smallBodyClearUserButton;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -215,6 +231,7 @@ public final class MainActivity extends Activity {
         connectivityManager = (ConnectivityManager) getApplicationContext().getSystemService(Context.CONNECTIVITY_SERVICE);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         applyNightModeWindow();
+        smallBodyCatalog = new SmallBodyCatalog(getFilesDir());
         setContentView(createContentView());
         updateUiState();
         updateObserverViews();
@@ -225,6 +242,10 @@ public final class MainActivity extends Activity {
         super.onResume();
         acquireWifiLock();
         uiHandler.post(skyClockRunnable);
+        if (connected && !busy) {
+            refreshGotoStatus();
+            refreshMountPointing();
+        }
     }
 
     @Override
@@ -252,6 +273,11 @@ public final class MainActivity extends Activity {
             }
         });
         ioExecutor.shutdown();
+        try {
+            ioExecutor.awaitTermination(2, TimeUnit.SECONDS);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+        }
         releaseWifiLock();
         releaseWifiBinding();
         super.onDestroy();
@@ -389,6 +415,7 @@ public final class MainActivity extends Activity {
 
         skyChartView = new SkyChartView(this);
         skyChartView.setObserver(observerState, Instant.now());
+        skyChartView.setSmallBodyCatalog(smallBodyCatalog);
         skyChartView.setTargetSelectionListener(target -> {
             selectedSkyTarget = target;
             updateTargetViews();
@@ -456,6 +483,12 @@ public final class MainActivity extends Activity {
         skyCancelGotoButton.setText(R.string.goto_cancel);
         skyCancelGotoButton.setOnClickListener(v -> cancelGoto());
         actions.addView(skyCancelGotoButton, weightWrapWithLeftMargin(1f, 10));
+
+        Button layersButton = new Button(this);
+        layersButton.setAllCaps(false);
+        layersButton.setText(R.string.sky_layers);
+        layersButton.setOnClickListener(v -> showLayerDialog());
+        actions.addView(layersButton, weightWrapWithLeftMargin(1f, 10));
 
         panel.addView(actions, matchWrap());
 
@@ -679,10 +712,7 @@ public final class MainActivity extends Activity {
             right.setOrientation(LinearLayout.VERTICAL);
             right.addView(sectionTitle(R.string.tracking_section), matchWrap());
             right.addView(createTrackingPanel(), matchWrap());
-            right.addView(sectionTitle(R.string.command_log_section), matchWrapWithTopMargin(12));
-            right.addView(createCommandLogPanel(), matchWrap());
-            right.addView(sectionTitle(R.string.safety_section), matchWrapWithTopMargin(12));
-            right.addView(createSafetyPanel(), matchWrap());
+            addMoreSettingsGroup(right);
             columns.addView(right, weightWrapWithLeftMargin(1f, 16));
 
             page.addView(columns, matchWrap());
@@ -696,14 +726,36 @@ public final class MainActivity extends Activity {
             page.addView(sectionTitle(R.string.tracking_section), matchWrapWithTopMargin(12));
             page.addView(createTrackingPanel(), matchWrap());
 
-            page.addView(sectionTitle(R.string.command_log_section), matchWrapWithTopMargin(12));
-            page.addView(createCommandLogPanel(), matchWrap());
-
-            page.addView(sectionTitle(R.string.safety_section), matchWrapWithTopMargin(12));
-            page.addView(createSafetyPanel(), matchWrap());
+            addMoreSettingsGroup(page);
         }
 
         return page;
+    }
+
+    private void addMoreSettingsGroup(LinearLayout parent) {
+        Button toggle = new Button(this);
+        toggle.setAllCaps(false);
+        toggle.setText(R.string.more_settings_collapsed);
+        LinearLayout.LayoutParams toggleParams = matchWrap();
+        toggleParams.topMargin = dp(12);
+        parent.addView(toggle, toggleParams);
+
+        LinearLayout container = new LinearLayout(this);
+        container.setOrientation(LinearLayout.VERTICAL);
+        container.setVisibility(View.GONE);
+        container.addView(sectionTitle(R.string.command_log_section), matchWrapWithTopMargin(12));
+        container.addView(createCommandLogPanel(), matchWrap());
+        container.addView(sectionTitle(R.string.safety_section), matchWrapWithTopMargin(12));
+        container.addView(createSafetyPanel(), matchWrap());
+        container.addView(sectionTitle(R.string.small_bodies_section), matchWrapWithTopMargin(12));
+        container.addView(createSmallBodiesPanel(), matchWrap());
+        parent.addView(container, matchWrap());
+
+        toggle.setOnClickListener(v -> {
+            boolean expanded = container.getVisibility() == View.VISIBLE;
+            container.setVisibility(expanded ? View.GONE : View.VISIBLE);
+            toggle.setText(expanded ? R.string.more_settings_collapsed : R.string.more_settings_expanded);
+        });
     }
 
     private View createSafetyPanel() {
@@ -776,6 +828,299 @@ public final class MainActivity extends Activity {
         panel.addView(logText, matchWrap());
         updateLogText();
         return panel;
+    }
+
+    private View createSmallBodiesPanel() {
+        LinearLayout panel = card();
+
+        TextView intro = bodyText(R.string.small_bodies_intro);
+        intro.setPadding(0, 0, 0, dp(8));
+        panel.addView(intro, matchWrap());
+
+        smallBodyStatusText = bodyText(R.string.app_name);
+        smallBodyStatusText.setPadding(0, 0, 0, dp(8));
+        panel.addView(smallBodyStatusText, matchWrap());
+
+        TextView magLabel = bodyText(R.string.small_bodies_mag_limit_label);
+        magLabel.setPadding(0, dp(8), 0, dp(2));
+        panel.addView(magLabel, matchWrap());
+
+        SeekBar magSlider = new SeekBar(this);
+        magSlider.setMax(100);
+        double initialMag = smallBodyCatalog == null ? 11.0 : smallBodyCatalog.magnitudeLimit();
+        magSlider.setProgress((int) Math.round((initialMag - 5.0) * 10.0));
+        magLabel.setText(getString(R.string.small_bodies_mag_limit_value, initialMag));
+        magSlider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                double mag = 5.0 + progress / 10.0;
+                if (smallBodyCatalog != null) {
+                    smallBodyCatalog.setMagnitudeLimit(mag);
+                }
+                magLabel.setText(getString(R.string.small_bodies_mag_limit_value, mag));
+            }
+
+            @Override
+            public void onStartTrackingTouch(SeekBar seekBar) {
+            }
+
+            @Override
+            public void onStopTrackingTouch(SeekBar seekBar) {
+                if (skyChartView != null) {
+                    skyChartView.invalidate();
+                }
+            }
+        });
+        panel.addView(magSlider, matchWrap());
+
+        LinearLayout buttonRow = new LinearLayout(this);
+        buttonRow.setOrientation(LinearLayout.HORIZONTAL);
+        buttonRow.setGravity(Gravity.CENTER_VERTICAL);
+        buttonRow.setPadding(0, dp(8), 0, 0);
+
+        smallBodyDownloadAsteroidsButton = actionButton(R.string.small_bodies_download_asteroids);
+        smallBodyDownloadAsteroidsButton.setOnClickListener(v -> startAsteroidDownload());
+        buttonRow.addView(smallBodyDownloadAsteroidsButton, weightWrap(1f));
+
+        smallBodyDownloadCometsButton = actionButton(R.string.small_bodies_download_comets);
+        smallBodyDownloadCometsButton.setOnClickListener(v -> startCometDownload());
+        buttonRow.addView(smallBodyDownloadCometsButton, weightWrapWithLeftMargin(1f, 8));
+        panel.addView(buttonRow, matchWrap());
+
+        smallBodyClearUserButton = actionButton(R.string.small_bodies_clear_user);
+        smallBodyClearUserButton.setOnClickListener(v -> clearUserSmallBodies());
+        LinearLayout.LayoutParams clearParams = matchWrap();
+        clearParams.topMargin = dp(8);
+        panel.addView(smallBodyClearUserButton, clearParams);
+
+        updateSmallBodyStatusText();
+        return panel;
+    }
+
+    private void updateSmallBodyStatusText() {
+        if (smallBodyStatusText == null || smallBodyCatalog == null) {
+            return;
+        }
+        smallBodyStatusText.setText(getString(
+                R.string.small_bodies_status,
+                smallBodyCatalog.bundledCount(),
+                smallBodyCatalog.userAsteroidCount(),
+                smallBodyCatalog.userCometCount()
+        ));
+    }
+
+    private void startAsteroidDownload() {
+        if (smallBodyCatalog == null || smallBodyDownloadAsteroidsButton == null) {
+            return;
+        }
+        final double maxH = smallBodyCatalog.magnitudeLimit();
+        smallBodyDownloadAsteroidsButton.setEnabled(false);
+        setStatus(getString(R.string.small_bodies_download_starting));
+        ioExecutor.execute(() -> {
+            try {
+                String constraint = "{\"AND\":[\"H|LE|" + ((int) Math.round(maxH)) + "\"]}";
+                String url = "https://ssd-api.jpl.nasa.gov/sbdb_query.api"
+                        + "?fields=full_name,e,i,om,w,q,tp,H,G"
+                        + "&sb-kind=a"
+                        + "&sb-cdata=" + java.net.URLEncoder.encode(constraint, StandardCharsets.UTF_8.name())
+                        + "&full-prec=true";
+                String json = httpGet(url);
+                List<SmallBody> parsed = parseSbdbJson(json, false);
+                smallBodyCatalog.replaceUserAsteroids(parsed);
+                runOnUiThread(() -> {
+                    setStatus(getString(R.string.small_bodies_download_done, parsed.size()));
+                    smallBodyDownloadAsteroidsButton.setEnabled(true);
+                    updateSmallBodyStatusText();
+                    if (skyChartView != null) {
+                        skyChartView.invalidate();
+                    }
+                });
+            } catch (Throwable t) {
+                runOnUiThread(() -> {
+                    setStatus(getString(R.string.small_bodies_download_failed,
+                            t.getMessage() == null ? t.getClass().getSimpleName() : t.getMessage()));
+                    smallBodyDownloadAsteroidsButton.setEnabled(true);
+                });
+            }
+        });
+    }
+
+    private void startCometDownload() {
+        if (smallBodyCatalog == null || smallBodyDownloadCometsButton == null) {
+            return;
+        }
+        smallBodyDownloadCometsButton.setEnabled(false);
+        setStatus(getString(R.string.small_bodies_download_starting));
+        ioExecutor.execute(() -> {
+            try {
+                String url = "https://ssd-api.jpl.nasa.gov/sbdb_query.api"
+                        + "?fields=full_name,e,i,om,w,q,tp,M1,K1"
+                        + "&sb-kind=c"
+                        + "&full-prec=true";
+                String json = httpGet(url);
+                List<SmallBody> parsed = parseSbdbJson(json, true);
+                smallBodyCatalog.replaceUserComets(parsed);
+                runOnUiThread(() -> {
+                    setStatus(getString(R.string.small_bodies_download_done, parsed.size()));
+                    smallBodyDownloadCometsButton.setEnabled(true);
+                    updateSmallBodyStatusText();
+                    if (skyChartView != null) {
+                        skyChartView.invalidate();
+                    }
+                });
+            } catch (Throwable t) {
+                runOnUiThread(() -> {
+                    setStatus(getString(R.string.small_bodies_download_failed,
+                            t.getMessage() == null ? t.getClass().getSimpleName() : t.getMessage()));
+                    smallBodyDownloadCometsButton.setEnabled(true);
+                });
+            }
+        });
+    }
+
+    private void clearUserSmallBodies() {
+        if (smallBodyCatalog == null) {
+            return;
+        }
+        try {
+            smallBodyCatalog.clearUserBodies();
+            updateSmallBodyStatusText();
+            if (skyChartView != null) {
+                skyChartView.invalidate();
+            }
+            setStatus(getString(R.string.small_bodies_cleared));
+        } catch (IOException ex) {
+            setStatus(getString(R.string.small_bodies_clear_failed, safeMessage(ex)));
+        }
+    }
+
+    private void showLayerDialog() {
+        if (skyChartView == null) {
+            return;
+        }
+        SkyChartView.LayerType[] layers = new SkyChartView.LayerType[]{
+                SkyChartView.LayerType.CONSTELLATION_LINES,
+                SkyChartView.LayerType.SOLAR_SYSTEM,
+                SkyChartView.LayerType.CLUSTERS,
+                SkyChartView.LayerType.NEBULAE,
+                SkyChartView.LayerType.GALAXIES,
+                SkyChartView.LayerType.ASTEROIDS,
+                SkyChartView.LayerType.COMETS
+        };
+        String[] labels = new String[]{
+                getString(R.string.layer_constellation_lines),
+                getString(R.string.layer_solar_system),
+                getString(R.string.layer_clusters),
+                getString(R.string.layer_nebulae),
+                getString(R.string.layer_galaxies),
+                getString(R.string.layer_asteroids),
+                getString(R.string.layer_comets)
+        };
+        boolean[] checked = new boolean[layers.length];
+        for (int i = 0; i < layers.length; i++) {
+            checked[i] = skyChartView.isLayerVisible(layers[i]);
+        }
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.sky_layers_dialog_title)
+                .setMultiChoiceItems(labels, checked, (dialog, which, isChecked) ->
+                        skyChartView.setLayerVisible(layers[which], isChecked))
+                .setPositiveButton(R.string.layer_dialog_done, null)
+                .show();
+    }
+
+    private static String httpGet(String urlStr) throws IOException {
+        HttpURLConnection conn = (HttpURLConnection) new URL(urlStr).openConnection();
+        try {
+            conn.setConnectTimeout(15000);
+            conn.setReadTimeout(60000);
+            conn.setRequestMethod("GET");
+            conn.setRequestProperty("Accept", "application/json");
+            conn.setRequestProperty("User-Agent", "MountBehave-Android");
+            int code = conn.getResponseCode();
+            if (code != 200) {
+                throw new IOException("HTTP " + code);
+            }
+            StringBuilder sb = new StringBuilder();
+            try (BufferedReader r = new BufferedReader(new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
+                char[] buf = new char[4096];
+                int n;
+                while ((n = r.read(buf)) > 0) {
+                    sb.append(buf, 0, n);
+                }
+            }
+            return sb.toString();
+        } finally {
+            conn.disconnect();
+        }
+    }
+
+    private static List<SmallBody> parseSbdbJson(String json, boolean isComet) throws JSONException {
+        JSONObject root = new JSONObject(json);
+        JSONArray data = root.optJSONArray("data");
+        if (data == null) {
+            return new ArrayList<>();
+        }
+        // Field order is fixed by our query: full_name,e,i,om,w,q,tp,H/M1,G/K1
+        List<SmallBody> out = new ArrayList<>(data.length());
+        for (int i = 0; i < data.length(); i++) {
+            JSONArray row = data.getJSONArray(i);
+            String fullName = row.optString(0, "").trim();
+            String designation = extractDesignation(fullName, isComet);
+            String displayName = extractDisplayName(fullName);
+            double e = parseDouble(row.optString(1, ""), Double.NaN);
+            double inc = parseDouble(row.optString(2, ""), Double.NaN);
+            double om = parseDouble(row.optString(3, ""), Double.NaN);
+            double w = parseDouble(row.optString(4, ""), Double.NaN);
+            double q = parseDouble(row.optString(5, ""), Double.NaN);
+            double tp = parseDouble(row.optString(6, ""), Double.NaN);
+            double h = parseDouble(row.optString(7, ""), Double.NaN);
+            double slope = parseDouble(row.optString(8, ""), isComet ? 4.0 : 0.15);
+            if (!Double.isFinite(e) || !Double.isFinite(q) || !Double.isFinite(tp) || e >= 1.0) {
+                continue;
+            }
+            if (!Double.isFinite(h)) {
+                h = isComet ? 12.0 : 14.0;
+            }
+            out.add(new SmallBody(designation, "", displayName, isComet, tp, q, e, inc, om, w, tp, h, slope));
+        }
+        return out;
+    }
+
+    private static double parseDouble(String value, double fallback) {
+        if (value == null || value.isEmpty()) {
+            return fallback;
+        }
+        try {
+            return Double.parseDouble(value);
+        } catch (NumberFormatException ex) {
+            return fallback;
+        }
+    }
+
+    private static String extractDesignation(String fullName, boolean isComet) {
+        String trimmed = fullName.trim();
+        if (trimmed.isEmpty()) {
+            return "";
+        }
+        if (isComet) {
+            int slash = trimmed.indexOf('/');
+            if (slash > 0) {
+                return trimmed.substring(0, slash).trim();
+            }
+            int space = trimmed.indexOf(' ');
+            return space > 0 ? trimmed.substring(0, space).trim() : trimmed;
+        }
+        int space = trimmed.indexOf(' ');
+        return space > 0 ? trimmed.substring(0, space).trim() : trimmed;
+    }
+
+    private static String extractDisplayName(String fullName) {
+        String trimmed = fullName.trim();
+        int paren = trimmed.indexOf('(');
+        if (paren > 0) {
+            trimmed = trimmed.substring(0, paren).trim();
+        }
+        return trimmed;
     }
 
     private View createTrackingPanel() {
@@ -1230,8 +1575,12 @@ public final class MainActivity extends Activity {
         if (!connected || activeDirection == direction) {
             return;
         }
+        Direction previousDirection = activeDirection;
         clearSyncedCurrentTarget();
         activeDirection = direction;
+        if (previousDirection != null) {
+            enqueueDirectionStop(previousDirection, getString(R.string.log_stop_sent));
+        }
         String rate = getRateCommand();
         appendLog("TX " + rate);
         for (OnStepCommand command : direction.moveCommands) {
@@ -2229,7 +2578,11 @@ public final class MainActivity extends Activity {
         }
         ZonedDateTime now = ZonedDateTime.now(observerState.zoneId);
         List<MountCommand> commands = new ArrayList<>();
+        // Defensive: stop motion + abort any in-flight OnStep alignment state
+        // before we sync observer and issue the new :A2#/:A3#. :A0# is a no-op
+        // on firmware that does not implement abort.
         commands.add(MountCommand.noReply(OnStepCommand.STOP_ALL.command));
+        commands.add(MountCommand.noReply(OnStepCommand.ALIGN_ABORT.command));
         for (String command : buildObserverSyncCommands(now)) {
             commands.add(MountCommand.noReply(command));
         }
@@ -2253,7 +2606,6 @@ public final class MainActivity extends Activity {
                     setCalibrationStatus(getString(R.string.calibration_align_started, starCount));
                     updateTrackingViews();
                     updateCalibrationViews();
-                    fillSuggestedCalibrationTarget();
                 }
         );
     }
@@ -2425,6 +2777,15 @@ public final class MainActivity extends Activity {
                         + ex.getClass().getSimpleName() + " " + safeMessage(ex));
             }
 
+            if (!accepted) {
+                try {
+                    client.sendNoReply(OnStepCommand.STOP_ALL.command);
+                    diagnosticLog.add("DIAG ALIGN_ACCEPT cleanup :Q# sent");
+                } catch (IOException ex) {
+                    diagnosticLog.add("DIAG ALIGN_ACCEPT cleanup :Q# failed: "
+                            + ex.getClass().getSimpleName() + " " + safeMessage(ex));
+                }
+            }
             collectAlignmentDiagnostics(diagnosticLog, "post", acceptedTarget);
             boolean finalAccepted = accepted;
             String finalFailureStatus = failureStatus == null
@@ -2517,7 +2878,6 @@ public final class MainActivity extends Activity {
                     alignmentSession.currentStarNumber(),
                     alignmentSession.totalStars
             ));
-            fillSuggestedCalibrationTarget();
         }
         clearSyncedCurrentTarget();
         clearQuickPointingCorrection();
@@ -2543,16 +2903,31 @@ public final class MainActivity extends Activity {
                         trackingEnabled = true;
                         trackingUsingDualAxis = false;
                     }
+                    alignmentSession = null;
+                    calibrationTarget = null;
                     clearSyncedCurrentTarget();
                     clearQuickPointingCorrection();
                     polarRefineSyncedTarget = null;
                     setCalibrationStatus(getString(R.string.calibration_align_saved));
                     updateTrackingViews();
+                    updateCalibrationViews();
                 }
         );
     }
 
     private void cancelAlignmentSession() {
+        // Reset OnStep's alignment state machine on cancel:
+        // 1. :Q# stops any in-flight motion safely.
+        // 2. :A0# is OnStep's abort-alignment command — it is silently ignored
+        //    on firmware that does not implement it (no error reply), so it is
+        //    safe to send unconditionally.
+        // 3. The next :A1#/:A2#/:A3# (when the user starts a new session) will
+        //    further reset the state machine on essentially all firmware.
+        if (connected) {
+            enqueueCommands(
+                    new OnStepCommand[]{OnStepCommand.STOP_ALL, OnStepCommand.ALIGN_ABORT},
+                    getString(R.string.log_stop_sent));
+        }
         alignmentSession = null;
         calibrationTarget = null;
         polarRefineSyncedTarget = null;
@@ -3361,17 +3736,29 @@ public final class MainActivity extends Activity {
 
     private static double parseRightAscension(String value) {
         String clean = value.trim();
+        if (clean.startsWith("-") || clean.startsWith("+")) {
+            throw new IllegalArgumentException("RA must be in 0..24h, no sign: " + value);
+        }
+        double result;
         if (!clean.contains(":")) {
-            return normalizeHours(Double.parseDouble(clean));
+            result = Double.parseDouble(clean);
+        } else {
+            String[] parts = clean.split(":");
+            if (parts.length < 2) {
+                throw new IllegalArgumentException("Invalid RA: " + value);
+            }
+            double hours = Double.parseDouble(parts[0]);
+            double minutes = Double.parseDouble(parts[1]);
+            double seconds = parts.length >= 3 ? Double.parseDouble(parts[2]) : 0.0;
+            if (hours < 0 || minutes < 0 || seconds < 0) {
+                throw new IllegalArgumentException("RA components must be non-negative: " + value);
+            }
+            result = hours + minutes / 60.0 + seconds / 3600.0;
         }
-        String[] parts = clean.split(":");
-        if (parts.length < 2) {
-            throw new IllegalArgumentException("Invalid RA: " + value);
+        if (result < 0.0 || result >= 24.0) {
+            throw new IllegalArgumentException("RA must be in 0..24h: " + value);
         }
-        double hours = Double.parseDouble(parts[0]);
-        double minutes = Double.parseDouble(parts[1]);
-        double seconds = parts.length >= 3 ? Double.parseDouble(parts[2]) : 0.0;
-        return normalizeHours(hours + minutes / 60.0 + seconds / 3600.0);
+        return result;
     }
 
     private static double parseDeclination(String value) {
@@ -3503,7 +3890,7 @@ public final class MainActivity extends Activity {
             setObserverMessage(getString(R.string.location_bad_input));
             return;
         }
-        observerState = new ObserverState(latitude, longitude, observerState.zoneId, getString(R.string.manual_location_name));
+        observerState = new ObserverState(latitude, longitude, ZoneId.systemDefault(), getString(R.string.manual_location_name));
         updateObserverViews();
     }
 
@@ -4384,6 +4771,7 @@ public final class MainActivity extends Activity {
         MOVE_EAST(":Me#"),
         MOVE_WEST(":Mw#"),
         SYNC_CURRENT_TARGET(":CM#"),
+        ALIGN_ABORT(":A0#"),
         ALIGN_TWO(":A2#"),
         ALIGN_THREE(":A3#"),
         ALIGN_WRITE(":AW#"),

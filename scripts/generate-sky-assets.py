@@ -7,7 +7,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RAW_DIR = PROJECT_ROOT / "data" / "raw"
 ASSET_DIR = PROJECT_ROOT / "app" / "src" / "main" / "assets" / "catalog"
 
-STAR_MAG_LIMIT = 12.0
+STAR_MAG_LIMIT = 14.0
 DSO_MAG_LIMIT = 11.5
 
 

@@ -1,8 +1,33 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">MountBehave</string>
-    <string name="mount_profile_title">晴空 ST17 测试配置</string>
-    <string name="mount_profile_body">当前实机测试仅覆盖晴空谐波赤道仪 ST17 的 WiFi 连接、手动移动和停止。</string>
+    <string name="small_bodies_section">小行星 / 彗星</string>
+    <string name="small_bodies_intro">内置精选 17 个著名小行星 / 彗星;在星图工具栏的"图层"对话框可独立显隐小行星与彗星。下载更多小天体后,新数据会自动并入本地缓存。</string>
+    <string name="small_bodies_mag_limit_label">视星等上限</string>
+    <string name="small_bodies_mag_limit_value">视星等上限：%1$.1f mag</string>
+    <string name="small_bodies_status">基线 %1$d 颗 + 已下载小行星 %2$d 颗、彗星 %3$d 颗</string>
+    <string name="small_bodies_download_asteroids">下载亮小行星</string>
+    <string name="small_bodies_download_comets">下载彗星元素</string>
+    <string name="small_bodies_clear_user">清空已下载</string>
+    <string name="small_bodies_download_starting">正在请求 JPL SBDB……</string>
+    <string name="small_bodies_download_done">下载完成，更新 %1$d 个元素。</string>
+    <string name="small_bodies_download_failed">下载失败：%1$s</string>
+    <string name="small_bodies_cleared">已清空用户下载的小天体。</string>
+    <string name="small_bodies_clear_failed">清空失败：%1$s</string>
+    <string name="sky_layers">图层</string>
+    <string name="sky_layers_dialog_title">图层选择</string>
+    <string name="layer_constellation_lines">星座连线</string>
+    <string name="layer_solar_system">太阳系天体</string>
+    <string name="layer_clusters">星团</string>
+    <string name="layer_nebulae">星云</string>
+    <string name="layer_galaxies">星系</string>
+    <string name="layer_asteroids">小行星</string>
+    <string name="layer_comets">彗星</string>
+    <string name="layer_dialog_done">完成</string>
+    <string name="more_settings_collapsed">更多设置 ▼</string>
+    <string name="more_settings_expanded">更多设置 ▲</string>
+    <string name="mount_profile_title">晴空赤道仪配置</string>
+    <string name="mount_profile_body">理论上能够控制晴空系列全部赤道仪。仅在晴空 ST17 上进行过实机测试。</string>
     <string name="app_subtitle">手控、星图与 OnStep 设置</string>
     <string name="connection_section">赤道仪连接</string>
     <string name="manual_control_section">手动移动</string>
