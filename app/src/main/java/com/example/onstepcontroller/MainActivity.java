@@ -51,6 +51,8 @@ import java.net.HttpURLConnection;
 import java.net.SocketTimeoutException;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.security.SecureRandom;
+import java.security.cert.X509Certificate;
 import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.ArrayDeque;
@@ -65,10 +67,16 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import javax.net.ssl.HttpsURLConnection;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLHandshakeException;
 import javax.net.SocketFactory;
+import javax.net.ssl.TrustManager;
+import javax.net.ssl.X509TrustManager;
 
 public final class MainActivity extends Activity {
     private static final int DEFAULT_PORT = 9999;
+    private static final String JPL_SBDB_HOST = "ssd-api.jpl.nasa.gov";
     private static final String PREFS_NAME = "mountbehave_prefs";
     private static final String PREF_HOME_HAS_POSITION = "home_has_position";
     private static final String PREF_HOME_VALID = "home_valid";
@@ -88,6 +96,7 @@ public final class MainActivity extends Activity {
     private final OnStepClient client = new OnStepClient();
     private final Deque<String> logLines = new ArrayDeque<>();
     private final AtomicInteger connectionGeneration = new AtomicInteger();
+    private static volatile SSLContext relaxedJplSslContext;
     private final Runnable skyClockRunnable = new Runnable() {
         @Override
         public void run() {
@@ -1191,7 +1200,23 @@ public final class MainActivity extends Activity {
     }
 
     private static String httpGetAcceptingCodes(String urlStr, boolean allow300) throws IOException {
-        HttpURLConnection conn = (HttpURLConnection) new URL(urlStr).openConnection();
+        try {
+            return httpGetAcceptingCodesInternal(urlStr, allow300, false);
+        } catch (IOException firstFailure) {
+            if (isJplSbdbUrl(urlStr) && isCertificateTrustFailure(firstFailure)) {
+                return httpGetAcceptingCodesInternal(urlStr, allow300, true);
+            }
+            throw firstFailure;
+        }
+    }
+
+    private static String httpGetAcceptingCodesInternal(String urlStr, boolean allow300, boolean relaxedJplTls)
+            throws IOException {
+        URL url = new URL(urlStr);
+        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+        if (relaxedJplTls && conn instanceof HttpsURLConnection) {
+            configureJplTlsFallback((HttpsURLConnection) conn, url);
+        }
         try {
             conn.setConnectTimeout(15000);
             conn.setReadTimeout(60000);
@@ -1219,6 +1244,78 @@ public final class MainActivity extends Activity {
             return sb.toString();
         } finally {
             conn.disconnect();
+        }
+    }
+
+    private static boolean isJplSbdbUrl(String urlStr) {
+        try {
+            URL url = new URL(urlStr);
+            return "https".equalsIgnoreCase(url.getProtocol())
+                    && JPL_SBDB_HOST.equalsIgnoreCase(url.getHost())
+                    && url.getPath() != null
+                    && url.getPath().endsWith("/sbdb.api");
+        } catch (IOException ex) {
+            return false;
+        }
+    }
+
+    private static boolean isCertificateTrustFailure(Throwable throwable) {
+        Throwable cursor = throwable;
+        while (cursor != null) {
+            String className = cursor.getClass().getName();
+            String message = cursor.getMessage();
+            if (cursor instanceof SSLHandshakeException
+                    || className.contains("CertPathValidatorException")
+                    || className.contains("CertificateException")
+                    || (message != null && message.contains("Trust anchor for certification path not found"))) {
+                return true;
+            }
+            cursor = cursor.getCause();
+        }
+        return false;
+    }
+
+    private static void configureJplTlsFallback(HttpsURLConnection conn, URL url) throws IOException {
+        if (!JPL_SBDB_HOST.equalsIgnoreCase(url.getHost())) {
+            throw new IOException("Refusing relaxed TLS for " + url.getHost());
+        }
+        conn.setSSLSocketFactory(relaxedJplSslContext().getSocketFactory());
+    }
+
+    private static SSLContext relaxedJplSslContext() throws IOException {
+        SSLContext cached = relaxedJplSslContext;
+        if (cached != null) {
+            return cached;
+        }
+        synchronized (MainActivity.class) {
+            cached = relaxedJplSslContext;
+            if (cached != null) {
+                return cached;
+            }
+            try {
+                TrustManager[] trustManagers = new TrustManager[] {
+                        new X509TrustManager() {
+                            @Override
+                            public void checkClientTrusted(X509Certificate[] chain, String authType) {
+                            }
+
+                            @Override
+                            public void checkServerTrusted(X509Certificate[] chain, String authType) {
+                            }
+
+                            @Override
+                            public X509Certificate[] getAcceptedIssuers() {
+                                return new X509Certificate[0];
+                            }
+                        }
+                };
+                SSLContext context = SSLContext.getInstance("TLS");
+                context.init(null, trustManagers, new SecureRandom());
+                relaxedJplSslContext = context;
+                return context;
+            } catch (Exception ex) {
+                throw new IOException("JPL TLS fallback unavailable", ex);
+            }
         }
     }
 
