@@ -10,12 +10,12 @@
 
 <p align="center">
   <a href="#当前状态"><img alt="Status" src="https://img.shields.io/badge/status-field--testing-orange"></a>
-  <a href="#版本说明"><img alt="Version" src="https://img.shields.io/badge/version-v0.2.0-blue"></a>
+  <a href="#版本说明"><img alt="Version" src="https://img.shields.io/badge/version-v0.2.1-blue"></a>
   <a href="#功能概览"><img alt="Platform" src="https://img.shields.io/badge/platform-Android-green"></a>
   <a href="#星图数据与授权"><img alt="Catalog" src="https://img.shields.io/badge/catalog-HYG%20%7C%20OpenNGC%20%7C%20d3--celestial-lightgrey"></a>
 </p>
 
-MountBehave 是一个为 OnStep/LX200 兼容赤道仪开发的 Android 手控器。它面向手机和平板上的目视观测流程，提供 WiFi 连接、方向键移动、停止/GOTO、离线星图、观测地与时间同步、跟踪控制、两星/三星校准和三星后极轴精调入口。`v0.2.0` 起加入 OnStepX 与经纬仪模式适配。
+MountBehave 是一个为 OnStep/LX200 兼容赤道仪开发的 Android 手控器。它面向手机和平板上的目视观测流程，提供 WiFi 连接、方向键移动、停止/GOTO、离线星图、观测地与时间同步、跟踪控制、两星/三星校准和三星后极轴精调入口。`v0.2.x` 系列加入 OnStepX 与经纬仪模式适配。
 
 这个项目目前不是 OnStep 官方 App，也还没有经过充分的跨设备测试。真实赤道仪测试时请始终保留实体断电、控制盒急停或其他独立安全手段。
 
@@ -37,7 +37,7 @@ MountBehave 是一个为 OnStep/LX200 兼容赤道仪开发的 Android 手控器
   <img src="docs/images/clearsky_wordmark.png" alt="Clearsky ST17 test badge" width="160">
 </p>
 
-当前版本：`v0.2.0`
+当前版本：`v0.2.1`
 
 测试状态：
 
@@ -64,7 +64,7 @@ MountBehave 是一个为 OnStep/LX200 兼容赤道仪开发的 Android 手控器
 | 星图 | 离线恒星、深空天体、星座连线、太阳系天体(VSOP87D 亚角秒精度)、近似银河带 |
 | 小天体 | 内置 17 颗著名小行星 / 彗星基线;可在设置页按需在线下载更多(JPL SBDB)。小行星橙色菱形,彗星带远日方向尾迹 |
 | 图层切换 | 星图"图层"按钮 → 7 项独立开关(星座连线 / 太阳系 / 星团 / 星云 / 星系 / 小行星 / 彗星);恒星与银河带固定常显 |
-| 星图交互 | 拖拽、双指缩放，最窄视场约 `1°`，恒星显示到约 `12` 等 |
+| 星图交互 | 单指拖拽、双指缩放，最窄视场约 `1°`，恒星显示到约 `12` 等；顶部状态区已压缩 |
 | GOTO | 星图点选、目标名称搜索、RA/Dec 坐标输入，连接后发送 `:Sr...#`、`:Sd...#`、`:MS#` |
 | 观测地与时间 | 默认 Boston；支持 GPS 或手动经纬度；可同步到 OnStep |
 | 跟踪 | 恒星速、月球速、太阳速；保存两星/三星模型后请求双轴/模型补偿，否则默认单轴 |
@@ -77,7 +77,7 @@ MountBehave 是一个为 OnStep/LX200 兼容赤道仪开发的 Android 手控器
 
 ### 下载 APK
 
-推荐从 GitHub Release 下载 `MountBehave-v0.2.0.apk`。
+推荐从 GitHub Release 下载 `MountBehave-v0.2.1.apk`。
 
 ### 本地构建
 
@@ -95,7 +95,7 @@ app\build\outputs\apk\debug\app-debug.apk
 本次发布用的重命名 APK：
 
 ```text
-dist\MountBehave-v0.2.0.apk
+dist\MountBehave-v0.2.1.apk
 ```
 
 ### 安装到手机
@@ -103,7 +103,7 @@ dist\MountBehave-v0.2.0.apk
 ```powershell
 .\scripts\env.ps1
 adb devices
-adb install -r dist\MountBehave-v0.2.0.apk
+adb install -r dist\MountBehave-v0.2.1.apk
 ```
 
 电脑模拟器通常不能直接加入赤道仪自己的 WiFi 热点。真实测试时建议把 APK 安装到手机或 Android 平板上，并让设备直接连接赤道仪 WiFi。
@@ -122,7 +122,7 @@ adb install -r dist\MountBehave-v0.2.0.apk
 
 1. 手机连接赤道仪 WiFi。
 2. 打开 MountBehave，先在“设置”页确认固件为 OnStep 或 OnStepX。
-3. 进入“连接/同步”页，在“架台连接”里确认 IP 和端口，默认是 `192.168.0.1:9999`。
+3. 进入“连接/同步”页，在“支架连接”里确认 IP 和端口，默认是 `192.168.0.1:9999`。
 4. 点击晴空角标连接按钮。
 5. 如果连接失败，先确认赤道仪端口是否为 `9999`，再断开重连。
 
@@ -257,6 +257,12 @@ MountBehave 为控制 APK 体积使用筛选后的离线数据：
 ```
 
 ## 版本说明
+
+### v0.2.1
+
+- 压缩星图顶部状态区，把目标、指向、GOTO 和限位信息改成更短的观测状态文本。
+- 修复桌面预览/触控板场景下星图拖拽可能被误判为缩放的问题；单指拖拽和双指缩放分支更稳定。
+- 设置页命令日志移到底部；主菜单展开时显示当前版本号；手控页“支架校准”布局进一步收紧。
 
 ### v0.2.0
 

@@ -72,6 +72,8 @@ public final class SkyChartView extends View {
     private float downX;
     private float downY;
     private float lastPinchDistance;
+    private float lastPinchCenterX;
+    private float lastPinchCenterY;
     private boolean touchMoved;
     private boolean pinching;
     private boolean suppressTapAfterPinch;
@@ -228,20 +230,16 @@ public final class SkyChartView extends View {
         if (catalog == null) {
             return loadError == null ? "星图数据加载中" : loadError;
         }
-        StringBuilder text = new StringBuilder(String.format(
+        return String.format(
                 Locale.US,
-                "恒星 %d 颗，深空天体 %d 个，星座线 %d 段。%s 本地天空，视场 %s，星等上限 %.1f。",
+                "星%d · 深空%d · 线%d · %s · 视场%s · 限星%.1f",
                 catalog.stars.size(),
                 catalog.deepSkyObjects.size(),
                 catalog.constellationLines.size(),
                 observer.locationName,
                 formatFieldOfView(fieldOfViewDegrees),
                 visibleStarMagnitudeLimit()
-        ));
-        if (!showClusters || !showNebulae || !showGalaxies || !showAsteroids || !showComets) {
-            text.append(" 提示：点击「图层」按钮可开启星团/星云/星系/小行星/彗星等图层。");
-        }
-        return text.toString();
+        );
     }
 
     private static String formatFieldOfView(double degrees) {
@@ -252,6 +250,8 @@ public final class SkyChartView extends View {
     }
 
     private void init(Context context) {
+        setClickable(true);
+        setContentDescription(context.getString(R.string.sky_section));
         setMinimumHeight(dp(460));
         try {
             catalog = SkyCatalog.load(context);
@@ -295,17 +295,20 @@ public final class SkyChartView extends View {
 
     @Override
     public boolean onTouchEvent(MotionEvent event) {
+        int action = event.getActionMasked();
         if (getParent() != null) {
-            getParent().requestDisallowInterceptTouchEvent(event.getActionMasked() != MotionEvent.ACTION_UP
-                    && event.getActionMasked() != MotionEvent.ACTION_CANCEL);
+            getParent().requestDisallowInterceptTouchEvent(action != MotionEvent.ACTION_UP
+                    && action != MotionEvent.ACTION_CANCEL);
         }
 
-        if (event.getActionMasked() == MotionEvent.ACTION_POINTER_UP) {
+        if (action == MotionEvent.ACTION_POINTER_UP) {
             int remainingPointerIndex = event.getActionIndex() == 0 ? 1 : 0;
             pinching = false;
             touchMoved = true;
             suppressTapAfterPinch = true;
             lastPinchDistance = 0f;
+            lastPinchCenterX = 0f;
+            lastPinchCenterY = 0f;
             lastTouchX = event.getX(remainingPointerIndex);
             lastTouchY = event.getY(remainingPointerIndex);
             return true;
@@ -317,13 +320,16 @@ public final class SkyChartView extends View {
         }
 
         pinching = false;
-        switch (event.getActionMasked()) {
+        switch (action) {
             case MotionEvent.ACTION_DOWN:
                 lastTouchX = event.getX();
                 lastTouchY = event.getY();
                 downX = lastTouchX;
                 downY = lastTouchY;
                 touchMoved = false;
+                lastPinchDistance = 0f;
+                lastPinchCenterX = 0f;
+                lastPinchCenterY = 0f;
                 return true;
             case MotionEvent.ACTION_MOVE:
                 float dx = event.getX() - lastTouchX;
@@ -343,11 +349,15 @@ public final class SkyChartView extends View {
                 }
                 suppressTapAfterPinch = false;
                 lastPinchDistance = 0f;
+                lastPinchCenterX = 0f;
+                lastPinchCenterY = 0f;
                 pinching = false;
                 return true;
             case MotionEvent.ACTION_CANCEL:
                 suppressTapAfterPinch = false;
                 lastPinchDistance = 0f;
+                lastPinchCenterX = 0f;
+                lastPinchCenterY = 0f;
                 pinching = false;
                 return true;
             default:
@@ -369,23 +379,46 @@ public final class SkyChartView extends View {
     private void handlePinch(MotionEvent event) {
         float dx = event.getX(0) - event.getX(1);
         float dy = event.getY(0) - event.getY(1);
-        float distance = (float) Math.sqrt(dx * dx + dy * dy);
+        float pinchDistance = (float) Math.sqrt(dx * dx + dy * dy);
+        float centerX = (event.getX(0) + event.getX(1)) * 0.5f;
+        float centerY = (event.getY(0) + event.getY(1)) * 0.5f;
         if (!pinching || lastPinchDistance <= 0f) {
             pinching = true;
             suppressTapAfterPinch = true;
-            lastPinchDistance = distance;
+            touchMoved = true;
+            lastPinchDistance = pinchDistance;
+            lastPinchCenterX = centerX;
+            lastPinchCenterY = centerY;
             return;
         }
-        if (distance > 8f) {
+
+        float centerDx = centerX - lastPinchCenterX;
+        float centerDy = centerY - lastPinchCenterY;
+        float centerMovement = distance(centerX, centerY, lastPinchCenterX, lastPinchCenterY);
+        float spanDelta = Math.abs(pinchDistance - lastPinchDistance);
+        boolean panned = centerMovement >= 0.5f;
+        if (panned) {
+            panView(centerDx, centerDy);
+        }
+
+        float zoomThreshold = Math.max(1f, lastPinchDistance * 0.004f);
+        boolean zoomed = pinchDistance >= dp(8)
+                && spanDelta >= zoomThreshold
+                && spanDelta >= centerMovement * 0.35f;
+        if (zoomed) {
             fieldOfViewDegrees = clamp(
-                    fieldOfViewDegrees * lastPinchDistance / distance,
+                    fieldOfViewDegrees * lastPinchDistance / pinchDistance,
                     MIN_FIELD_OF_VIEW_DEGREES,
                     MAX_FIELD_OF_VIEW_DEGREES
             );
-            lastPinchDistance = distance;
+        }
+        if (panned || zoomed) {
             invalidate();
             notifyViewStateChanged();
         }
+        lastPinchDistance = pinchDistance;
+        lastPinchCenterX = centerX;
+        lastPinchCenterY = centerY;
     }
 
     private void notifyViewStateChanged() {

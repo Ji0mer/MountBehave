@@ -91,6 +91,8 @@ public final class MainActivity extends Activity {
     private static final int SIDE_MENU_TOGGLE_HEIGHT_DP = 48;
     private static final int SIDE_MENU_ITEM_TOP_MARGIN_DP = 10;
     private static final int SIDE_MENU_ITEM_HEIGHT_DP = 54;
+    private static final int SIDE_MENU_VERSION_TOP_MARGIN_DP = 12;
+    private static final int SIDE_MENU_VERSION_HEIGHT_DP = 28;
     private static final int SIDE_MENU_FLOATING_STOP_GAP_DP = 8;
     private static final int FLOATING_STOP_COLLAPSED_TOP_MARGIN_DP = 86;
     private static final int SIDE_MENU_ITEM_COUNT = 4;
@@ -120,6 +122,7 @@ public final class MainActivity extends Activity {
     private Button connectionSyncTabButton;
     private Button sideMenuToggleButton;
     private Button floatingStopButton;
+    private TextView sideMenuVersionText;
     private LinearLayout sideMenu;
     private LinearLayout manualPage;
     private LinearLayout skyPage;
@@ -429,6 +432,13 @@ public final class MainActivity extends Activity {
         skyTabButton.setOnClickListener(v -> selectPageFromMenu(Page.SKY));
         sideMenu.addView(skyTabButton, sideMenuButtonParams(SIDE_MENU_ITEM_TOP_MARGIN_DP));
 
+        sideMenuVersionText = new TextView(this);
+        sideMenuVersionText.setText(getString(R.string.version_info, appVersionName()));
+        sideMenuVersionText.setTextSize(12);
+        sideMenuVersionText.setTextColor(mutedTextColor());
+        sideMenuVersionText.setGravity(Gravity.CENTER);
+        sideMenu.addView(sideMenuVersionText, sideMenuVersionParams());
+
         setSideMenuExpanded(sideMenuExpanded);
         return sideMenu;
     }
@@ -454,7 +464,8 @@ public final class MainActivity extends Activity {
 
         LinearLayout panel = card();
         skySummaryText = bodyText(R.string.sky_loading);
-        skySummaryText.setPadding(0, 0, 0, dp(6));
+        compactSkyText(skySummaryText);
+        skySummaryText.setPadding(0, 0, 0, dp(4));
         panel.addView(skySummaryText, matchWrap());
 
         skyChartView = new SkyChartView(this);
@@ -477,11 +488,12 @@ public final class MainActivity extends Activity {
         skySummaryText.setText(skyChartView.summary());
 
         targetStatusText = bodyText(R.string.sky_target_none);
+        compactSkyText(targetStatusText);
         targetStatusText.setPadding(0, 0, 0, 0);
         panel.addView(targetStatusText, matchWrap());
 
         mountPointingText = bodyText(R.string.mount_pointing_default);
-        mountPointingText.setPadding(0, dp(3), 0, 0);
+        compactSkyText(mountPointingText);
         if (hasCurrentMountPosition) {
             mountPointingText.setText(getString(
                     R.string.mount_pointing_status,
@@ -489,17 +501,24 @@ public final class MainActivity extends Activity {
                     formatDeclinationDisplay(currentMountDecDegrees)
             ));
         }
-        panel.addView(mountPointingText, matchWrap());
 
         gotoStatusText = bodyText(R.string.goto_status_idle);
-        gotoStatusText.setPadding(0, dp(3), 0, 0);
+        compactSkyText(gotoStatusText);
         if (gotoStatusMessage != null) {
             gotoStatusText.setText(gotoStatusMessage);
         }
-        panel.addView(gotoStatusText, matchWrap());
+
+        LinearLayout skyStatusRow = new LinearLayout(this);
+        skyStatusRow.setOrientation(LinearLayout.HORIZONTAL);
+        skyStatusRow.setGravity(Gravity.CENTER_VERTICAL);
+        skyStatusRow.setPadding(0, dp(2), 0, 0);
+        skyStatusRow.addView(mountPointingText, weightWrap(1f));
+        skyStatusRow.addView(gotoStatusText, weightWrapWithLeftMargin(1f, 8));
+        panel.addView(skyStatusRow, matchWrap());
 
         observingAlertText = bodyText(R.string.observing_alert_no_target);
-        observingAlertText.setPadding(0, dp(3), 0, 0);
+        compactSkyText(observingAlertText);
+        observingAlertText.setPadding(0, dp(2), 0, 0);
         panel.addView(observingAlertText, matchWrap());
 
         LinearLayout actions = new LinearLayout(this);
@@ -550,15 +569,17 @@ public final class MainActivity extends Activity {
         LinearLayout page = new LinearLayout(this);
         page.setOrientation(LinearLayout.VERTICAL);
 
-        page.addView(sectionTitleWithHelp(R.string.calibration_section, R.string.calibration_intro), matchWrap());
+        LinearLayout calibrationPanel = card();
+        calibrationPanel.addView(panelTitleWithHelp(R.string.calibration_section, R.string.calibration_intro), matchWrap());
 
-        LinearLayout targetPanel = card();
-        targetPanel.addView(labelText(R.string.calibration_mode_label), matchWrap());
+        calibrationPanel.addView(labelText(R.string.calibration_mode_label), matchWrap());
         calibrationModeSpinner = new Spinner(this);
         refreshCalibrationModeChoices();
-        targetPanel.addView(calibrationModeSpinner, matchWrap());
+        calibrationPanel.addView(calibrationModeSpinner, matchWrap());
 
-        targetPanel.addView(labelText(R.string.calibration_target_label), matchWrap());
+        TextView targetLabel = labelText(R.string.calibration_target_label);
+        targetLabel.setPadding(0, dp(4), 0, 0);
+        calibrationPanel.addView(targetLabel, matchWrap());
         calibrationTargetField = compactEditText();
         calibrationTargetField.setInputType(InputType.TYPE_CLASS_TEXT);
         calibrationTargetField.setHint(R.string.calibration_target_hint);
@@ -578,12 +599,12 @@ public final class MainActivity extends Activity {
                 // No-op.
             }
         });
-        targetPanel.addView(calibrationTargetField, matchWrap());
+        calibrationPanel.addView(calibrationTargetField, matchWrap());
 
         LinearLayout targetActions = new LinearLayout(this);
         targetActions.setOrientation(LinearLayout.HORIZONTAL);
         targetActions.setGravity(Gravity.CENTER_VERTICAL);
-        targetActions.setPadding(0, dp(8), 0, 0);
+        targetActions.setPadding(0, dp(6), 0, 0);
 
         calibrationSuggestButton = actionButton(R.string.calibration_suggest_star);
         calibrationSuggestButton.setOnClickListener(v -> fillSuggestedCalibrationTarget());
@@ -594,16 +615,14 @@ public final class MainActivity extends Activity {
         targetActions.addView(calibrationShowButton, weightWrapWithLeftMargin(1f, 8));
         updateCalibrationTargetActionButton();
 
-        targetPanel.addView(targetActions, matchWrap());
+        calibrationPanel.addView(targetActions, matchWrap());
 
         calibrationStatusText = bodyText(R.string.calibration_status_idle);
-        calibrationStatusText.setPadding(0, dp(8), 0, 0);
-        targetPanel.addView(calibrationStatusText, matchWrap());
-        page.addView(targetPanel, matchWrap());
+        calibrationStatusText.setPadding(0, dp(4), 0, 0);
+        calibrationStatusText.setVisibility(View.GONE);
+        calibrationPanel.addView(calibrationStatusText, matchWrap());
 
-        page.addView(sectionTitle(R.string.calibration_mode_settings), matchWrapWithTopMargin(8));
-
-        quickCalibrationPanel = card();
+        quickCalibrationPanel = modePanel();
         quickCalibrationPanel.addView(panelTitleWithHelp(
                 R.string.calibration_quick_section,
                 R.string.calibration_quick_intro
@@ -622,13 +641,25 @@ public final class MainActivity extends Activity {
         quickActions.addView(quickSyncButton, weightWrapWithLeftMargin(1f, 8));
 
         quickCalibrationPanel.addView(quickActions, matchWrap());
-        page.addView(quickCalibrationPanel, matchWrap());
+        calibrationPanel.addView(quickCalibrationPanel, matchWrap());
 
-        alignCalibrationPanel = card();
+        alignCalibrationPanel = modePanel();
         alignCalibrationPanel.addView(panelTitleWithHelp(
                 R.string.calibration_align_section,
                 R.string.calibration_align_intro
         ), matchWrap());
+
+        calibrationStepText = bodyText(R.string.calibration_align_idle);
+        calibrationStepText.setPadding(0, 0, 0, dp(4));
+        alignCalibrationPanel.addView(calibrationStepText, matchWrap());
+
+        alignmentCurrentText = bodyText(R.string.calibration_align_current_none);
+        alignmentCurrentText.setPadding(0, 0, 0, dp(4));
+        alignCalibrationPanel.addView(alignmentCurrentText, matchWrap());
+
+        alignmentAcceptedText = bodyText(R.string.calibration_align_accepted_none);
+        alignmentAcceptedText.setPadding(0, 0, 0, dp(6));
+        alignCalibrationPanel.addView(alignmentAcceptedText, matchWrap());
 
         alignStartButton = actionButton(R.string.calibration_align_start);
         alignStartButton.setOnClickListener(v -> {
@@ -636,19 +667,7 @@ public final class MainActivity extends Activity {
                 startAlignment(selectedCalibrationMode.starCount);
             }
         });
-        alignCalibrationPanel.addView(alignStartButton, matchWrap());
-
-        calibrationStepText = bodyText(R.string.calibration_align_idle);
-        calibrationStepText.setPadding(0, dp(8), 0, dp(8));
-        alignCalibrationPanel.addView(calibrationStepText, matchWrap());
-
-        alignmentCurrentText = bodyText(R.string.calibration_align_current_none);
-        alignmentCurrentText.setPadding(0, 0, 0, dp(6));
-        alignCalibrationPanel.addView(alignmentCurrentText, matchWrap());
-
-        alignmentAcceptedText = bodyText(R.string.calibration_align_accepted_none);
-        alignmentAcceptedText.setPadding(0, 0, 0, dp(8));
-        alignCalibrationPanel.addView(alignmentAcceptedText, matchWrap());
+        alignCalibrationPanel.addView(alignStartButton, matchWrapWithTopMargin(4));
 
         LinearLayout alignActionsOne = new LinearLayout(this);
         alignActionsOne.setOrientation(LinearLayout.HORIZONTAL);
@@ -662,7 +681,7 @@ public final class MainActivity extends Activity {
         alignGotoButton.setOnClickListener(v -> gotoAlignmentTarget());
         alignActionsOne.addView(alignGotoButton, weightWrapWithLeftMargin(1f, 8));
 
-        alignCalibrationPanel.addView(alignActionsOne, matchWrap());
+        alignCalibrationPanel.addView(alignActionsOne, matchWrapWithTopMargin(6));
 
         LinearLayout alignActionsTwo = new LinearLayout(this);
         alignActionsTwo.setOrientation(LinearLayout.VERTICAL);
@@ -689,9 +708,9 @@ public final class MainActivity extends Activity {
         alignActionsTwo.addView(alignFinishActions, matchWrap());
 
         alignCalibrationPanel.addView(alignActionsTwo, matchWrap());
-        page.addView(alignCalibrationPanel, matchWrap());
+        calibrationPanel.addView(alignCalibrationPanel, matchWrap());
 
-        refineCalibrationPanel = card();
+        refineCalibrationPanel = modePanel();
         refineCalibrationPanel.addView(panelTitleWithHelp(
                 R.string.calibration_mode_refine_polar,
                 R.string.calibration_refine_intro
@@ -705,7 +724,8 @@ public final class MainActivity extends Activity {
         refinePaButton.setOnClickListener(v -> refinePolarAlignment());
         refineCalibrationPanel.addView(refinePaButton, matchWrapWithTopMargin(6));
 
-        page.addView(refineCalibrationPanel, matchWrap());
+        calibrationPanel.addView(refineCalibrationPanel, matchWrap());
+        page.addView(calibrationPanel, matchWrap());
         updateCalibrationModeViews();
         return page;
     }
@@ -759,12 +779,12 @@ public final class MainActivity extends Activity {
     }
 
     private void addAdvancedSettingsSections(LinearLayout parent) {
-        parent.addView(sectionTitle(R.string.command_log_section), matchWrapWithTopMargin(8));
-        parent.addView(createCommandLogPanel(), matchWrap());
         parent.addView(sectionTitleWithHelp(R.string.safety_section, R.string.safety_intro), matchWrapWithTopMargin(8));
         parent.addView(createSafetyPanel(), matchWrap());
         parent.addView(sectionTitleWithHelp(R.string.small_bodies_section, R.string.small_bodies_intro), matchWrapWithTopMargin(8));
         parent.addView(createSmallBodiesPanel(), matchWrap());
+        parent.addView(sectionTitle(R.string.command_log_section), matchWrapWithTopMargin(8));
+        parent.addView(createCommandLogPanel(), matchWrap());
     }
 
     private View createFirmwareSettingsPanel() {
@@ -3832,10 +3852,18 @@ public final class MainActivity extends Activity {
     }
 
     private void setCalibrationStatus(String status) {
-        if (calibrationStatusText != null) {
-            calibrationStatusText.setText(status);
-        }
+        updateCalibrationStatusText(status);
         setStatus(status);
+    }
+
+    private void updateCalibrationStatusText(String status) {
+        if (calibrationStatusText == null) {
+            return;
+        }
+        calibrationStatusText.setText(status);
+        calibrationStatusText.setVisibility(
+                getString(R.string.calibration_status_idle).equals(status) ? View.GONE : View.VISIBLE
+        );
     }
 
     private void updateCalibrationViews() {
@@ -3999,9 +4027,7 @@ public final class MainActivity extends Activity {
         }
         busy = true;
         setStatus(sendingStatus);
-        if (calibrationStatusText != null) {
-            calibrationStatusText.setText(sendingStatus);
-        }
+        updateCalibrationStatusText(sendingStatus);
         updateUiState();
         Logger.info("mount-command-batch start count=" + commands.size() + " status=\"" + sendingStatus + "\"");
         logStateSnapshot("mount-command-batch-start");
@@ -4033,9 +4059,7 @@ public final class MainActivity extends Activity {
                     }
                     busy = false;
                     setStatus(successStatus);
-                    if (calibrationStatusText != null) {
-                        calibrationStatusText.setText(successStatus);
-                    }
+                    updateCalibrationStatusText(successStatus);
                     if (onSuccess != null) {
                         onSuccess.run();
                     }
@@ -5078,6 +5102,13 @@ public final class MainActivity extends Activity {
         return panel;
     }
 
+    private LinearLayout modePanel() {
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setPadding(0, dp(8), 0, 0);
+        return panel;
+    }
+
     private TextView titleText(int textRes, int sp) {
         TextView textView = new TextView(this);
         textView.setText(textRes);
@@ -5154,6 +5185,11 @@ public final class MainActivity extends Activity {
         textView.setTextColor(bodyTextColor());
         textView.setGravity(Gravity.START);
         return textView;
+    }
+
+    private void compactSkyText(TextView textView) {
+        textView.setTextSize(12);
+        textView.setIncludeFontPadding(false);
     }
 
     private Button actionButton(int textRes) {
@@ -5253,6 +5289,8 @@ public final class MainActivity extends Activity {
                 + SIDE_MENU_TOGGLE_HEIGHT_DP
                 + SIDE_MENU_ITEM_TOP_MARGIN_DP
                 + SIDE_MENU_ITEM_COUNT * (SIDE_MENU_ITEM_HEIGHT_DP + SIDE_MENU_ITEM_TOP_MARGIN_DP)
+                + SIDE_MENU_VERSION_TOP_MARGIN_DP
+                + SIDE_MENU_VERSION_HEIGHT_DP
                 + SIDE_MENU_FLOATING_STOP_GAP_DP;
     }
 
@@ -5269,6 +5307,15 @@ public final class MainActivity extends Activity {
                 dp(SIDE_MENU_ITEM_HEIGHT_DP)
         );
         params.topMargin = dp(topDp);
+        return params;
+    }
+
+    private LinearLayout.LayoutParams sideMenuVersionParams() {
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(SIDE_MENU_VERSION_HEIGHT_DP)
+        );
+        params.topMargin = dp(SIDE_MENU_VERSION_TOP_MARGIN_DP);
         return params;
     }
 
@@ -5861,6 +5908,9 @@ public final class MainActivity extends Activity {
         if (skyTabButton != null) {
             skyTabButton.setVisibility(menuItemVisibility);
         }
+        if (sideMenuVersionText != null) {
+            sideMenuVersionText.setVisibility(menuItemVisibility);
+        }
         if (sideMenuToggleButton != null) {
             sideMenuToggleButton.setText(expanded ? "\u00d7" : "\u2630");
             sideMenuToggleButton.setTextColor(Color.rgb(226, 232, 240));
@@ -5940,6 +5990,14 @@ public final class MainActivity extends Activity {
     private static String safeMessage(Throwable throwable) {
         String message = throwable.getMessage();
         return message == null ? throwable.getClass().getSimpleName() : message;
+    }
+
+    private String appVersionName() {
+        try {
+            return getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+        } catch (PackageManager.NameNotFoundException ex) {
+            return "0.2.1";
+        }
     }
 
     private static final class AlignmentSession {

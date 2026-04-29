@@ -5,7 +5,7 @@
 实际方案与原方案的关键差异:
 - 用户决定"基线只内嵌最亮 / 最著名的少量天体,余下由 App 内接口按需下载",不再 bundle 全 H≤12 数据集。
 - 数据后端统一为 JPL SBDB(单体 + 查询两个 endpoint),不再使用 MPC `CometEls.txt`/`MPCORB.DAT`,避免后者大文件下载。
-- 实际实现见 `scripts/generate-bundled-small-bodies.py`、`SmallBody.java`、`SmallBodyEphemeris.java`、`SmallBodyCatalog.java`、`BundledSmallBodies.java`,与 `MainActivity` 设置页的"小行星 / 彗星"分组。`v0.2.0` 的实际 UI 是亮小行星批量下载、彗星逐颗按名称/编号添加。
+- 实际实现见 `scripts/generate-bundled-small-bodies.py`、`SmallBody.java`、`SmallBodyEphemeris.java`、`SmallBodyCatalog.java`、`BundledSmallBodies.java`,与 `MainActivity` 设置页的"小行星 / 彗星"分组。`v0.2.1` 的实际 UI 是亮小行星批量下载、彗星逐颗按名称/编号添加。
 
 实测精度(2026-04-28 UTC,地心视位置,vs JPL Horizons quantity '2'):
 - Ceres:RA 偏差 0.04s ≈ 0.6"、Dec 偏差 7.8"。残差主要来自 N-body 摄动与黄道极小幅平动,目视 GOTO 远超需求。
@@ -113,7 +113,7 @@ comet records (each 80 bytes):
 
 ## UI 改动
 
-设置页(`v0.2.0` 实际界面已经落地,下面保留原方案作历史记录):
+设置页(`v0.2.1` 实际界面已经落地,下面保留原方案作历史记录):
 - 新分组"小天体"
 - 开关:启用/禁用小天体显示
 - 星等上限滑块(默认 11.0)
