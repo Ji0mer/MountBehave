@@ -219,7 +219,8 @@ public final class MainActivity extends Activity {
     private double currentMountRaHours;
     private double currentMountDecDegrees;
     private boolean trackingEnabled;
-    private boolean hasThreeStarTrackingModel;
+    private boolean hasAlignmentTrackingModel;
+    private int savedAlignmentStarCount;
     private boolean trackingUsingDualAxis;
     private TrackingRate selectedTrackingRate = TrackingRate.SIDEREAL;
     private volatile Direction activeDirection;
@@ -2033,7 +2034,8 @@ public final class MainActivity extends Activity {
                     mountPointingFailureCount = 0;
                     mountPointingPollingPaused = true;
                     hasCurrentMountPosition = false;
-                    hasThreeStarTrackingModel = false;
+                    hasAlignmentTrackingModel = false;
+                    savedAlignmentStarCount = 0;
                     trackingEnabled = false;
                     trackingUsingDualAxis = false;
                     gotoInProgress = false;
@@ -2146,7 +2148,8 @@ public final class MainActivity extends Activity {
                 mountPointingFailureCount = 0;
                 mountPointingPollingPaused = false;
                 hasCurrentMountPosition = false;
-                hasThreeStarTrackingModel = false;
+                hasAlignmentTrackingModel = false;
+                savedAlignmentStarCount = 0;
                 activeDirection = null;
                 alignmentSession = null;
                 gotoInProgress = false;
@@ -2933,15 +2936,33 @@ public final class MainActivity extends Activity {
     }
 
     private void addTrackingStartCommands(List<MountCommand> commands, boolean dualAxis) {
-        commands.add(MountCommand.noReply(selectedTrackingRate.command));
+        addTrackingStartCommands(commands, selectedTrackingRate, dualAxis);
+    }
+
+    private void addTrackingStartCommands(List<MountCommand> commands, TrackingRate rate, boolean dualAxis) {
+        commands.add(MountCommand.noReply(rate.command));
         if (dualAxis) {
             commands.add(MountCommand.noReply(OnStepCommand.TRACK_FULL_COMPENSATION.command));
             commands.add(MountCommand.noReply(OnStepCommand.TRACK_DUAL_AXIS.command));
         }
     }
 
+    private String trackingStartCommandLog(TrackingRate rate, boolean dualAxis) {
+        StringBuilder builder = new StringBuilder(rate.command);
+        if (dualAxis) {
+            builder.append(',').append(OnStepCommand.TRACK_FULL_COMPENSATION.command);
+            builder.append(',').append(OnStepCommand.TRACK_DUAL_AXIS.command);
+        }
+        builder.append(',').append(OnStepCommand.TRACK_ENABLE.command);
+        return builder.toString();
+    }
+
     private boolean shouldStartDualAxisTracking() {
-        return isAltAzMountMode() || hasThreeStarTrackingModel;
+        return isAltAzMountMode() || hasAlignmentTrackingModel;
+    }
+
+    private boolean hasPolarRefineAlignmentModel() {
+        return hasAlignmentTrackingModel && savedAlignmentStarCount >= 3;
     }
 
     private String trackingModeLabel(boolean dualAxis) {
@@ -3335,6 +3356,14 @@ public final class MainActivity extends Activity {
             commands.add(MountCommand.noReply(command));
         }
         commands.add(MountCommand.withReply(startCommand.command));
+        boolean alignmentDualAxisTracking = isAltAzMountMode();
+        addTrackingStartCommands(commands, TrackingRate.SIDEREAL, alignmentDualAxisTracking);
+        commands.add(MountCommand.noReply(OnStepCommand.TRACK_ENABLE.command));
+        Logger.info("alignment start tracking queued stars=" + starCount
+                + " rate=" + TrackingRate.SIDEREAL.name()
+                + " mode=" + (alignmentDualAxisTracking ? "dual-axis" : "single-axis")
+                + " mount=" + selectedMountMode.name()
+                + " commands=" + trackingStartCommandLog(TrackingRate.SIDEREAL, alignmentDualAxisTracking));
         appendLog("INFO alignment start syncs observer time/location first");
         runMountCommands(
                 commands,
@@ -3342,7 +3371,8 @@ public final class MainActivity extends Activity {
                 getString(R.string.calibration_align_started, starCount),
                 () -> {
                     alignmentSession = new AlignmentSession(starCount);
-                    hasThreeStarTrackingModel = false;
+                    hasAlignmentTrackingModel = false;
+                    savedAlignmentStarCount = 0;
                     selectedTrackingRate = TrackingRate.SIDEREAL;
                     trackingEnabled = true;
                     trackingUsingDualAxis = shouldStartDualAxisTracking();
@@ -3623,11 +3653,6 @@ public final class MainActivity extends Activity {
         alignmentSession.acceptedLabels.add(acceptedTarget.label);
         setMountPointing(acceptedTarget.raHours, acceptedTarget.decDegrees);
         if (alignmentSession.isComplete()) {
-            if (alignmentSession.totalStars >= 3) {
-                hasThreeStarTrackingModel = true;
-                trackingEnabled = true;
-                trackingUsingDualAxis = shouldStartDualAxisTracking();
-            }
             setCalibrationStatus(getString(R.string.calibration_align_complete, alignmentSession.totalStars));
             alignmentSession.currentTarget = null;
             Logger.info("alignment complete accepted=" + alignmentSession.acceptedStars
@@ -3656,17 +3681,27 @@ public final class MainActivity extends Activity {
             return;
         }
         logUserAction("tap save-alignment-model state=" + alignmentStateSummary());
+        int savedStarCount = alignmentSession.totalStars;
         List<MountCommand> commands = new ArrayList<>();
         commands.add(MountCommand.withReply(OnStepCommand.ALIGN_WRITE.command));
+        if (savedStarCount >= 2) {
+            addTrackingStartCommands(commands, true);
+            commands.add(MountCommand.noReply(OnStepCommand.TRACK_ENABLE.command));
+            Logger.info("alignment model save tracking queued stars=" + savedStarCount
+                    + " rate=" + selectedTrackingRate.name()
+                    + " mode=dual-axis"
+                    + " commands=" + trackingStartCommandLog(selectedTrackingRate, true));
+        }
         runMountCommands(
                 commands,
                 getString(R.string.calibration_align_saving),
                 getString(R.string.calibration_align_saved),
                 () -> {
-                    if (alignmentSession.totalStars >= 3) {
-                        hasThreeStarTrackingModel = true;
+                    if (savedStarCount >= 2) {
+                        hasAlignmentTrackingModel = true;
+                        savedAlignmentStarCount = savedStarCount;
                         trackingEnabled = true;
-                        trackingUsingDualAxis = shouldStartDualAxisTracking();
+                        trackingUsingDualAxis = true;
                     }
                     alignmentSession = null;
                     calibrationTarget = null;
@@ -3709,9 +3744,10 @@ public final class MainActivity extends Activity {
             setCalibrationStatus(getString(R.string.calibration_refine_disabled_altaz));
             return;
         }
-        if (!hasThreeStarTrackingModel) {
-            Logger.warn("refine-polar goto blocked: missing three-star model");
-            setCalibrationStatus(getString(R.string.calibration_refine_requires_three_star));
+        if (!hasPolarRefineAlignmentModel()) {
+            Logger.warn("refine-polar goto blocked: missing three-star alignment model savedStars="
+                    + savedAlignmentStarCount);
+            setCalibrationStatus(getString(R.string.calibration_refine_requires_alignment_model));
             return;
         }
         SkyChartView.Target target = resolveCalibrationTarget();
@@ -3741,9 +3777,10 @@ public final class MainActivity extends Activity {
             setCalibrationStatus(getString(R.string.calibration_refine_disabled_altaz));
             return;
         }
-        if (!hasThreeStarTrackingModel) {
-            Logger.warn("refine-polar blocked: missing three-star model");
-            setCalibrationStatus(getString(R.string.calibration_refine_requires_three_star));
+        if (!hasPolarRefineAlignmentModel()) {
+            Logger.warn("refine-polar blocked: missing three-star alignment model savedStars="
+                    + savedAlignmentStarCount);
+            setCalibrationStatus(getString(R.string.calibration_refine_requires_alignment_model));
             return;
         }
         if (polarRefineSyncedTarget == null) {
@@ -3759,7 +3796,8 @@ public final class MainActivity extends Activity {
                 getString(R.string.calibration_refine_sending),
                 getString(R.string.calibration_refine_sent),
                 () -> {
-                    hasThreeStarTrackingModel = true;
+                    hasAlignmentTrackingModel = true;
+                    savedAlignmentStarCount = Math.max(savedAlignmentStarCount, 3);
                     clearSyncedCurrentTarget();
                     clearQuickPointingCorrection();
                     polarRefineSyncedTarget = null;
@@ -5593,11 +5631,11 @@ public final class MainActivity extends Activity {
             alignCancelButton.setEnabled(alignmentSession != null && !busy);
         }
         if (refineGotoButton != null) {
-            refineGotoButton.setEnabled(!isAltAzMountMode() && connected && !busy && hasThreeStarTrackingModel);
+            refineGotoButton.setEnabled(!isAltAzMountMode() && connected && !busy && hasPolarRefineAlignmentModel());
         }
         if (refinePaButton != null) {
             refinePaButton.setEnabled(!isAltAzMountMode()
-                    && connected && !busy && hasThreeStarTrackingModel && polarRefineSyncedTarget != null);
+                    && connected && !busy && hasPolarRefineAlignmentModel() && polarRefineSyncedTarget != null);
         }
 
         boolean controlsEnabled = connected && !busy;
@@ -5733,6 +5771,7 @@ public final class MainActivity extends Activity {
                 + " trackingEnabled=" + trackingEnabled
                 + " trackingMode=" + (trackingUsingDualAxis ? "dual" : "single")
                 + " rate=" + selectedTrackingRate.name()
+                + " savedAlignmentStars=" + savedAlignmentStarCount
                 + " firmware=" + selectedFirmwareMode.name()
                 + " mount=" + selectedMountMode.name()
                 + " activeDirection=" + (activeDirection == null ? "none" : activeDirection.name())

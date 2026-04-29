@@ -39,7 +39,7 @@ try {
                         $replyText = if ($FailHome) { '0#' } else { '1#' }
                     } elseif ($text -eq ':CM#') {
                         $replyText = 'N/A#'
-                    } elseif ($text -match '^:A[123+]#$' -or $text -eq ':AW#') {
+                    } elseif ($text -match '^:A[123+]#$' -or $text -eq ':AW#' -or $text -eq ':MP#') {
                         $replyText = '1#'
                     } elseif ($text -match '^:T[eod12QLS]#$') {
                         $replyText = '1#'
