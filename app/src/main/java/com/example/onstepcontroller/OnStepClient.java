@@ -42,11 +42,18 @@ final class OnStepClient implements Closeable {
     synchronized void sendNoReply(String command) throws IOException {
         ensureConnected();
         throttleCommandStart();
+        boolean sent = false;
         try (Socket commandSocket = openSocket()) {
-            OutputStream output = commandSocket.getOutputStream();
-            output.write(command.getBytes(StandardCharsets.US_ASCII));
-            output.flush();
+            writeCommand(commandSocket, command);
+            sent = true;
             sleepQuietly(COMMAND_GAP_MS);
+        } catch (IOException ex) {
+            if (!sent) {
+                Logger.txFail(command, ex);
+            } else {
+                Logger.warn("TX_POST_SEND_FAIL " + command, ex);
+            }
+            throw ex;
         }
         lastCommandAtMillis = System.currentTimeMillis();
     }
@@ -54,33 +61,51 @@ final class OnStepClient implements Closeable {
     synchronized String query(String command) throws IOException {
         ensureConnected();
         throttleCommandStart();
+        boolean sent = false;
         try (Socket commandSocket = openSocket()) {
-            OutputStream output = commandSocket.getOutputStream();
-            output.write(command.getBytes(StandardCharsets.US_ASCII));
-            output.flush();
+            writeCommand(commandSocket, command);
+            sent = true;
             BufferedInputStream input = new BufferedInputStream(commandSocket.getInputStream());
             String reply = readUntilHashOrClose(input);
             lastCommandAtMillis = System.currentTimeMillis();
+            Logger.rx(command, reply);
             return reply;
+        } catch (IOException ex) {
+            if (sent) {
+                Logger.rxFail(command, ex);
+            } else {
+                Logger.txFail(command, ex);
+            }
+            throw ex;
         }
     }
 
     private String handshakeQuery(String command) throws IOException {
         ensureConnected();
         throttleCommandStart();
+        boolean sent = false;
         try (Socket commandSocket = openSocket()) {
-            OutputStream output = commandSocket.getOutputStream();
-            output.write(command.getBytes(StandardCharsets.US_ASCII));
-            output.flush();
+            writeCommand(commandSocket, command);
+            sent = true;
             BufferedInputStream input = new BufferedInputStream(commandSocket.getInputStream());
             try {
                 String reply = readUntilHashOrClose(input);
                 lastCommandAtMillis = System.currentTimeMillis();
+                Logger.rx(command, reply);
                 return reply;
             } catch (SocketTimeoutException ex) {
                 lastCommandAtMillis = System.currentTimeMillis();
+                Logger.warn("RX_TIMEOUT " + command, ex);
+                Logger.rx(command, "");
                 return "";
             }
+        } catch (IOException ex) {
+            if (sent) {
+                Logger.rxFail(command, ex);
+            } else {
+                Logger.txFail(command, ex);
+            }
+            throw ex;
         }
     }
 
@@ -101,6 +126,13 @@ final class OnStepClient implements Closeable {
         commandSocket.connect(new InetSocketAddress(host, port), CONNECT_TIMEOUT_MS);
         commandSocket.setSoTimeout(READ_TIMEOUT_MS);
         return commandSocket;
+    }
+
+    private void writeCommand(Socket commandSocket, String command) throws IOException {
+        OutputStream output = commandSocket.getOutputStream();
+        output.write(command.getBytes(StandardCharsets.US_ASCII));
+        output.flush();
+        Logger.txOk(command);
     }
 
     private void ensureConnected() throws IOException {

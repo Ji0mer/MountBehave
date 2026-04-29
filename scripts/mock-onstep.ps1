@@ -1,5 +1,6 @@
 param(
-    [int]$Port = 9999
+    [int]$Port = 9999,
+    [switch]$FailHome
 )
 
 $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Any, $Port)
@@ -34,6 +35,8 @@ try {
                         $replyText = '-16*42:58#'
                     } elseif ($text -eq ':MS#') {
                         $replyText = '0#'
+                    } elseif ($text -eq ':hC#' -or $text -eq ':hF#') {
+                        $replyText = if ($FailHome) { '0#' } else { '1#' }
                     } elseif ($text -eq ':CM#') {
                         $replyText = 'N/A#'
                     } elseif ($text -match '^:A[123+]#$' -or $text -eq ':AW#') {

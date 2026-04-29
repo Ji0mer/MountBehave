@@ -1,138 +1,384 @@
-# OnStep 谐波赤道仪 Android 手控器可行性与实施计划
+# MountBehave 开发计划
 
-生成日期：2026-04-24
+更新日期: 2026-04-29
 
-## 结论
+## 项目结论
 
-项目可行。OnStep 官方仓库说明它支持 USB、Bluetooth、ESP8266 WiFi 等串行命令通道，并兼容 LX200 协议；这意味着 Android 端可以把“连接层”抽象成 TCP Socket 或 USB 串口，再发送同一套 `:...#` 命令。已有 OnStep Controller2 Android 应用也证明了手机/平板手控器路线成立。
+MountBehave 是一个面向 OnStep / OnStepX 赤道仪的 Android 手控器。项目路线可行:OnStep 兼容 LX200 风格命令,可通过 WiFi TCP、USB 串口或蓝牙串口发送同一套 `:...#` 命令。
 
-最大风险不在“能不能控制电机”，而在三处工程细节：
+当前开发重点不是证明"能不能控制电机",而是把实机场景里最容易出问题的部分做稳:
 
-1. USB-C 有线连接需要手机支持 USB Host/OTG，并需要兼容控制器实际使用的 USB 串口芯片，例如 CDC ACM、CH340、CP210x 或 FTDI。
-2. 星图需要处理数据授权、离线体积、渲染性能和行星星历精度，不能只做静态图片。
-3. “1/2/3 星对极轴”要在建立指向模型后，把模型误差转化成用户可执行的调节提示，明确告诉用户如何调整赤道仪的方位角和高度角。
+- WiFi 连接和短命令发送必须稳定。
+- GOTO / 校准 / 跟踪必须能被完整记录和导出,方便夜间排障。
+- Home / Park / GOTO 这些动作必须区分机械轴坐标和天球 RA/Dec,避免概念混用。
+- 星图数据要离线可用,体积可控,授权清楚。
 
-## 功能可行性
+## 当前状态
 
-### 1. 赤道仪连接
+已实现或已验证:
 
-首选实现顺序：
+- WiFi TCP 连接 OnStep,默认端口 `9999`。
+- 八方向手动移动、停止、急停、速率选择。
+- 设置页观测地/时间、跟踪速率、跟踪启动/停止。
+- 离线星图:恒星、星座线、DSO、太阳系天体、小天体图层、目标搜索和 GOTO。
+- 两星校准实机可用,并能正常 GOTO 目标。
+- 三星校准已修复接受星流程,仍需更多夜间测试。
+- 小天体导入已处理 JPL SBDB 的 300 Multiple Choices、同名小行星污染、非编号彗星前缀、用户数据覆盖内置数据、空输入提示和 Android TLS 兼容问题。
+- Debug APK 可通过 `scripts/build-debug.ps1` 构建。
 
-1. WiFi TCP：用户输入 IP 和端口，默认提供 OnStep 生态常用端口预设，并允许自定义。连接成功后发送 `:GVP#` 或状态查询命令做握手。
-2. USB-C 有线：使用 Android USB Host API 枚举 USB 设备、申请权限、打开端点；具体串口协议建议接入成熟 USB serial 库，覆盖 CDC/CH340/CP210x/FTDI。
-3. 蓝牙串口：用户原文写的是 “wii”，我按 WiFi 理解；如果实际是 Wii 手柄或 Bluetooth，则可以作为第二阶段加入。
+已知限制:
 
-Android 13+ 如果只连接用户已经加入的 OnStep WiFi 热点并打开 TCP Socket，通常主要需要 `INTERNET`。如果 App 自己扫描/发现附近 WiFi 或 WiFi Direct，则需要处理 `NEARBY_WIFI_DEVICES` 运行时权限。
+- 目前主要实机测试覆盖晴空谐波赤道仪 ST17。
+- 三星校准、极轴精调、OnStepX 架台切换、Home 原生命令仍需要更多实机验证。
+- 当前命令日志仍不够完整,需要升级为可导出的全应用调试日志。
 
-### 2. 上下左右移动和停止
+## 当前架构
 
-OnStep/LX200 命令层可直接支持：
+主要模块:
 
-- 北/南/东/西连续移动：`:Mn#`、`:Ms#`、`:Me#`、`:Mw#`
-- 停止：`:Q#`，后续再实测按方向停止命令
-- 速度档：先支持 Guide/Center/Find/Slew 档位，映射 OnStep/LX200 常见移动速率命令
-- 安全策略：按键按下发送移动，松开立即停止；连接中断、App 进入后台、屏幕锁定时强制发送停止并清空本地移动状态
+- `OnStepClient`:WiFi TCP 连接和命令传输。
+- `MainActivity`:原生 Android View UI、连接状态、手控、校准、设置。
+- `SkyChartView`:星图渲染、目标选择、图层显示。
+- `SkyCatalog` / `SmallBodyCatalog`:离线星表、DSO、小天体数据。
+- `scripts/mock-onstep.ps1`:本地 OnStep mock,用于无实机验证命令流程。
 
-第一版必须做一个 Mock OnStep 服务器/串口模拟器，用来验证按钮不会遗漏 stop 命令。
+短期原则:
 
-### 3. 内置星图
+- OnStep 命令发送必须尽量集中到 `OnStepClient`。
+- UI 层只记录用户意图和状态变化,不要重复承担传输日志职责。
+- 不为了 UI 精致牺牲夜间使用稳定性。
 
-建议离线优先，在线更新作为可选：
+## 近期优先级
 
-- 恒星：第一版用 Yale Bright Star Catalog 或 HYG 的亮星子集，覆盖肉眼和寻星镜常用星。HYG v4.2 是 CC BY-SA 4.0，需要在 App 内做 attribution，并评估 ShareAlike 对发布形态的影响。
-- 星座连线：可参考 Stellarium skycultures 的 western 数据格式；但不同 sky culture 的许可证不同，必须逐项确认。若要规避授权复杂度，可以自建一份仅含 HIP 编号连线的最小西方星座线表。
-- 深空天体：第一版放 Messier、Caldwell、常见 NGC/IC 子集，字段至少包含名称、RA/Dec、类型、星等、角大小、别名。
-- 行星/月亮/太阳：第一版采用离线低精度算法或预置短期星历；需要高精度时接 JPL Horizons API 做数据生成或更新，但夜间野外使用不能依赖网络。
-- 渲染：先用 Android Canvas/OpenGL 自绘，模型层统一 J2000 RA/Dec，显示层按观测时间和地理位置转换为 Alt/Az 或赤道坐标投影。
+1. 命令日志系统增强 + 导出。
+2. Home / Return Home 改用 OnStep 原生命令。
+3. OnStep / OnStepX 固件能力检测和架台类型适配。
+4. 极轴对齐流程改进。
+5. 星图数据和小天体导入继续回归测试。
 
-### 4. 1/2/3 星人工校准/极轴流程
+---
 
-OnStep `Command.ino` 注释给出的人工校准序列可作为主流程：
+# 1. 命令日志系统增强
 
-1. 用户把赤道仪放到极轴 home/CWD 起点。
-2. App 设置时间、日期、时区、经纬度。
-3. App 发送 `:A1#`、`:A2#` 或 `:A3#` 开始校准。
-4. App 从亮星列表中筛选高度合适、避开极区、分布合理的校准星。
-5. 对每颗星设置目标 RA/Dec，发送 GOTO。
-6. 用户用方向键把星居中。
-7. App 发送 `:A+#` 接受该星。
-8. 多星流程重复，结束后提示保存模型，例如 `:AW#`。
+## 目标
 
-如果需求确实是“物理对极轴”而不是“星点校准”，第二阶段增加：
+让用户在夜间现场不接电脑也能导出完整日志,用于 debug 分析。
 
-- 根据 2/3 星校准残差估计极轴高度/方位误差。
-- 给出“调节高度螺丝/方位螺丝”的图形提示。
-- 调节期间区分“用手控器移动望远镜”和“机械调极轴”，避免把两者混在一个步骤里。
+必须覆盖:
 
-## 推荐架构
+- 所有实际发往 OnStep 的命令。
+- 所有收到的回复。
+- 所有 socket / timeout / mid-reply close 错误。
+- 关键用户操作:连接、断开、移动、停止、GOTO、校准、同步、跟踪、Park、Home、小天体下载。
+- 关键状态变化:`connected`、`busy`、`gotoInProgress`、校准进度、跟踪模式。
 
-模块边界：
+## 实施口径
 
-- `transport`：WiFi TCP、USB serial、Bluetooth serial，共用 `send(command): reply`。
-- `onstep-protocol`：LX200/OnStep 命令封装、回复解析、错误码、超时重试。
-- `mount-control`：方向键、速率、停车/归位、状态机和安全停止。
-- `catalog`：恒星、星座线、DSO、行星星历数据导入和查询。
-- `sky-renderer`：坐标转换、投影、缩放、选择目标、星图图层。
-- `alignment`：1/2/3 星流程、候选星筛选、步骤引导、校准状态恢复。
-- `app-ui`：连接页、手控页、星图页、校准向导、设置页。
+### 1. `OnStepClient` 是唯一 TX/RX 来源
 
-技术选型：
+Phase 1 就必须在传输边界接入日志:
 
-- Android 原生项目，JDK 17，Android Gradle Plugin 9.1，compileSdk 36。
-- UI 第一版可以用原生 View/Canvas 快速验证；正式版建议 Kotlin + Compose + 自绘 Canvas 或 OpenGL 层。
-- 数据文件使用 JSON/SQLite。星表超过几万条后优先 SQLite + 空间索引或分区文件。
-- USB 串口优先使用成熟库，避免自己从零适配每种芯片。
+- `sendNoReply(command)`:
+  - 记录 `TX command`
+  - 成功写入后记录 `TX_OK command`
+  - 失败记录 `TX_FAIL command <ExceptionClass>: <message>`
+- `query(command)`:
+  - 记录 `TX command`
+  - 成功读到回复后记录 `RX command -> reply`
+  - 失败记录 `RX_FAIL command <ExceptionClass>: <message>`
+- `handshakeQuery(command)`:
+  - 同样记录 `TX`、`RX`、timeout 或空回复。
 
-## 里程碑
+这样即使上层忘记打日志,命令也不会漏。
 
-### M0 环境与原型壳
+### 2. `MainActivity.appendLog(...)` 不再作为命令日志来源
 
-- 完成本目录 Android 工具链配置。
-- 生成可构建的最小 Android App。
-- 加入 Mock OnStep 连接器和协议单元测试。
+现有 `appendLog("TX ...")` / `appendLog("RX ...")` 要迁移掉,避免重复打印。
 
-### M1 连接与手动移动
+迁移后:
 
-- WiFi TCP 连接、断线重连、握手。
-- 方向键移动/停止、速率切换、紧急停止。
-- USB-C 串口连接原型。
+- `OnStepClient` 负责 TX/RX。
+- `MainActivity` 负责 `USER`、`INFO`、`WARN`、`ERROR`、`DIAG`。
+- 校准诊断仍保留详细 `DIAG ALIGN_ACCEPT ...` 信息。
 
-### M2 OnStep 状态与安全
+### 3. 最小可靠版本先落地
 
-- 查询版本、时间、经纬度、RA/Dec、跟踪状态。
-- 设置观测地、时间、时区。
-- App 后台/断线/异常时安全停止。
+Phase 1 只做必要功能:
 
-### M3 星图 MVP
+- `Logger.java`
+- `LogEntry.java`
+- `LogExporter.java`
+- `LogShareProvider.java` 或等价 minimal `ContentProvider`,避免引入 AndroidX。
+- 内存保留最近 1000 行。
+- 文件写入 `files/logs/mountbehave-YYYYMMDD.log`。
+- 命令日志卡片支持:
+  - 复制最近 100 行
+  - 导出当天日志
+  - 清空当天日志
+- 首次导出前显示隐私提示。
 
-- 离线亮星、星座线、Messier/常见 DSO。
-- 当前天空投影、缩放、平移、目标搜索。
-- 从星图选择目标并发送 GOTO。
+### 4. Phase 2 覆盖率补齐
 
-### M4 1/2/3 星人工校准
+Phase 2 在 Phase 1 的传输日志基础上补齐业务上下文,但不改变日志 UI:
 
-- 校准星推荐。
-- GOTO 到校准星、手动居中、接受校准点。
-- 校准进度恢复、失败重试、保存模型。
+- 连接/断开:记录用户点击、host/port、握手结果、连接端口、失败异常和连接状态快照。
+- 手控/安全:记录移动方向、速率、停止、全局急停、取消 GOTO、刷新 GOTO 状态。
+- GOTO/同步/跟踪:记录目标名、RA/Dec、快速指向修正、命令批次、跟踪速率和单双轴状态变化。
+- 校准:记录建议目标、从星图选星、快速同步、多星校准开始/接受/保存/取消、极轴精调跳过和执行结果。
+- Park/Home:记录 Park/Unpark、Set Home、Return Home 的确认、成功、拒绝和 IO 失败。
+- 设置/环境:记录 OnStep/OnStepX 与架台类型选择、手动地点、GPS 权限/GPS 结果、夜视模式、页面切换和星图图层变化。
+- 小天体:记录下载参数、HTTP 状态、TLS 回退、单个彗星/小行星查询、清空用户小天体和失败异常。
+- 状态快照统一通过 `state ...` 日志记录 `connected`、`busy`、`gotoInProgress`、Home、Park、跟踪、固件、架台和校准进度。
 
-### M5 极轴辅助
+彩色分类、过滤 chip、RecyclerView、搜索、SAF 另存为放到 Phase 3。
 
-- 基于多星残差估计极轴误差。
-- 机械调节引导界面。
-- 实测不同 OnStep 固件版本的行为差异。
+## 日志格式
 
-## 当前环境配置
+建议单行格式:
 
-已在 `D:\Android_projects\controller` 下配置项目内便携工具链：
+```text
+2026-04-29T21:13:44.123-04:00 [TX] :GR#
+2026-04-29T21:13:44.315-04:00 [RX] :GR# -> 12:31:08
+2026-04-29T21:13:45.018-04:00 [USER] tap goto target=Vega
+2026-04-29T21:13:46.100-04:00 [ERROR] RX_FAIL :CM# SocketTimeoutException: Read timed out
+```
 
-- JDK：`.toolchain\jdk\jdk-17.0.18+8`
-- Android SDK：`.toolchain\android-sdk`
-- Android platform：`platforms;android-36`
-- Android build-tools：`36.0.0`
-- Android platform-tools：已安装，包含 `adb.exe`
-- Gradle：`.toolchain\gradle\gradle-9.3.1`，并生成 Gradle wrapper
+要求:
 
-常用命令：
+- 每行最多约 2 KB,过长截断。
+- 错误主日志只保留异常类、message、顶层栈帧。
+- 完整崩溃栈可写入单独 `crash-YYYYMMDD.log`。
+- 文件名使用 ASCII。
+
+## 存储策略
+
+- 内存:加锁 `ArrayDeque<LogEntry>`,最多 1000 行。
+- 文件:单线程 executor 串行追加,每条日志 flush。
+- 日志保留最近 7 天。
+- 写线程每条日志检查日期,跨午夜时切换文件。
+- `Logger.init()` 前产生的日志进入 early buffer,init 后 drain 到正式日志。
+
+## 隐私提示
+
+导出前提示用户日志可能包含:
+
+- OnStep IP 和端口。
+- GPS / 手动观测地经纬度。
+- 校准星、目标名、时间戳、RA/Dec。
+
+不会包含:
+
+- WiFi 密码。
+- 用户账户信息。
+
+首次确认后 24 小时内不重复弹窗。
+
+## 验证
+
+- Mock 校准流程日志包含 `:A2#` / `:A3#`、`:Sr#`、`:Sd#`、`:CM#`、`:AW#`。
+- 手动移动日志包含速率命令、方向命令、停止命令和执行结果。
+- 断开 mock 服务后,日志包含具体异常类和命令上下文。
+- 导出文件能通过系统分享发送。
+- 连续 1500 行后,UI 保留最近 1000 行,文件保留全部。
+- Phase 2 覆盖点编译通过,并用 `git diff --check` 确认没有空白格式错误。
+
+---
+
+# 2. Home / Return Home 重构
+
+## 背景
+
+旧方案把 Home 当成 RA/Dec 快照保存,再通过普通 GOTO 回去。这会受到 LST、对齐模型、子午线翻转和极轴误差影响,不适合作为"机械回家"功能。
+
+正确方案是使用 OnStep / LX200 原生命令:
+
+- `:hC#`:Calibrate at home,把当前轴位置标记为 home。
+- `:hF#`:Find home,让赤道仪机械回到 home。
+
+这两个命令工作在轴坐标,不依赖 RA/Dec、GOTO 模型或校准残差。
+
+## UI
+
+在"安全与夜视"区域加入:
+
+```text
+[全局急停] [夜视模式]
+[Set home] [Return home]
+[取消 GOTO] [刷新 GOTO 状态]
+[Park] [Unpark]
+```
+
+`Set home` 和 `Return home` 都要有确认对话框。
+
+## 实施
+
+- `OnStepCommand` 增加:
+  - `HOME_CALIBRATE(":hC#")`
+  - `HOME_FIND(":hF#")`
+  - 可选 `HOME_FIND_ABORT(":hO#")`
+- 删除旧 RA/Dec home 快照相关字段和 `PREF_HOME_*`。
+- 删除或重写:
+  - `setHomeFromMount`
+  - `captureHomeFromMount`
+  - `gotoHome`
+  - `currentHomeRaHours`
+  - `updateHomeViews`
+- `Set home` 使用 query 发送 `:hC#`,成功回包应为 `1`。
+- `Return home` 使用 query 发送 `:hF#`,成功回包应为 `1`。
+- 若 `gotoInProgress` 或 parked 状态不合适,先提示用户处理。
+
+## 风险
+
+- `:hF#` 可能以较高速率回家,必须提示用户确认电缆和镜筒不会碰撞。
+- Home 与 Park 是不同概念,UI 文案要明确。
+- 开机时如果赤道仪已经在 CWD,通常无需先 `Set home`;OnStep 会把开机姿态视为 home。
+- AltAz 模式下 home 语义变为经纬仪轴 home,仍可使用但文案要避免写死 CWD。
+
+## 验证
+
+- Mock 对 `:hC#` / `:hF#` 回 `1`,App 显示成功。
+- Mock 回 `0`,App 显示失败。
+- 实机:开机在 CWD,直接 Return home 不应大幅移动。
+- 实机:GOTO + 跟踪 30 分钟后 Return home,应回到机械 CWD,不受校准模型影响。
+
+---
+
+# 3. OnStep / OnStepX 兼容与架台类型
+
+## 目标
+
+兼容经典 OnStep 和 OnStepX,并在 OnStepX 上支持架台类型识别和安全切换。
+
+## 固件识别
+
+握手时读取:
+
+- `:GVP#`:产品名,例如 `On-Step` 或 `OnStepX`。
+- `:GVN#`:版本号。
+- `:GVD#`:编译日期。
+- `:GU#`:状态字符串,用于辅助判断架台类型。
+
+识别结果:
+
+- `CLASSIC_ONSTEP`
+- `ONSTEPX`
+- `UNKNOWN`
+
+## 架台类型
+
+当前类型可通过 `:GU#` / `:GW#` 状态字符串判断:
+
+- GEM / 赤道仪。
+- Fork。
+- AltAz / 经纬仪。
+- Unknown。
+
+OnStepX 支持写入架台类型:
+
+- `:SXEM,1#`:GEM。
+- `:SXEM,2#`:Fork。
+- `:SXEM,3#`:AltAz。
+
+写入后必须提示用户重启赤道仪。运行时切换后继续操作电机有风险。
+
+## UI 适配
+
+- 经典 OnStep:显示当前类型,隐藏切换按钮。
+- OnStepX:显示当前类型和切换入口。
+- AltAz 模式:
+  - 隐藏或禁用架台侧相关按钮。
+  - 禁用赤道仪极轴精调。
+  - 跟踪应按双轴语义处理。
+  - 限位提醒只看高度,不看中天翻转。
+
+## 验证
+
+- Mock classic:不显示切换按钮。
+- Mock OnStepX GEM:显示切换按钮。
+- Mock OnStepX AltAz:极轴精调禁用。
+- 切换后发送 `:SXEM,n#`,提示重启并断开连接。
+- ST17 实机确认现有连接和手控不受检测层影响。
+
+---
+
+# 4. 极轴对齐改进
+
+## 目标
+
+让目视用户在不接相机解析的情况下更容易完成极轴调整,同时保留现有两星/三星校准和 GOTO 能力。
+
+## 推荐方案
+
+### B 增强版:All-Star + OnStep 两星模型
+
+流程:
+
+1. 选择第 1 颗亮星。
+2. 用户手动移动赤道仪把星放到视野中心。
+3. App 发送 `:Sr#` / `:Sd#` / `:CM#` 接受。
+4. 选择第 2 颗几何分布合适的亮星。
+5. 用户手动居中后再次接受。
+6. App 保存 OnStep 两星模型 `:AW#`。
+7. App 根据两颗星的目标坐标和同步前实际指向估计极轴方位/高度误差。
+8. 用户只调机械方位角和高度角螺丝。
+
+收益:
+
+- 两星后可建立指向模型。
+- 可开启双轴跟踪。
+- 极轴误差由 App 独立估计,不依赖 OnStepX 扩展命令。
+
+### 保留三星模式
+
+三星校准继续作为完整指向模型路径。
+
+三星极轴精调仍可使用 OnStep 的 `:MP#`,但只在赤道仪模式下启用。
+
+### 漂移法向导
+
+作为高精度选项:
+
+- 东方近赤道星用于方位误差。
+- 子午线附近星用于高度误差。
+- App 通过 `:GR#` / `:GD#` 周期查询 Dec 漂移率。
+
+## 风险
+
+- 两颗校准星几何分布不好会导致解算病态,需要提示用户重选。
+- 大于约 5 度的粗对极轴误差可能需要迭代。
+- 漂移法耗时长,应作为高级模式。
+
+## 验证
+
+- Solver 单元测试:合成已知极轴误差,反解误差小于 5 角秒。
+- Mock:两星完成后可保存模型并启动双轴跟踪。
+- 实机:两星校准后 GOTO 仍正常,极轴提示方向合理。
+
+---
+
+# 5. 星图与小天体数据
+
+## 已完成
+
+- 恒星显示星等限制提升到较暗星等,并支持窄视场寻星。
+- 太阳、月亮、行星使用离线低/中精度算法。
+- 小行星/彗星支持用户按名称或编号从 JPL SBDB 添加。
+- 用户添加的小天体覆盖内置旧数据。
+- 彗星支持椭圆、近抛物和双曲轨道分支。
+- 星图支持银河大致位置。
+
+## 后续关注
+
+- 太阳系天体精度说明要在 README 中保持清楚。
+- 太阳系天体不应作为校准目标。
+- 小天体下载失败时必须写入日志,包含查询参数、HTTP 状态和异常原因。
+- 数据授权说明要继续保持在 README 中。
+
+---
+
+# 6. 构建与验证
+
+## 常用命令
 
 ```powershell
 cd D:\Android_projects\controller
@@ -140,180 +386,45 @@ cd D:\Android_projects\controller
 .\scripts\build-debug.ps1
 ```
 
-## 资料来源
+Debug APK 输出:
 
-- [OnStep GitHub README](https://github.com/hjd1964/OnStep)：连接方式、LX200 兼容性、Android 生态说明。
-- [OnStep Command.ino](https://raw.githubusercontent.com/hjd1964/OnStep/release-4.24/Command.ino)：`A` 类校准命令和人工校准流程注释。
-- [OnStep Controller2 on Google Play](https://play.google.com/store/apps/details?id=com.onstepcontroller2)：现有 Android 手控器功能边界参考。
-- [Android USB Host overview](https://developer.android.com/develop/connectivity/usb/host)：Android USB Host 枚举、权限和端点通信。
-- [Android WiFi permissions](https://developer.android.com/guide/topics/connectivity/wifi-permissions)：Android 13+ 附近 WiFi 设备权限。
-- [Android sdkmanager docs](https://developer.android.com/tools/sdkmanager)：命令行 SDK 安装和目录结构。
-- [Android Gradle Plugin 9.1 release notes](https://developer.android.com/build/releases/gradle-plugin)：AGP、Gradle、JDK、Build Tools 兼容矩阵。
-- [JPL Horizons](https://ssd.jpl.nasa.gov/planets/orbits.html)：太阳系天体星历来源。
-- [Yale Bright Star Catalog](https://tdc-www.harvard.edu/catalogs/bsc5.html)：亮星数据来源候选。
-- [HYG Database](https://astronexus.com/projects/hyg)：亮星/近星综合数据来源和许可证。
-- [Stellarium skycultures](https://github.com/Stellarium/stellarium-skycultures)：星座连线数据格式和授权注意事项。
+```text
+D:\Android_projects\controller\app\build\outputs\apk\debug\app-debug.apk
+```
 
----
+## Mock 验证
 
-# 极轴对齐方案改进研究(2026-04-28 增补)
+`scripts/mock-onstep.ps1` 应覆盖:
 
-## 背景
+- 连接握手。
+- 移动 / 停止。
+- GOTO。
+- 两星 / 三星校准。
+- `:hC#` / `:hF#`。
+- OnStepX 架台类型查询和切换。
+- 故障回包和超时。
 
-v0.1.0 已实现"三星校准 + `:MP#` 极轴精调"流程,但实际使用反馈步骤偏多。本研究目的:在**目视使用、不依赖相机解析**的约束下,探索更短/更易用的对极轴方案,作为后续版本的实施参考。
+## 实机验证顺序
 
-### 当前实现回顾(已逐行核对源码)
-
-`app/src/main/java/com/example/onstepcontroller/MainActivity.java` 中的极轴流程:
-
-- **三星校准**:`startAlignment(3)` → `:A3#` → 对每颗星 `:Sr<RA># :Sd<Dec># :CM#`(3 次)→ `:AW#` 保存模型(`MainActivity.java:2567-2913`)
-- **三星极轴精调**:`gotoRefinePolarAlignmentTarget()` GOTO 一颗精调星 → 用户**手控居中** → `refinePolarAlignment()` 发 `:MP#` → 提示用户**只用方位/高度螺丝**把星移回中心(`MainActivity.java:2929-2976`)
-- **校准星推荐**(`SkyChartView.java:214-224`,`1162-1176`):一阶 ≥20° + 星等 ≤3.0;二阶 ≥10° + 星等 ≤4.0;无显式三星几何分布检查
-- **架台侧检测**(`MainActivity.java:3217-3220`):`:Gm#` 查询 + `signedHourAngle ≥ 0 ? "E" : "W"` 推算期望
-
-### 当前流程操作量
-
-从启动到极轴 OK:**~12 次按钮 + 4 次 GOTO + 4-5 次手控调节**(其中 3 次电机居中 + 1 次纯机械调螺丝)。
-
-### 痛点与场景
-
-- **主要痛点**:步骤太多
-- **场景**:兼顾"野外重新起架"(初始 ±10° 偏差)与"定点小修"(亚度量级偏差)
+1. 连接和停止。
+2. 手动移动八方向。
+3. GOTO 单目标。
+4. 两星校准。
+5. 三星校准。
+6. 跟踪启动/停止。
+7. Return home。
+8. 小天体下载与星图显示。
 
 ---
 
-## 候选方案对比
+# 资料来源
 
-| ID | 方案 | 星数 | 步数 | 精度上限 | 起始容错 | 实施难度 |
-|---|---|---|---|---|---|---|
-| 0 | 现行(3 星 + `:MP#`) | 3 | 12+ | ~30″ | 中(±2°) | 已实现 |
-| **A** | **2 星 + `:MP#` 精调** | 2 | ~8 | ~30″ | 中 | **低**(主要改 UI/状态机) |
-| B | All-Star(1 同步 + 1 测量) | 2 | ~6 | ~1′ | 高(±10°+) | 中(app 端解极轴误差) |
-| C | 双星残差解(2 星都做模型) | 2 | ~7 | ~1′ | 高 | 中 |
-| **D** | **漂移法向导(Bigourdan)** | 1-2 | 1 GOTO + 5-15 min 实时 | **<10″** | 任意 | 中(实时漂移率 UI) |
-| **E** | **现行 + 量化残差显示** | 同 0 | 同 0 | 同 0 | 同 0 | 低(加 OnStepX 扩展查询) |
-
-### 各方案要点
-
-**A. 2 星 + `:MP#`(快速路径)**
-- 流程:`:A2#` → 2 颗星(`:Sr/:Sd/:CM`)→ `:AW#` → GOTO 精调星 → 手控居中 → `:MP#` → 螺丝调节
-- 数学上 OnStep 仅需 ≥2 个独立指向约束就能算极轴 alt/az 误差,理论可行
-- 风险:需在 mock + 实机上验证 OnStep 固件**确实接受 `:A2#` 之后的 `:MP#`**(经典 OnStep 4.x 通常支持;需复测)
-- 节省:相对现行 ≈ -4 次按钮、-1 次 GOTO、-1 次手控居中
-
-**B. All-Star(SkyWatcher / Celestron 算法)**
-- 步骤:
-  1. 用户选一颗显眼亮星 → GOTO → 手控居中 → `:CM#` 同步
-  2. App 推荐第二颗"极轴敏感"星(典型选南方近子午圈或东方近地平,Az/Alt 误差敏感度互补)
-  3. GOTO 第二颗星 → 看望远镜里星偏离视场中心多少
-  4. **App 端反算极轴 alt/az 误差**(球面三角解,~30 行核心 + 50 行测试)
-  5. 提示:"方位调 X′,高度调 Y′" → 用户拧螺丝直到星回中心
-- 完全独立于 OnStep 极轴指令,跨固件可移植
-- 容忍最大初始误差(只需第 1 颗星看得见就能起手)
-- 适合野外冷启动
-
-**C. 双星残差解**
-- 与 B 类似,但做完整 2 星 OnStep 模型,然后从模型残差读 polar 误差
-- 比 A 多一步保存模型,意义不大;**不推荐独立采用**
-
-**D. 漂移法向导**
-- 经典 Bigourdan/King 法:看星在 Dec 上漂移率
-  - **东方近赤道**星 → Dec 北漂 = 极轴方位偏西(反之偏东)→ 调方位螺丝
-  - **子午圈**星 → Dec 北漂 = 极轴高度偏低(反之偏高)→ 调高度螺丝
-- App 实现:每 1-2 秒查询 `:GR# :GD#`,记录 Dec 时间序列,显示漂移率(arcsec/min)
-- 用户实时看着漂移率边调螺丝直到归零
-- 1 次 GOTO + 长时间观察(5-15 分钟/轴)
-- **精度最好**(可到 <10″),适合定点架并需要长曝光跟踪
-- 不依赖 OnStep 校准模型
-
-**E. 量化残差显示(增量改进)**
-- 用 OnStepX `:GX91#`/`:GX92#`(polar align azimuth/altitude correction,arcsec)读残差
-- 把现有"凭感觉调螺丝"换成"方位向东 X′ Y″,高度向上 P′ Q″"
-- 不改流程,纯文案增强;失败安全(查询不到时回退原文案)
-
----
-
-## 推荐(主+辅 双方案)
-
-### 主方案:**A(2 星 + `:MP#`) + E(量化残差)**
-
-理由:对"步数太多"痛点最直接,且改动局限在 UI/文案/查询命令,不引入新数学。新流程:
-
-1. 选第 1 颗校准星 → GOTO → 手控居中 → 接受
-2. 选第 2 颗校准星 → GOTO → 手控居中 → 接受 → 自动 `:AW#`
-3. App 自动 `:GX91#`/`:GX92#` → 显示"方位向东 X′,高度向上 Y′"
-4. 用户拧螺丝(可选:GOTO 校准星 #2 看是否回中,验证调整效果)
-
-总步数:**~7 次按钮 + 2 次 GOTO + 2 次手控居中 + 1 次拧螺丝**(对比现行 12+/4/4-5)。
-
-### 辅方案:**D(漂移法向导)** 作为高精度选项
-
-在校准模式枚举里新增"漂移法极轴(高精度)",作为定点台/长曝光场景的可选项。流程:
-
-1. 选东方近赤道星 → GOTO → 手控居中 → 启动漂移监测
-2. App 显示 Dec 漂移率(arcsec/min)及方向提示("偏西 → 方位螺丝向东微调")
-3. 用户调螺丝,实时看漂移率减小到 0
-4. 切换到子午圈星,重复调高度
-
-总时长 5-15 分钟/轴,但精度可达 <10″。
-
-### 不动现行三星模式
-
-保留作为"完整指向模型 + 极轴精调"路径,适合愿意花时间换 GOTO 精度的用户。
-
----
-
-## 实施步骤
-
-### 文件改动清单(预估)
-
-- `app/src/main/java/.../MainActivity.java`(主体)
-  - `CalibrationMode` 增加 `TWO_STAR_REFINE_POLAR`、`DRIFT_POLAR`(辅方案)
-  - 新增 `queryPolarResiduals()`:发 `:GX91#`/`:GX92#`,解析 arcsec → 角分/角秒文案
-  - 新增 `startDriftMonitor()` / `stopDriftMonitor()`:周期 1 Hz 查 `:GR# :GD#`,维护一个最近 60 个采样的 ring buffer,算线性回归得 arcsec/min 漂移率
-  - `refinePolarAlignment()` 增加成功后自动调 `queryPolarResiduals()` 把残差填到状态文案
-- `app/src/main/res/values/strings.xml`
-  - 新模式名:`calibration_mode_two_star_refine_polar`、`calibration_mode_drift_polar`
-  - 量化模板:`polar_residual_hint = "建议:方位向%1$s调 %2$s,高度向%3$s调 %4$s"`
-  - 漂移法说明文案
-- `scripts/mock-onstep.ps1`
-  - 加 `:GX91#`/`:GX92#` mock 响应(返回固定 arcsec 值便于测试)
-  - 加 `:MP#` mock(成功响应)
-  - 加 `:GR#`/`:GD#` 周期性返回带漂移的位置(用于漂移法 UI 测试)
-- 文档
-  - 新增 `docs/polar-alignment.md`:三种模式说明 + 选择指南
-  - `README.md` 校准流程段落更新
-  - `CHANGELOG.md` 添加新条目
-
-### 风险与回退
-
-- **`:MP#` 可能仅在 3 星模型后才工作**:实机或 mock 验证不通过时,A 退回 3 星,只保留 E(量化残差)的改进
-- **`:GX91#`/`:GX92#` 经典 OnStep 不支持**:查询失败时静默回退到原"凭感觉"文案,UI 不报错
-- **漂移法实现复杂**:可分阶段;初版只显示漂移率,不做调螺丝方向智能提示,留给用户经验判断;后续再加方向语义
-
-### 验证(端到端)
-
-1. `scripts/mock-onstep.ps1` 加上 mock 命令后:
-   - 跑 2 星模式 → 完成后看到"方位向东 4′,高度向上 2′"文案 ✓
-   - 切到漂移法 → 监测窗口里看到漂移率刷新 ✓
-2. 实机(晴空 ST17)夜晚:
-   - 大初始误差(故意把方位偏 5°)→ 2 星模式能在 <10 分钟收敛到 <1′ ✓
-   - 小初始误差 → 漂移法 15 分钟内调到 <30″ ✓
-
-### 不在范围
-
-- 相机解析路线(用户已明确排除)
-- 改 OnStep 固件本身
-- 添加新硬件(极轴镜、电子寻星)
-
----
-
-## 关键文件路径速查
-
-- 主活动:`app/src/main/java/com/example/onstepcontroller/MainActivity.java`
-  - 校准状态机 lines 2567-2976
-  - LX200 命令枚举 lines 4758-4773
-- 星图视图:`app/src/main/java/com/example/onstepcontroller/SkyChartView.java`
-  - 校准星推荐 lines 214-224, 1162-1176
-- 字符串资源:`app/src/main/res/values/strings.xml`
-- Mock OnStep:`scripts/mock-onstep.ps1`
+- OnStep GitHub README:https://github.com/hjd1964/OnStep
+- OnStep release-4.24 `Command.ino`:校准和 LX200 命令参考。
+- OnStepX `Mount.command.cpp` / `Telescope.command.cpp`:架台类型和固件能力命令参考。
+- Android USB Host docs:https://developer.android.com/develop/connectivity/usb/host
+- Android WiFi permissions:https://developer.android.com/guide/topics/connectivity/wifi-permissions
+- JPL SBDB / Horizons:https://ssd.jpl.nasa.gov/
+- Yale Bright Star Catalog:https://tdc-www.harvard.edu/catalogs/bsc5.html
+- HYG Database:https://astronexus.com/projects/hyg
+- Stellarium skycultures:https://github.com/Stellarium/stellarium-skycultures

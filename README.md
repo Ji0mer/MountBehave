@@ -10,12 +10,12 @@
 
 <p align="center">
   <a href="#当前状态"><img alt="Status" src="https://img.shields.io/badge/status-field--testing-orange"></a>
-  <a href="#版本说明"><img alt="Version" src="https://img.shields.io/badge/version-v0.1.0-blue"></a>
+  <a href="#版本说明"><img alt="Version" src="https://img.shields.io/badge/version-v0.2.0-blue"></a>
   <a href="#功能概览"><img alt="Platform" src="https://img.shields.io/badge/platform-Android-green"></a>
   <a href="#星图数据与授权"><img alt="Catalog" src="https://img.shields.io/badge/catalog-HYG%20%7C%20OpenNGC%20%7C%20d3--celestial-lightgrey"></a>
 </p>
 
-MountBehave 是一个为 OnStep/LX200 兼容赤道仪开发的 Android 手控器。它面向手机和平板上的目视观测流程，提供 WiFi 连接、方向键移动、停止/GOTO、离线星图、观测地与时间同步、跟踪控制、两星/三星校准和三星极轴精调入口。
+MountBehave 是一个为 OnStep/LX200 兼容赤道仪开发的 Android 手控器。它面向手机和平板上的目视观测流程，提供 WiFi 连接、方向键移动、停止/GOTO、离线星图、观测地与时间同步、跟踪控制、两星/三星校准和三星极轴精调入口。`v0.2.0` 起加入 OnStepX 与经纬仪模式适配。
 
 这个项目目前不是 OnStep 官方 App，也还没有经过充分的跨设备测试。真实赤道仪测试时请始终保留实体断电、控制盒急停或其他独立安全手段。
 
@@ -37,12 +37,13 @@ MountBehave 是一个为 OnStep/LX200 兼容赤道仪开发的 Android 手控器
   <img src="docs/images/clearsky_wordmark.png" alt="Clearsky ST17 test badge" width="160">
 </p>
 
-当前版本：`v0.1.0`
+当前版本：`v0.2.0`
 
 测试状态：
 
 - 已在晴空谐波赤道仪 `ST17` 上完成 WiFi 连接、手动移动/停止、两星校准、GOTO 目标查找等实机验证。
-- 三星校准流程已经针对 OnStep 架台侧限制做过修复，但仍建议继续夜间实测。
+- 新增 OnStepX 固件选择、赤道仪/经纬仪模式切换、经纬仪校准流程和双轴跟踪语义；OnStepX 真机仍需要更多设备覆盖。
+- 新增可导出的全应用日志，覆盖 TX/RX、用户动作、状态快照、校准诊断和小天体下载错误，方便现场排查。
 - 其他 OnStep 固件版本、其他品牌控制器、USB-C 有线连接、Park/Unpark、三星极轴精调和长时间跟踪仍需要更多实机验证。
 
 适合当前尝试的场景：
@@ -57,7 +58,8 @@ MountBehave 是一个为 OnStep/LX200 兼容赤道仪开发的 Android 手控器
 
 | 模块 | 当前能力 |
 | --- | --- |
-| 连接 | WiFi TCP 连接 OnStep 命令端口，默认 `192.168.0.1:9999` |
+| 设置 | 默认经典 OnStep；可切换 OnStepX，并在 OnStepX 下选择赤道仪 / 经纬仪语义 |
+| 连接/同步 | WiFi TCP 连接 OnStep 命令端口，默认 `192.168.0.1:9999`；观测地、时间和跟踪控制集中在同一页 |
 | 手控 | 八方向移动、松手停止、速度下拉选择、全局急停 |
 | 星图 | 离线恒星、深空天体、星座连线、太阳系天体(VSOP87D 亚角秒精度)、近似银河带 |
 | 小天体 | 内置 17 颗著名小行星 / 彗星基线;可在设置页按需在线下载更多(JPL SBDB)。小行星橙色菱形,彗星带远日方向尾迹 |
@@ -66,15 +68,16 @@ MountBehave 是一个为 OnStep/LX200 兼容赤道仪开发的 Android 手控器
 | GOTO | 星图点选、目标名称搜索、RA/Dec 坐标输入，连接后发送 `:Sr...#`、`:Sd...#`、`:MS#` |
 | 观测地与时间 | 默认 Boston；支持 GPS 或手动经纬度；可同步到 OnStep |
 | 跟踪 | 恒星速、月球速、太阳速；三星模型后请求双轴/模型补偿，否则默认单轴 |
-| 校准 | 快速同步、两星校准、三星校准、三星极轴精调入口 |
-| 安全 | GOTO 状态查询、取消 GOTO、Park/Unpark、夜视模式、低空/过中天提醒 |
+| 校准 | 快速同步、两星校准、三星校准、三星极轴精调入口；经纬仪模式隐藏极轴相关流程 |
+| 安全 | 原生 Set Home / Return Home、GOTO 状态查询、取消 GOTO、Park/Unpark、夜视模式、低空/过中天提醒 |
+| 日志 | 设置页内置命令日志，可复制最近 100 行、导出当天日志、清空当天日志 |
 | 适配 | 紧凑界面、问号说明弹窗、悬浮菜单、横屏和平板宽屏布局、MountBehave 启动图标 |
 
 ## 安装与构建
 
 ### 下载 APK
 
-推荐从 GitHub Release 下载 `MountBehave-v0.1.0.apk`。
+推荐从 GitHub Release 下载 `MountBehave-v0.2.0.apk`。
 
 ### 本地构建
 
@@ -92,7 +95,7 @@ app\build\outputs\apk\debug\app-debug.apk
 本次发布用的重命名 APK：
 
 ```text
-dist\MountBehave-v0.1.0.apk
+dist\MountBehave-v0.2.0.apk
 ```
 
 ### 安装到手机
@@ -100,7 +103,7 @@ dist\MountBehave-v0.1.0.apk
 ```powershell
 .\scripts\env.ps1
 adb devices
-adb install -r dist\MountBehave-v0.1.0.apk
+adb install -r dist\MountBehave-v0.2.0.apk
 ```
 
 电脑模拟器通常不能直接加入赤道仪自己的 WiFi 热点。真实测试时建议把 APK 安装到手机或 Android 平板上，并让设备直接连接赤道仪 WiFi。
@@ -118,12 +121,12 @@ adb install -r dist\MountBehave-v0.1.0.apk
 ### 1. 连接赤道仪
 
 1. 手机连接赤道仪 WiFi。
-2. 打开 MountBehave，进入“设置”页。
-3. 在“赤道仪连接”里确认 IP 和端口，默认是 `192.168.0.1:9999`。
-4. 点击“连接”。
+2. 打开 MountBehave，先在“设置”页确认固件为 OnStep 或 OnStepX。
+3. 进入“连接/同步”页，在“架台连接”里确认 IP 和端口，默认是 `192.168.0.1:9999`。
+4. 点击晴空角标连接按钮。
 5. 如果连接失败，先确认赤道仪端口是否为 `9999`，再断开重连。
 
-界面中的长说明默认折叠在标题右侧的 `?` 按钮里。实际操作状态、连接状态、校准进度和命令日志仍然直接显示在页面上。
+界面中的长说明默认折叠在标题右侧的 `?` 按钮里。实际操作状态、连接状态、校准进度和命令日志仍然直接显示在页面上。命令日志位于“设置”页，可导出分享。
 
 ### 2. 同步观测地和时间
 
@@ -147,9 +150,18 @@ adb install -r dist\MountBehave-v0.1.0.apk
 4. 未连接时只能显示目标；连接后可以显示并 GOTO。
 5. GOTO 后可刷新 GOTO 状态，也可以随时取消 GOTO。
 
+### 5. Set Home / Return Home
+
+Home 位于“设置”页的“安全与夜视”区域。MountBehave 直接使用 OnStep 原生命令 `:hC#` / `:hF#`，按机械轴位置标记和返回 Home，不再把 Home 存成 RA/Dec 后走普通 GOTO。
+
+1. 通常把赤道仪放在 CWD/Home 姿态后再上电；这种情况下 OnStep 已把开机姿态当作 Home，第一次使用前不需要先点“设为 Home”。
+2. 只有在你确实想把当前轴位置改成新的 Home 时，才点击“设为 Home”并确认。
+3. 点击“回到 Home”前确认线缆、镜筒和支架不会碰撞；App 会请求 OnStep 机械回家，可用“取消 GOTO”或“全局急停”中止。
+4. Home 与 Park 是两套独立参考；已 Park 时请先 Unpark，再回 Home。
+
 ## 校准流程
 
-校准入口位于“手控”页上方的“赤道仪校准”区域。当前流程面向目视使用，不依赖相机解析。
+校准入口位于“手控”页上方的“架台校准”区域。当前流程面向目视使用，不依赖相机解析。OnStepX 经纬仪模式不需要对极轴，App 会隐藏极轴精调流程。
 
 ### 快速同步
 
@@ -184,9 +196,9 @@ adb install -r dist\MountBehave-v0.1.0.apk
 
 ## 已知问题
 
-- 完成两星/三星校准并保存模型后,本地 UI 已能直接重新开始下一次校准(开发分支已修)。**取消校准**走另一路径:app 端依次发送 `:Q#`(停止运动)+ `:A0#`(OnStep abort alignment,固件不识别时静默忽略),并清掉本地状态;启动新校准时入口也再补一次 `:Q#` + `:A0#` 作为防御性 reset。在多数固件下这就够了;极少数固件可能仍需手动重启赤道仪。
+- 完成两星/三星校准并保存模型后，本地 UI 已能直接重新开始下一次校准。**取消校准**走另一路径:app 端依次发送 `:Q#`(停止运动)+ `:A0#`(OnStep abort alignment,固件不识别时静默忽略),并清掉本地状态;启动新校准时入口也再补一次 `:Q#` + `:A0#` 作为防御性 reset。在多数固件下这就够了;极少数固件可能仍需手动重启赤道仪。
 - 三星校准遇到架台侧不匹配时,需要先使用"2B. 设置架台侧 / GOTO",再手动居中并接受。
-- 行星位置精度已升级至亚角秒(VSOP87D);月亮 ~30-60";小行星/彗星基线 ~1′(可通过设置页"下载亮小行星 / 下载彗星元素"按钮在线刷新更新元素)。
+- 行星位置精度已升级至亚角秒(VSOP87D);月亮 ~30-60";小行星/彗星基线 ~1′(可通过设置页"下载亮小行星 / 添加彗星"在线刷新更新元素)。
 - 命令传输不做自动重试:若发送过程中遇到 WiFi 抖动断链,会显示一次失败;再点一次按钮即可重试(避免对 `:CM#` 等状态命令双发的风险)。
 
 这些问题会在后续版本继续改善。
@@ -201,7 +213,7 @@ MountBehave 为控制 APK 体积使用筛选后的离线数据：
 - 行星 / 太阳：IMCCE VSOP87D 截断表(约 3700 项,光行时 + 光行差 + 章动)。视位置与 JPL Horizons 吻合到亚角秒。
 - 月亮：扩展的 Schlyter + Meeus 第 47 章摄动项,精度 ~30-60"。
 - 小行星 / 彗星基线:JPL SBDB 内嵌 17 颗著名天体的 Keplerian 元素。视位置链路与行星一致 + 黄道 J2000→date 岁差旋转。Ceres 与 JPL 吻合 0.6" / 8"。
-- 小行星 / 彗星扩展:用户在设置页按需调用 JPL SBDB Query API 在线下载。
+- 小行星 / 彗星扩展:用户在设置页按需调用 JPL SBDB Query API 在线下载或逐颗添加。
 - 银河带：程序绘制 J2000 银河坐标近似带，不是真实银河贴图。
 
 授权说明：
@@ -245,6 +257,12 @@ MountBehave 为控制 APK 体积使用筛选后的离线数据：
 ```
 
 ## 版本说明
+
+### v0.2.0
+
+- 新增设置页、连接/同步页和 OnStepX 赤道仪/经纬仪模式。
+- 新增可导出命令日志、Home/Return Home 原生命令、安全控制重排和暗色界面。
+- 改进小天体下载、彗星逐颗添加、太阳系/小天体星图精度和校准流程。
 
 ### v0.1.0
 

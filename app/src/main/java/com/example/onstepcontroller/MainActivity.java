@@ -4,7 +4,10 @@ import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.Dialog;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.res.Configuration;
 import android.content.pm.PackageManager;
@@ -55,8 +58,6 @@ import java.security.SecureRandom;
 import java.security.cert.X509Certificate;
 import java.time.ZonedDateTime;
 import java.util.ArrayList;
-import java.util.ArrayDeque;
-import java.util.Deque;
 import java.util.List;
 import java.util.Locale;
 import java.time.Instant;
@@ -78,12 +79,21 @@ public final class MainActivity extends Activity {
     private static final int DEFAULT_PORT = 9999;
     private static final String JPL_SBDB_HOST = "ssd-api.jpl.nasa.gov";
     private static final String PREFS_NAME = "mountbehave_prefs";
-    private static final String PREF_HOME_HAS_POSITION = "home_has_position";
-    private static final String PREF_HOME_VALID = "home_valid";
-    private static final String PREF_HOME_REFERENCE_RA = "home_reference_ra";
-    private static final String PREF_HOME_REFERENCE_EPOCH_MS = "home_reference_epoch_ms";
-    private static final String PREF_HOME_HOUR_ANGLE = "home_hour_angle";
-    private static final String PREF_HOME_DEC_DEGREES = "home_dec_degrees";
+    private static final String PREF_FIRMWARE_MODE = "firmware_mode";
+    private static final String PREF_MOUNT_MODE = "mount_mode";
+    private static final String PREF_LOG_PRIVACY_ACCEPTED_AT = "log_privacy_accepted_at";
+    private static final long LOG_PRIVACY_ACK_VALID_MS = 24L * 60L * 60L * 1000L;
+    private static final String ONSTEPX_MOUNT_MODE_QUERY = ":GXEM#";
+    private static final int SIDE_MENU_EXPANDED_WIDTH_DP = 148;
+    private static final int SIDE_MENU_COLLAPSED_SIZE_DP = 56;
+    private static final int SIDE_MENU_MARGIN_START_DP = 8;
+    private static final int SIDE_MENU_MARGIN_TOP_DP = 22;
+    private static final int SIDE_MENU_TOGGLE_HEIGHT_DP = 48;
+    private static final int SIDE_MENU_ITEM_TOP_MARGIN_DP = 10;
+    private static final int SIDE_MENU_ITEM_HEIGHT_DP = 54;
+    private static final int SIDE_MENU_FLOATING_STOP_GAP_DP = 8;
+    private static final int FLOATING_STOP_COLLAPSED_TOP_MARGIN_DP = 86;
+    private static final int SIDE_MENU_ITEM_COUNT = 4;
     private static final int LOCATION_PERMISSION_REQUEST = 24;
     private static final long CONNECTION_POLL_INTERVAL_MS = 5_000L;
     private static final Pattern COORDINATE_TARGET_PATTERN = Pattern.compile(
@@ -94,7 +104,6 @@ public final class MainActivity extends Activity {
     private final ExecutorService ioExecutor = Executors.newSingleThreadExecutor();
     private final Handler uiHandler = new Handler(Looper.getMainLooper());
     private final OnStepClient client = new OnStepClient();
-    private final Deque<String> logLines = new ArrayDeque<>();
     private final AtomicInteger connectionGeneration = new AtomicInteger();
     private static volatile SSLContext relaxedJplSslContext;
     private final Runnable skyClockRunnable = new Runnable() {
@@ -108,17 +117,23 @@ public final class MainActivity extends Activity {
     private Button manualTabButton;
     private Button skyTabButton;
     private Button settingsTabButton;
+    private Button connectionSyncTabButton;
     private Button sideMenuToggleButton;
     private Button floatingStopButton;
     private LinearLayout sideMenu;
     private LinearLayout manualPage;
     private LinearLayout skyPage;
     private LinearLayout settingsPage;
+    private LinearLayout connectionSyncPage;
     private EditText hostField;
     private EditText portField;
     private LinearLayout connectionForm;
-    private Button connectButton;
+    private View connectTrigger;
     private Button disconnectButton;
+    private Spinner firmwareModeSpinner;
+    private Spinner mountModeSpinner;
+    private LinearLayout mountModeContainer;
+    private TextView firmwareSettingsStatusText;
     private Button stopButton;
     private Button northButton;
     private Button northEastButton;
@@ -148,7 +163,6 @@ public final class MainActivity extends Activity {
     private Button trackingSolarButton;
     private Button trackingToggleButton;
     private TextView trackingStatusText;
-    private TextView homeStatusText;
     private Button gotoHomeButton;
     private Button setHomeButton;
     private TextView safetyStatusText;
@@ -182,6 +196,7 @@ public final class MainActivity extends Activity {
     private TextView statusText;
     private TextView manualStatusText;
     private TextView logText;
+    private ScrollView logScrollView;
     private LocationManager locationManager;
     private ConnectivityManager connectivityManager;
     private WifiManager.WifiLock wifiLock;
@@ -203,12 +218,6 @@ public final class MainActivity extends Activity {
     private boolean hasCurrentMountPosition;
     private double currentMountRaHours;
     private double currentMountDecDegrees;
-    private boolean hasHomePosition;
-    private boolean homePositionValid;
-    private double homeReferenceRaHours;
-    private double homeHourAngleHours;
-    private double homeDecDegrees;
-    private Instant homeReferenceInstant;
     private boolean trackingEnabled;
     private boolean hasThreeStarTrackingModel;
     private boolean trackingUsingDualAxis;
@@ -223,8 +232,11 @@ public final class MainActivity extends Activity {
     private boolean quickPointingCorrectionActive;
     private double quickPointingRaOffsetHours;
     private double quickPointingDecOffsetDegrees;
+    private boolean homeFindInProgress;
     private ManualRate selectedManualRate = ManualRate.CENTER;
     private CalibrationMode selectedCalibrationMode = CalibrationMode.QUICK_SYNC;
+    private FirmwareMode selectedFirmwareMode = FirmwareMode.ONSTEP;
+    private MountMode selectedMountMode = MountMode.EQUATORIAL;
     private Page currentPage = Page.SETTINGS;
     private volatile AlignmentSession alignmentSession;
     private int suggestedCalibrationIndex;
@@ -233,13 +245,20 @@ public final class MainActivity extends Activity {
     private Button smallBodyDownloadAsteroidsButton;
     private Button smallBodyDownloadCometsButton;
     private Button smallBodyClearUserButton;
+    private boolean suppressCalibrationModeSelection;
+    private boolean suppressFirmwareModeSelection;
+    private boolean suppressMountModeSelection;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        Logger.init(getApplicationContext());
+        Logger.setUiCallback(this::updateLogText);
+        Logger.info("lifecycle onCreate");
         connectivityManager = (ConnectivityManager) getApplicationContext().getSystemService(Context.CONNECTIVITY_SERVICE);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         applyNightModeWindow();
+        loadFirmwarePreferences();
         smallBodyCatalog = new SmallBodyCatalog(getFilesDir());
         setContentView(createContentView());
         updateUiState();
@@ -249,6 +268,7 @@ public final class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        Logger.info("lifecycle onResume");
         acquireWifiLock();
         uiHandler.post(skyClockRunnable);
         if (connected && !busy) {
@@ -260,6 +280,7 @@ public final class MainActivity extends Activity {
     @Override
     protected void onPause() {
         super.onPause();
+        Logger.info("lifecycle onPause");
         uiHandler.removeCallbacks(skyClockRunnable);
         if (connected && activeDirection != null) {
             activeDirection = null;
@@ -270,6 +291,7 @@ public final class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        Logger.info("lifecycle onDestroy");
         ioExecutor.execute(() -> {
             try {
                 if (client.isConnected()) {
@@ -289,6 +311,7 @@ public final class MainActivity extends Activity {
         }
         releaseWifiLock();
         releaseWifiBinding();
+        Logger.setUiCallback(null);
         super.onDestroy();
     }
 
@@ -303,8 +326,10 @@ public final class MainActivity extends Activity {
             granted = granted || result == PackageManager.PERMISSION_GRANTED;
         }
         if (granted) {
+            Logger.info("gps permission result granted");
             useGpsLocation();
         } else {
+            Logger.warn("gps permission result denied");
             setObserverMessage(getString(R.string.gps_permission_denied));
         }
     }
@@ -334,6 +359,13 @@ public final class MainActivity extends Activity {
         header.addView(subtitle, matchWrap());
         root.addView(header, matchWrap());
 
+        settingsPage = createSettingsPage();
+        root.addView(settingsPage, matchWrap());
+
+        connectionSyncPage = createConnectionSyncPage();
+        connectionSyncPage.setVisibility(View.GONE);
+        root.addView(connectionSyncPage, matchWrap());
+
         manualPage = new LinearLayout(this);
         manualPage.setOrientation(LinearLayout.VERTICAL);
         manualStatusText = bodyText(R.string.status_disconnected);
@@ -352,10 +384,6 @@ public final class MainActivity extends Activity {
         skyPage = createSkyPage();
         skyPage.setVisibility(View.GONE);
         root.addView(skyPage, matchWrap());
-
-        settingsPage = createSettingsPage();
-        settingsPage.setVisibility(View.GONE);
-        root.addView(settingsPage, matchWrap());
 
         shell.addView(scrollView, frameMatchParent());
         shell.addView(createPageTabs(), sideMenuParams());
@@ -380,19 +408,25 @@ public final class MainActivity extends Activity {
         configureTabButton(settingsTabButton);
         settingsTabButton.setText(R.string.tab_settings);
         settingsTabButton.setOnClickListener(v -> selectPageFromMenu(Page.SETTINGS));
-        sideMenu.addView(settingsTabButton, sideMenuButtonParams(10));
+        sideMenu.addView(settingsTabButton, sideMenuButtonParams(SIDE_MENU_ITEM_TOP_MARGIN_DP));
+
+        connectionSyncTabButton = new Button(this);
+        configureTabButton(connectionSyncTabButton);
+        connectionSyncTabButton.setText(R.string.tab_connection_sync);
+        connectionSyncTabButton.setOnClickListener(v -> selectPageFromMenu(Page.CONNECTION_SYNC));
+        sideMenu.addView(connectionSyncTabButton, sideMenuButtonParams(SIDE_MENU_ITEM_TOP_MARGIN_DP));
 
         manualTabButton = new Button(this);
         configureTabButton(manualTabButton);
         manualTabButton.setText(R.string.tab_manual);
         manualTabButton.setOnClickListener(v -> selectPageFromMenu(Page.MANUAL));
-        sideMenu.addView(manualTabButton, sideMenuButtonParams(10));
+        sideMenu.addView(manualTabButton, sideMenuButtonParams(SIDE_MENU_ITEM_TOP_MARGIN_DP));
 
         skyTabButton = new Button(this);
         configureTabButton(skyTabButton);
         skyTabButton.setText(R.string.tab_sky);
         skyTabButton.setOnClickListener(v -> selectPageFromMenu(Page.SKY));
-        sideMenu.addView(skyTabButton, sideMenuButtonParams(10));
+        sideMenu.addView(skyTabButton, sideMenuButtonParams(SIDE_MENU_ITEM_TOP_MARGIN_DP));
 
         setSideMenuExpanded(sideMenuExpanded);
         return sideMenu;
@@ -520,35 +554,11 @@ public final class MainActivity extends Activity {
         LinearLayout targetPanel = card();
         targetPanel.addView(labelText(R.string.calibration_mode_label), matchWrap());
         calibrationModeSpinner = new Spinner(this);
-        List<String> modeLabels = new ArrayList<>();
-        for (CalibrationMode mode : CalibrationMode.values()) {
-            modeLabels.add(getString(mode.labelRes));
-        }
-        ArrayAdapter<String> modeAdapter = new ArrayAdapter<>(
-                this,
-                android.R.layout.simple_spinner_item,
-                modeLabels
-        );
-        modeAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        calibrationModeSpinner.setAdapter(modeAdapter);
-        calibrationModeSpinner.setSelection(selectedCalibrationMode.ordinal());
-        calibrationModeSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
-            @Override
-            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
-                selectedCalibrationMode = CalibrationMode.values()[position];
-                updateCalibrationModeViews();
-            }
-
-            @Override
-            public void onNothingSelected(AdapterView<?> parent) {
-                // Keep the current mode.
-            }
-        });
+        refreshCalibrationModeChoices();
         targetPanel.addView(calibrationModeSpinner, matchWrap());
 
         targetPanel.addView(labelText(R.string.calibration_target_label), matchWrap());
-        calibrationTargetField = new EditText(this);
-        calibrationTargetField.setSingleLine(true);
+        calibrationTargetField = compactEditText();
         calibrationTargetField.setInputType(InputType.TYPE_CLASS_TEXT);
         calibrationTargetField.setHint(R.string.calibration_target_hint);
         calibrationTargetField.addTextChangedListener(new TextWatcher() {
@@ -702,6 +712,16 @@ public final class MainActivity extends Activity {
     private LinearLayout createSettingsPage() {
         LinearLayout page = new LinearLayout(this);
         page.setOrientation(LinearLayout.VERTICAL);
+        page.addView(sectionTitleWithHelp(R.string.firmware_settings_section, R.string.firmware_settings_intro), matchWrap());
+        page.addView(createFirmwareSettingsPanel(), matchWrap());
+
+        addAdvancedSettingsSections(page);
+        return page;
+    }
+
+    private LinearLayout createConnectionSyncPage() {
+        LinearLayout page = new LinearLayout(this);
+        page.setOrientation(LinearLayout.VERTICAL);
 
         if (isWideLayout()) {
             LinearLayout columns = new LinearLayout(this);
@@ -720,7 +740,6 @@ public final class MainActivity extends Activity {
             right.setOrientation(LinearLayout.VERTICAL);
             right.addView(sectionTitleWithHelp(R.string.tracking_section, R.string.tracking_intro), matchWrap());
             right.addView(createTrackingPanel(), matchWrap());
-            addMoreSettingsGroup(right);
             columns.addView(right, weightWrapWithLeftMargin(1f, 12));
 
             page.addView(columns, matchWrap());
@@ -733,38 +752,109 @@ public final class MainActivity extends Activity {
 
             page.addView(sectionTitleWithHelp(R.string.tracking_section, R.string.tracking_intro), matchWrapWithTopMargin(8));
             page.addView(createTrackingPanel(), matchWrap());
-
-            addMoreSettingsGroup(page);
         }
 
         return page;
     }
 
-    private void addMoreSettingsGroup(LinearLayout parent) {
-        Button toggle = new Button(this);
-        toggle.setAllCaps(false);
-        compactButton(toggle);
-        toggle.setText(R.string.more_settings_collapsed);
-        LinearLayout.LayoutParams toggleParams = matchWrap();
-        toggleParams.topMargin = dp(8);
-        parent.addView(toggle, toggleParams);
+    private void addAdvancedSettingsSections(LinearLayout parent) {
+        parent.addView(sectionTitle(R.string.command_log_section), matchWrapWithTopMargin(8));
+        parent.addView(createCommandLogPanel(), matchWrap());
+        parent.addView(sectionTitleWithHelp(R.string.safety_section, R.string.safety_intro), matchWrapWithTopMargin(8));
+        parent.addView(createSafetyPanel(), matchWrap());
+        parent.addView(sectionTitleWithHelp(R.string.small_bodies_section, R.string.small_bodies_intro), matchWrapWithTopMargin(8));
+        parent.addView(createSmallBodiesPanel(), matchWrap());
+    }
 
-        LinearLayout container = new LinearLayout(this);
-        container.setOrientation(LinearLayout.VERTICAL);
-        container.setVisibility(View.GONE);
-        container.addView(sectionTitle(R.string.command_log_section), matchWrapWithTopMargin(8));
-        container.addView(createCommandLogPanel(), matchWrap());
-        container.addView(sectionTitleWithHelp(R.string.safety_section, R.string.safety_intro), matchWrapWithTopMargin(8));
-        container.addView(createSafetyPanel(), matchWrap());
-        container.addView(sectionTitleWithHelp(R.string.small_bodies_section, R.string.small_bodies_intro), matchWrapWithTopMargin(8));
-        container.addView(createSmallBodiesPanel(), matchWrap());
-        parent.addView(container, matchWrap());
+    private View createFirmwareSettingsPanel() {
+        LinearLayout panel = card();
 
-        toggle.setOnClickListener(v -> {
-            boolean expanded = container.getVisibility() == View.VISIBLE;
-            container.setVisibility(expanded ? View.GONE : View.VISIBLE);
-            toggle.setText(expanded ? R.string.more_settings_collapsed : R.string.more_settings_expanded);
+        panel.addView(labelText(R.string.firmware_mode_label), matchWrap());
+        firmwareModeSpinner = new Spinner(this);
+        List<String> firmwareLabels = new ArrayList<>();
+        for (FirmwareMode mode : FirmwareMode.values()) {
+            firmwareLabels.add(getString(mode.labelRes));
+        }
+        ArrayAdapter<String> firmwareAdapter = new ArrayAdapter<>(
+                this,
+                android.R.layout.simple_spinner_item,
+                firmwareLabels
+        );
+        firmwareAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        firmwareModeSpinner.setAdapter(firmwareAdapter);
+        firmwareModeSpinner.setSelection(selectedFirmwareMode.ordinal());
+        firmwareModeSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                if (suppressFirmwareModeSelection) {
+                    return;
+                }
+                FirmwareMode mode = FirmwareMode.values()[position];
+                if (selectedFirmwareMode == mode) {
+                    return;
+                }
+                logUserAction("select firmware-mode " + mode.name());
+                selectedFirmwareMode = mode;
+                if (selectedFirmwareMode == FirmwareMode.ONSTEP && selectedMountMode == MountMode.ALTAZ) {
+                    selectedMountMode = MountMode.EQUATORIAL;
+                }
+                saveFirmwarePreferences();
+                updateFirmwareSettingsViews();
+                refreshCalibrationModeChoices();
+                updateCalibrationViews();
+                updateTrackingViews();
+                logStateSnapshot("firmware-mode-selected");
+            }
+
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) {
+            }
         });
+        panel.addView(firmwareModeSpinner, matchWrap());
+
+        mountModeContainer = new LinearLayout(this);
+        mountModeContainer.setOrientation(LinearLayout.VERTICAL);
+        mountModeContainer.setPadding(0, dp(8), 0, 0);
+        mountModeContainer.addView(labelText(R.string.mount_mode_label), matchWrap());
+        mountModeSpinner = new Spinner(this);
+        List<String> mountLabels = new ArrayList<>();
+        for (MountMode mode : MountMode.values()) {
+            mountLabels.add(getString(mode.labelRes));
+        }
+        ArrayAdapter<String> mountAdapter = new ArrayAdapter<>(
+                this,
+                android.R.layout.simple_spinner_item,
+                mountLabels
+        );
+        mountAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        mountModeSpinner.setAdapter(mountAdapter);
+        mountModeSpinner.setSelection(selectedMountMode.ordinal());
+        mountModeSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                if (suppressMountModeSelection) {
+                    return;
+                }
+                MountMode requestedMode = MountMode.values()[position];
+                if (selectedMountMode == requestedMode) {
+                    return;
+                }
+                requestMountModeChange(requestedMode);
+            }
+
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) {
+            }
+        });
+        mountModeContainer.addView(mountModeSpinner, matchWrap());
+        panel.addView(mountModeContainer, matchWrap());
+
+        firmwareSettingsStatusText = bodyText(R.string.firmware_settings_status_onstep);
+        firmwareSettingsStatusText.setPadding(0, dp(8), 0, 0);
+        panel.addView(firmwareSettingsStatusText, matchWrap());
+
+        updateFirmwareSettingsViews();
+        return panel;
     }
 
     private View createSafetyPanel() {
@@ -781,23 +871,39 @@ public final class MainActivity extends Activity {
         emergencyStopButton.setOnClickListener(v -> emergencyStop());
         stopActions.addView(emergencyStopButton, weightWrap(1f));
 
-        safetyCancelGotoButton = actionButton(R.string.goto_cancel);
-        safetyCancelGotoButton.setOnClickListener(v -> cancelGoto());
-        stopActions.addView(safetyCancelGotoButton, weightWrapWithLeftMargin(1f, 8));
+        nightModeButton = actionButton(nightModeEnabled ? R.string.night_mode_off : R.string.night_mode_on);
+        nightModeButton.setOnClickListener(v -> toggleNightMode());
+        nightModeButton.setTextColor(Color.WHITE);
+        nightModeButton.setBackground(createNightModeButtonBackground());
+        stopActions.addView(nightModeButton, weightWrapWithLeftMargin(1f, 8));
         panel.addView(stopActions, matchWrap());
+
+        LinearLayout homeActions = new LinearLayout(this);
+        homeActions.setOrientation(LinearLayout.HORIZONTAL);
+        homeActions.setGravity(Gravity.CENTER_VERTICAL);
+        homeActions.setPadding(0, dp(6), 0, 0);
+
+        setHomeButton = actionButton(R.string.home_set_current);
+        setHomeButton.setOnClickListener(v -> confirmSetHomeFromMountNative());
+        homeActions.addView(setHomeButton, weightWrap(1f));
+
+        gotoHomeButton = actionButton(R.string.home_goto);
+        gotoHomeButton.setOnClickListener(v -> confirmReturnHomeNative());
+        homeActions.addView(gotoHomeButton, weightWrapWithLeftMargin(1f, 8));
+        panel.addView(homeActions, matchWrap());
 
         LinearLayout gotoActions = new LinearLayout(this);
         gotoActions.setOrientation(LinearLayout.HORIZONTAL);
         gotoActions.setGravity(Gravity.CENTER_VERTICAL);
         gotoActions.setPadding(0, dp(6), 0, 0);
 
+        safetyCancelGotoButton = actionButton(R.string.goto_cancel);
+        safetyCancelGotoButton.setOnClickListener(v -> cancelGoto());
+        gotoActions.addView(safetyCancelGotoButton, weightWrap(1f));
+
         gotoStatusRefreshButton = actionButton(R.string.goto_refresh_status);
         gotoStatusRefreshButton.setOnClickListener(v -> refreshGotoStatus());
-        gotoActions.addView(gotoStatusRefreshButton, weightWrap(1f));
-
-        nightModeButton = actionButton(nightModeEnabled ? R.string.night_mode_off : R.string.night_mode_on);
-        nightModeButton.setOnClickListener(v -> toggleNightMode());
-        gotoActions.addView(nightModeButton, weightWrapWithLeftMargin(1f, 8));
+        gotoActions.addView(gotoStatusRefreshButton, weightWrapWithLeftMargin(1f, 8));
         panel.addView(gotoActions, matchWrap());
 
         LinearLayout parkActions = new LinearLayout(this);
@@ -826,13 +932,101 @@ public final class MainActivity extends Activity {
 
     private View createCommandLogPanel() {
         LinearLayout panel = card();
+
+        logScrollView = new ScrollView(this);
+        logScrollView.setFillViewport(false);
         logText = bodyText(R.string.log_empty);
         logText.setTextColor(bodyTextColor());
-        logText.setMinLines(5);
+        logText.setMinLines(8);
         logText.setGravity(Gravity.START);
-        panel.addView(logText, matchWrap());
+        logText.setTextIsSelectable(true);
+        logScrollView.addView(logText, matchWrap());
+        panel.addView(logScrollView, matchFixedHeight(180));
+
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        actions.setGravity(Gravity.CENTER_VERTICAL);
+        actions.setPadding(0, dp(8), 0, 0);
+
+        Button copyButton = actionButton(R.string.log_copy_recent);
+        copyButton.setOnClickListener(v -> copyRecentLogLines());
+        actions.addView(copyButton, weightWrap(1f));
+
+        Button exportButton = actionButton(R.string.log_export);
+        exportButton.setOnClickListener(v -> requestLogExport());
+        actions.addView(exportButton, weightWrapWithLeftMargin(1f, 6));
+
+        Button clearButton = actionButton(R.string.log_clear);
+        clearButton.setOnClickListener(v -> confirmClearLog());
+        actions.addView(clearButton, weightWrapWithLeftMargin(1f, 6));
+
+        panel.addView(actions, matchWrap());
         updateLogText();
         return panel;
+    }
+
+    private void copyRecentLogLines() {
+        ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+        if (clipboard == null) {
+            setStatus(getString(R.string.log_copy_failed));
+            return;
+        }
+        String text = Logger.recentText(100);
+        if (text.isEmpty()) {
+            text = getString(R.string.log_empty);
+        }
+        clipboard.setPrimaryClip(ClipData.newPlainText(getString(R.string.command_log_section), text));
+        Logger.user("copy recent log lines");
+        setStatus(getString(R.string.log_copied));
+    }
+
+    private void requestLogExport() {
+        long acceptedAt = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .getLong(PREF_LOG_PRIVACY_ACCEPTED_AT, 0L);
+        if (System.currentTimeMillis() - acceptedAt < LOG_PRIVACY_ACK_VALID_MS) {
+            shareLog();
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.log_privacy_title)
+                .setMessage(R.string.log_privacy_message)
+                .setNegativeButton(android.R.string.cancel, null)
+                .setPositiveButton(R.string.log_privacy_continue, (dialog, which) -> {
+                    getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                            .edit()
+                            .putLong(PREF_LOG_PRIVACY_ACCEPTED_AT, System.currentTimeMillis())
+                            .apply();
+                    shareLog();
+                })
+                .show();
+    }
+
+    private void shareLog() {
+        try {
+            Logger.user("export log");
+            if (!Logger.flushForExport()) {
+                Logger.warn("export log flush incomplete");
+            }
+            Intent share = LogExporter.createShareIntent(this);
+            startActivity(Intent.createChooser(share, getString(R.string.log_export_chooser)));
+        } catch (Exception ex) {
+            Logger.error("export log failed", ex);
+            setStatus(getString(R.string.log_export_failed, safeMessage(ex)));
+        }
+    }
+
+    private void confirmClearLog() {
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.log_clear_title)
+                .setMessage(R.string.log_clear_message)
+                .setNegativeButton(android.R.string.cancel, null)
+                .setPositiveButton(R.string.log_clear_confirm, (dialog, which) -> {
+                    Logger.user("clear today log");
+                    Logger.clearToday();
+                    setStatus(getString(R.string.log_cleared));
+                    updateLogText();
+                })
+                .show();
     }
 
     private View createSmallBodiesPanel() {
@@ -867,6 +1061,8 @@ public final class MainActivity extends Activity {
 
             @Override
             public void onStopTrackingTouch(SeekBar seekBar) {
+                Logger.info("small-body magnitude limit changed value="
+                        + (smallBodyCatalog == null ? "unknown" : smallBodyCatalog.magnitudeLimit()));
                 if (skyChartView != null) {
                     skyChartView.invalidate();
                 }
@@ -915,6 +1111,7 @@ public final class MainActivity extends Activity {
             return;
         }
         final double maxH = smallBodyCatalog.magnitudeLimit();
+        logUserAction("tap download-asteroids maxH=" + String.format(Locale.US, "%.1f", maxH));
         smallBodyDownloadAsteroidsButton.setEnabled(false);
         setStatus(getString(R.string.small_bodies_download_starting));
         ioExecutor.execute(() -> {
@@ -930,6 +1127,7 @@ public final class MainActivity extends Activity {
                 smallBodyCatalog.replaceUserAsteroids(parsed);
                 runOnUiThread(() -> {
                     setStatus(getString(R.string.small_bodies_download_done, parsed.size()));
+                    Logger.info("small-body asteroid download success maxH=" + maxH + " count=" + parsed.size());
                     smallBodyDownloadAsteroidsButton.setEnabled(true);
                     updateSmallBodyStatusText();
                     if (skyChartView != null) {
@@ -937,6 +1135,7 @@ public final class MainActivity extends Activity {
                     }
                 });
             } catch (Throwable t) {
+                Logger.error("small-body asteroid download failed maxH=" + maxH, t);
                 runOnUiThread(() -> {
                     setStatus(getString(R.string.small_bodies_download_failed,
                             t.getMessage() == null ? t.getClass().getSimpleName() : t.getMessage()));
@@ -950,9 +1149,9 @@ public final class MainActivity extends Activity {
         if (smallBodyCatalog == null) {
             return;
         }
-        EditText input = new EditText(this);
+        logUserAction("tap add-comet-dialog");
+        EditText input = compactEditText();
         input.setHint(R.string.small_bodies_add_comet_hint);
-        input.setSingleLine(true);
         input.setInputType(InputType.TYPE_CLASS_TEXT);
         FrameLayout wrapper = new FrameLayout(this);
         int padding = dp(16);
@@ -976,6 +1175,7 @@ public final class MainActivity extends Activity {
                     return;
                 }
                 dialog.dismiss();
+                logUserAction("submit add-comet query=\"" + name + "\"");
                 fetchSingleSmallBody(name, true);
             });
         });
@@ -989,6 +1189,7 @@ public final class MainActivity extends Activity {
         if (smallBodyDownloadCometsButton != null) {
             smallBodyDownloadCometsButton.setEnabled(false);
         }
+        Logger.info("small-body single fetch start query=\"" + query + "\" comet=" + isComet);
         setStatus(getString(R.string.small_bodies_download_starting));
         ioExecutor.execute(() -> {
             try {
@@ -997,6 +1198,7 @@ public final class MainActivity extends Activity {
                 if (body == null) {
                     runOnUiThread(() -> {
                         setStatus(getString(R.string.small_bodies_add_not_found, query));
+                        Logger.warn("small-body single fetch not found query=\"" + query + "\" comet=" + isComet);
                         if (smallBodyDownloadCometsButton != null) {
                             smallBodyDownloadCometsButton.setEnabled(true);
                         }
@@ -1006,6 +1208,9 @@ public final class MainActivity extends Activity {
                 smallBodyCatalog.addUserBody(body);
                 runOnUiThread(() -> {
                     setStatus(getString(R.string.small_bodies_add_done, body.displayLabel()));
+                    Logger.info("small-body single fetch success query=\"" + query
+                            + "\" comet=" + isComet
+                            + " body=\"" + body.displayLabel() + "\"");
                     if (smallBodyDownloadCometsButton != null) {
                         smallBodyDownloadCometsButton.setEnabled(true);
                     }
@@ -1015,6 +1220,7 @@ public final class MainActivity extends Activity {
                     }
                 });
             } catch (Throwable t) {
+                Logger.error("small-body single fetch failed query=\"" + query + "\" comet=" + isComet, t);
                 runOnUiThread(() -> {
                     setStatus(getString(R.string.small_bodies_download_failed,
                             t.getMessage() == null ? t.getClass().getSimpleName() : t.getMessage()));
@@ -1140,6 +1346,7 @@ public final class MainActivity extends Activity {
         if (smallBodyCatalog == null) {
             return;
         }
+        logUserAction("tap clear-user-small-bodies");
         try {
             smallBodyCatalog.clearUserBodies();
             updateSmallBodyStatusText();
@@ -1147,7 +1354,9 @@ public final class MainActivity extends Activity {
                 skyChartView.invalidate();
             }
             setStatus(getString(R.string.small_bodies_cleared));
+            Logger.info("small-body user catalog cleared");
         } catch (IOException ex) {
+            Logger.error("small-body clear failed", ex);
             setStatus(getString(R.string.small_bodies_clear_failed, safeMessage(ex)));
         }
     }
@@ -1156,6 +1365,7 @@ public final class MainActivity extends Activity {
         if (skyChartView == null) {
             return;
         }
+        logUserAction("open sky-layer-dialog");
         SkyChartView.LayerType[] layers = new SkyChartView.LayerType[]{
                 SkyChartView.LayerType.CONSTELLATION_LINES,
                 SkyChartView.LayerType.SOLAR_SYSTEM,
@@ -1181,7 +1391,10 @@ public final class MainActivity extends Activity {
         new AlertDialog.Builder(this)
                 .setTitle(R.string.sky_layers_dialog_title)
                 .setMultiChoiceItems(labels, checked, (dialog, which, isChecked) ->
-                        skyChartView.setLayerVisible(layers[which], isChecked))
+                {
+                    skyChartView.setLayerVisible(layers[which], isChecked);
+                    Logger.info("sky layer changed layer=" + layers[which].name() + " visible=" + isChecked);
+                })
                 .setPositiveButton(R.string.layer_dialog_done, null)
                 .show();
     }
@@ -1204,8 +1417,12 @@ public final class MainActivity extends Activity {
             return httpGetAcceptingCodesInternal(urlStr, allow300, false);
         } catch (IOException firstFailure) {
             if (isJplSbdbUrl(urlStr) && isCertificateTrustFailure(firstFailure)) {
+                Logger.warn("small-body http TLS trust fallback url=" + urlStr
+                        + " reason=" + firstFailure.getClass().getSimpleName()
+                        + " " + safeMessage(firstFailure));
                 return httpGetAcceptingCodesInternal(urlStr, allow300, true);
             }
+            Logger.error("small-body http failed url=" + urlStr, firstFailure);
             throw firstFailure;
         }
     }
@@ -1225,8 +1442,13 @@ public final class MainActivity extends Activity {
             conn.setRequestProperty("User-Agent", "MountBehave-Android");
             conn.setInstanceFollowRedirects(false);
             int code = conn.getResponseCode();
+            Logger.info("small-body http response code=" + code
+                    + " allow300=" + allow300
+                    + " relaxedTls=" + relaxedJplTls
+                    + " url=" + urlStr);
             boolean ok = code == 200 || (allow300 && code == 300);
             if (!ok) {
+                Logger.warn("small-body http unexpected-status code=" + code + " url=" + urlStr);
                 throw new IOException("HTTP " + code);
             }
             java.io.InputStream stream = (code >= 400) ? conn.getErrorStream() : conn.getInputStream();
@@ -1510,30 +1732,6 @@ public final class MainActivity extends Activity {
         return panel;
     }
 
-    private View createHomePanel() {
-        LinearLayout panel = card();
-
-        homeStatusText = bodyText(R.string.home_status_none);
-        homeStatusText.setPadding(0, 0, 0, dp(10));
-        panel.addView(homeStatusText, matchWrap());
-
-        LinearLayout actions = new LinearLayout(this);
-        actions.setOrientation(LinearLayout.HORIZONTAL);
-        actions.setGravity(Gravity.CENTER_VERTICAL);
-
-        gotoHomeButton = actionButton(R.string.home_goto);
-        gotoHomeButton.setOnClickListener(v -> gotoHome());
-        actions.addView(gotoHomeButton, weightWrap(1f));
-
-        setHomeButton = actionButton(R.string.home_set_current);
-        setHomeButton.setOnClickListener(v -> setHomeFromMount());
-        actions.addView(setHomeButton, weightWrapWithLeftMargin(1f, 8));
-
-        panel.addView(actions, matchWrap());
-        updateHomeViews();
-        return panel;
-    }
-
     private View createObserverPanel() {
         LinearLayout panel = card();
 
@@ -1603,44 +1801,44 @@ public final class MainActivity extends Activity {
         connectionForm = new LinearLayout(this);
         connectionForm.setOrientation(LinearLayout.VERTICAL);
 
-        TextView hostLabel = labelText(R.string.host_label);
-        connectionForm.addView(hostLabel, matchWrap());
+        LinearLayout endpointRow = new LinearLayout(this);
+        endpointRow.setOrientation(LinearLayout.HORIZONTAL);
+        endpointRow.setGravity(Gravity.CENTER_VERTICAL);
 
-        hostField = new EditText(this);
-        hostField.setSingleLine(true);
+        LinearLayout hostBox = new LinearLayout(this);
+        hostBox.setOrientation(LinearLayout.VERTICAL);
+        hostBox.addView(labelText(R.string.host_label), matchWrap());
+        hostField = compactEditText();
         hostField.setText(R.string.default_onstep_host);
         hostField.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
-        connectionForm.addView(hostField, matchWrap());
+        hostBox.addView(hostField, matchWrap());
+        endpointRow.addView(hostBox, weightWrap(1f));
 
-        TextView portLabel = labelText(R.string.port_label);
-        portLabel.setPadding(0, dp(8), 0, 0);
-        connectionForm.addView(portLabel, matchWrap());
-
-        portField = new EditText(this);
-        portField.setSingleLine(true);
+        LinearLayout portBox = new LinearLayout(this);
+        portBox.setOrientation(LinearLayout.VERTICAL);
+        portBox.addView(labelText(R.string.port_label), matchWrap());
+        portField = compactEditText();
         portField.setText(String.format(Locale.US, "%d", DEFAULT_PORT));
         portField.setInputType(InputType.TYPE_CLASS_NUMBER);
-        connectionForm.addView(portField, matchWrap());
+        portBox.addView(portField, new LinearLayout.LayoutParams(dp(92), LinearLayout.LayoutParams.WRAP_CONTENT));
+        LinearLayout.LayoutParams portBoxParams = new LinearLayout.LayoutParams(dp(100), LinearLayout.LayoutParams.WRAP_CONTENT);
+        portBoxParams.leftMargin = dp(8);
+        endpointRow.addView(portBox, portBoxParams);
+
+        connectionForm.addView(endpointRow, matchWrap());
         panel.addView(connectionForm, matchWrap());
 
         LinearLayout actions = new LinearLayout(this);
         actions.setOrientation(LinearLayout.HORIZONTAL);
         actions.setGravity(Gravity.CENTER_VERTICAL);
-        actions.setPadding(0, dp(8), 0, 0);
-
-        connectButton = new Button(this);
-        connectButton.setAllCaps(false);
-        compactButton(connectButton);
-        connectButton.setText(R.string.connect_button);
-        connectButton.setOnClickListener(v -> connect());
-        actions.addView(connectButton, weightWrap(1f));
+        actions.setPadding(0, dp(6), 0, 0);
 
         disconnectButton = new Button(this);
         disconnectButton.setAllCaps(false);
         compactButton(disconnectButton);
         disconnectButton.setText(R.string.disconnect_button);
         disconnectButton.setOnClickListener(v -> disconnect());
-        actions.addView(disconnectButton, weightWrapWithLeftMargin(1f, 8));
+        actions.addView(disconnectButton, matchWrap());
 
         panel.addView(actions, matchWrap());
 
@@ -1660,11 +1858,35 @@ public final class MainActivity extends Activity {
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(0, 0, 0, dp(8));
 
+        LinearLayout connectColumn = new LinearLayout(this);
+        connectColumn.setOrientation(LinearLayout.VERTICAL);
+        connectColumn.setGravity(Gravity.CENTER);
+        connectColumn.setPadding(dp(4), dp(4), dp(4), dp(4));
+        connectColumn.setContentDescription(getString(R.string.connect_button));
+        connectColumn.setBackground(createConnectBadgeBackground(true));
+        connectColumn.setClickable(true);
+        connectColumn.setOnClickListener(v -> connect());
+        connectTrigger = connectColumn;
+
         ImageView badge = new ImageView(this);
         badge.setImageResource(R.drawable.clearsky_badge);
         badge.setAdjustViewBounds(true);
         badge.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        row.addView(badge, new LinearLayout.LayoutParams(dp(52), dp(52)));
+        badge.setPadding(dp(1), dp(1), dp(1), dp(1));
+        badge.setContentDescription(getString(R.string.connect_button));
+        connectColumn.addView(badge, new LinearLayout.LayoutParams(dp(48), dp(48)));
+
+        TextView connectChip = new TextView(this);
+        connectChip.setText(R.string.connect_button);
+        connectChip.setTextSize(12);
+        connectChip.setTypeface(Typeface.DEFAULT_BOLD);
+        connectChip.setGravity(Gravity.CENTER);
+        connectChip.setTextColor(Color.WHITE);
+        connectChip.setBackground(createConnectChipBackground(true));
+        connectChip.setPadding(dp(8), dp(1), dp(8), dp(2));
+        connectColumn.addView(connectChip, matchWrapWithTopMargin(3));
+
+        row.addView(connectColumn, new LinearLayout.LayoutParams(dp(72), LinearLayout.LayoutParams.WRAP_CONTENT));
 
         LinearLayout textColumn = new LinearLayout(this);
         textColumn.setOrientation(LinearLayout.VERTICAL);
@@ -1705,10 +1927,12 @@ public final class MainActivity extends Activity {
                 if (selectedManualRate == rate) {
                     return;
                 }
+                logUserAction("select manual-rate " + rate.name() + " connected=" + connected);
                 selectedManualRate = rate;
                 if (connected) {
                     enqueueCommand(selectedManualRate.command, getString(R.string.log_rate_changed));
                 }
+                logStateSnapshot("manual-rate-selected");
             }
 
             @Override
@@ -1750,8 +1974,10 @@ public final class MainActivity extends Activity {
         stopButton.setMinHeight(dp(54));
         stopButton.setBackground(createStopButtonBackground());
         stopButton.setOnClickListener(v -> {
+            logUserAction("tap manual-stop");
             activeDirection = null;
             enqueueStop(getString(R.string.log_stop_sent));
+            logStateSnapshot("manual-stop");
         });
         rowMiddle.addView(stopButton, controlButtonParams());
         rowMiddle.addView(eastButton, controlButtonParams());
@@ -1773,18 +1999,24 @@ public final class MainActivity extends Activity {
         try {
             port = Integer.parseInt(portField.getText().toString().trim());
         } catch (NumberFormatException ex) {
+            Logger.warn("connect blocked: bad port input");
             setStatus(getString(R.string.status_bad_port));
             return;
         }
 
         if (host.isEmpty()) {
+            Logger.warn("connect blocked: empty host");
             setStatus(getString(R.string.status_bad_host));
             return;
         }
 
+        logUserAction("tap connect host=" + host + " port=" + port
+                + " firmware=" + selectedFirmwareMode.name()
+                + " mount=" + selectedMountMode.name());
         busy = true;
         setStatus(getString(R.string.status_connecting));
         updateUiState();
+        logStateSnapshot("connect-start");
         appendLog("CONNECT " + host + ":" + port);
 
         ioExecutor.execute(() -> {
@@ -1805,6 +2037,7 @@ public final class MainActivity extends Activity {
                     trackingEnabled = false;
                     trackingUsingDualAxis = false;
                     gotoInProgress = false;
+                    homeFindInProgress = false;
                     clearQuickPointingCorrection();
                     polarRefineSyncedTarget = null;
                     parked = false;
@@ -1821,6 +2054,11 @@ public final class MainActivity extends Activity {
                     }
                     setGotoStatus(getString(R.string.goto_status_idle));
                     setSafetyStatus(getString(R.string.safety_status_connected));
+                    Logger.info("connect success host=" + host
+                            + " requestedPort=" + port
+                            + " connectedPort=" + connection.port
+                            + " handshake=" + (connection.handshake.isEmpty() ? "<empty>" : connection.handshake));
+                    logStateSnapshot("connect-success");
                     updateUiState();
                 });
             } catch (IOException ex) {
@@ -1836,10 +2074,13 @@ public final class MainActivity extends Activity {
                     mountPointingPollingPaused = true;
                     activeDirection = null;
                     gotoInProgress = false;
+                    homeFindInProgress = false;
                     parked = false;
                     setStatus(getString(R.string.status_connect_failed, ex.getMessage()));
                     setSafetyStatus(getString(R.string.safety_status_connect_failed));
+                    Logger.error("connect failed host=" + host + " port=" + port, ex);
                     appendLog("ERROR " + safeMessage(ex));
+                    logStateSnapshot("connect-failed");
                     updateUiState();
                 });
             }
@@ -1876,10 +2117,13 @@ public final class MainActivity extends Activity {
     }
 
     private void disconnect() {
+        logUserAction("tap disconnect host=" + (connectedHost == null ? "<none>" : connectedHost)
+                + " port=" + connectedPort);
         busy = true;
         connectionGeneration.incrementAndGet();
         setStatus(getString(R.string.status_disconnecting));
         updateUiState();
+        logStateSnapshot("disconnect-start");
         appendLog("DISCONNECT");
 
         ioExecutor.execute(() -> {
@@ -1906,6 +2150,7 @@ public final class MainActivity extends Activity {
                 activeDirection = null;
                 alignmentSession = null;
                 gotoInProgress = false;
+                homeFindInProgress = false;
                 parked = false;
                 trackingEnabled = false;
                 trackingUsingDualAxis = false;
@@ -1917,6 +2162,7 @@ public final class MainActivity extends Activity {
                 appendLog("CLOSED");
                 clearMountPointing();
                 updateCalibrationViews();
+                logStateSnapshot("disconnect-complete");
             });
         });
     }
@@ -1928,6 +2174,10 @@ public final class MainActivity extends Activity {
         Direction previousDirection = activeDirection;
         clearSyncedCurrentTarget();
         activeDirection = direction;
+        logUserAction("hold move direction=" + direction.name()
+                + " rate=" + selectedManualRate.name()
+                + " previous=" + (previousDirection == null ? "none" : previousDirection.name()));
+        logStateSnapshot("move-start");
         if (previousDirection != null) {
             enqueueDirectionStop(previousDirection, getString(R.string.log_stop_sent));
         }
@@ -1959,6 +2209,8 @@ public final class MainActivity extends Activity {
             return;
         }
         activeDirection = null;
+        logUserAction("release move direction=" + direction.name());
+        logStateSnapshot("move-stop");
         enqueueDirectionStop(direction, getString(R.string.log_stop_sent));
     }
 
@@ -1983,36 +2235,46 @@ public final class MainActivity extends Activity {
     }
 
     private void emergencyStop() {
+        logUserAction("tap emergency-stop");
         clearSyncedCurrentTarget();
         activeDirection = null;
         gotoInProgress = false;
+        homeFindInProgress = false;
         setGotoStatus(getString(R.string.goto_status_cancelled));
         setSafetyStatus(getString(R.string.safety_status_emergency_stop));
         enqueueImmediateStop(getString(R.string.status_emergency_stop_sent));
+        logStateSnapshot("emergency-stop");
         updateUiState();
     }
 
     private void cancelGoto() {
+        logUserAction("tap cancel-goto");
         if (!connected) {
             setGotoStatus(getString(R.string.goto_status_not_connected));
+            Logger.warn("cancel-goto blocked: not connected");
             return;
         }
         clearSyncedCurrentTarget();
         activeDirection = null;
         gotoInProgress = false;
+        homeFindInProgress = false;
         setGotoStatus(getString(R.string.goto_status_cancelled));
         setSafetyStatus(getString(R.string.safety_status_goto_cancelled));
         enqueueImmediateStop(getString(R.string.goto_cancel_sent));
+        logStateSnapshot("cancel-goto");
         updateUiState();
     }
 
     private void refreshGotoStatus() {
         if (!connected || busy) {
+            Logger.info("goto-status refresh skipped connected=" + connected + " busy=" + busy);
             return;
         }
+        Logger.info("goto-status refresh requested");
         busy = true;
         setGotoStatus(getString(R.string.goto_status_refreshing));
         updateUiState();
+        logStateSnapshot("goto-status-refresh-start");
         appendLog("TX " + OnStepCommand.GOTO_STATUS.command);
 
         int generation = connectionGeneration.get();
@@ -2028,6 +2290,10 @@ public final class MainActivity extends Activity {
                     gotoInProgress = moving;
                     appendLog("RX " + OnStepCommand.GOTO_STATUS.command + " -> " + (moving ? "moving" : "idle"));
                     setGotoStatus(getString(moving ? R.string.goto_status_running : R.string.goto_status_idle));
+                    if (!moving) {
+                        homeFindInProgress = false;
+                    }
+                    logStateSnapshot("goto-status-refresh-result moving=" + moving);
                     updateUiState();
                 });
             } catch (IOException ex) {
@@ -2086,6 +2352,7 @@ public final class MainActivity extends Activity {
         activeDirection = null;
         setStatus(getString(R.string.status_command_failed_keep_connected, safeMessage(ex)));
         appendLog("WARN command " + safeMessage(ex));
+        logStateSnapshot("command-failed");
         updateUiState();
         updateCalibrationViews();
     }
@@ -2095,12 +2362,12 @@ public final class MainActivity extends Activity {
         activeDirection = null;
         setStatus(getString(R.string.status_motion_failed_keep_connected, safeMessage(ex)));
         appendLog("WARN motion " + safeMessage(ex));
+        logStateSnapshot("motion-command-failed");
         updateUiState();
     }
 
     private void showTargetDialog() {
-        EditText input = new EditText(this);
-        input.setSingleLine(true);
+        EditText input = compactEditText();
         input.setInputType(InputType.TYPE_CLASS_TEXT);
         input.setHint(R.string.target_input_hint);
         if (selectedSkyTarget != null) {
@@ -2124,6 +2391,7 @@ public final class MainActivity extends Activity {
             dialog.getButton(Dialog.BUTTON_POSITIVE).setOnClickListener(v -> {
                 SkyChartView.Target target = resolveTargetInput(input.getText().toString());
                 if (target == null) {
+                    Logger.warn("target dialog not found input=" + input.getText());
                     setStatus(getString(R.string.target_not_found));
                     return;
                 }
@@ -2137,9 +2405,11 @@ public final class MainActivity extends Activity {
                 dialog.getButton(Dialog.BUTTON_NEUTRAL).setOnClickListener(v -> {
                     SkyChartView.Target target = resolveTargetInput(input.getText().toString());
                     if (target == null) {
+                        Logger.warn("target dialog show-only not found input=" + input.getText());
                         setStatus(getString(R.string.target_not_found));
                         return;
                     }
+                    logUserAction("show target only " + targetLog(target));
                     applySkyTarget(target, true);
                     dialog.dismiss();
                 });
@@ -2195,6 +2465,7 @@ public final class MainActivity extends Activity {
     }
 
     private void gotoTarget(SkyChartView.Target target) {
+        logUserAction("tap sky-goto " + targetLog(target));
         sendGotoTarget(
                 target,
                 getString(R.string.status_goto_sending, target == null ? "" : target.label),
@@ -2209,9 +2480,11 @@ public final class MainActivity extends Activity {
         }
         if (!quickPointingCorrectionActive && isSyncedCurrentTarget(target)) {
             gotoInProgress = false;
+            homeFindInProgress = false;
             setStatus(getString(R.string.status_goto_already_synced, target.label));
             setGotoStatus(getString(R.string.goto_status_already_synced, target.label));
             appendLog("INFO GOTO skipped; " + target.label + " is the synced current target");
+            logStateSnapshot("goto-skipped-synced " + targetLog(target));
             if (onSuccess != null) {
                 onSuccess.run();
             }
@@ -2219,12 +2492,18 @@ public final class MainActivity extends Activity {
             return;
         }
         clearSyncedCurrentTarget();
+        homeFindInProgress = false;
         EquatorialPoint commandPoint = gotoCommandPoint(target);
         String raCommand = ":Sr" + formatRightAscensionCommand(commandPoint.raHours) + "#";
         String decCommand = ":Sd" + formatDeclinationCommand(commandPoint.decDegrees) + "#";
         busy = true;
         setStatus(sendingStatus);
         updateUiState();
+        Logger.info("goto start " + targetLog(target)
+                + " commandRA=" + formatRightAscensionDisplay(commandPoint.raHours)
+                + " commandDec=" + formatDeclinationDisplay(commandPoint.decDegrees)
+                + " quickCorrection=" + quickPointingCorrectionActive);
+        logStateSnapshot("goto-start");
         if (quickPointingCorrectionActive) {
             appendLog("INFO quick sync correction RA "
                     + formatSignedDegrees(quickPointingRaOffsetHours * 15.0)
@@ -2259,9 +2538,11 @@ public final class MainActivity extends Activity {
                     appendLog("RX :MS# -> " + gotoReply);
                     busy = false;
                     gotoInProgress = true;
+                    homeFindInProgress = false;
                     parked = false;
                     setStatus(sentStatus);
                     setGotoStatus(getString(R.string.goto_status_sent, target.label));
+                    logStateSnapshot("goto-sent " + targetLog(target));
                     if (onSuccess != null) {
                         onSuccess.run();
                     }
@@ -2271,8 +2552,11 @@ public final class MainActivity extends Activity {
                 runOnUiThread(() -> {
                     busy = false;
                     gotoInProgress = false;
+                    homeFindInProgress = false;
+                    Logger.warn("goto rejected command=" + ex.command + " reply=" + ex.reply + " " + targetLog(target));
                     setStatus(commandRejectedStatus(ex.command, ex.reply));
                     setGotoStatus(getString(R.string.goto_status_rejected, ex.reply));
+                    logStateSnapshot("goto-rejected");
                     updateUiState();
                 });
             } catch (IOException ex) {
@@ -2323,32 +2607,100 @@ public final class MainActivity extends Activity {
         quickPointingCorrectionActive = true;
         quickPointingRaOffsetHours = wrapDegrees((reportedRaHours - target.raHours) * 15.0) / 15.0;
         quickPointingDecOffsetDegrees = clamp(reportedDecDegrees - target.decDegrees, -45.0, 45.0);
+        Logger.info("quick-pointing correction enabled " + targetLog(target)
+                + " offsetRAdeg=" + formatSignedDegrees(quickPointingRaOffsetHours * 15.0)
+                + " offsetDec=" + formatSignedDegrees(quickPointingDecOffsetDegrees));
     }
 
     private void clearQuickPointingCorrection() {
+        if (quickPointingCorrectionActive) {
+            Logger.info("quick-pointing correction cleared offsetRAdeg="
+                    + formatSignedDegrees(quickPointingRaOffsetHours * 15.0)
+                    + " offsetDec=" + formatSignedDegrees(quickPointingDecOffsetDegrees));
+        }
         quickPointingCorrectionActive = false;
         quickPointingRaOffsetHours = 0.0;
         quickPointingDecOffsetDegrees = 0.0;
     }
 
-    private void captureInitialHomeFromMount() {
-        captureHomeFromMount(false);
+    private void confirmSetHomeFromMountNative() {
+        if (!connected || busy) {
+            return;
+        }
+        Logger.user("tap set-home");
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.home_set_confirm_title)
+                .setMessage(R.string.home_set_confirm_message)
+                .setPositiveButton(R.string.home_set_current, (dialog, which) -> {
+                    logUserAction("confirm set-home");
+                    sendNativeHomeCommand(
+                            OnStepCommand.HOME_CALIBRATE,
+                            getString(R.string.home_set_sending),
+                            getString(R.string.home_set_done),
+                            R.string.home_set_failed,
+                            false
+                    );
+                })
+                .setNegativeButton(android.R.string.cancel, null)
+                .show();
     }
 
-    private void setHomeFromMount() {
-        captureHomeFromMount(true);
+    private void confirmReturnHomeNative() {
+        if (!connected || busy) {
+            return;
+        }
+        Logger.user("tap return-home");
+        if (parked) {
+            String status = getString(R.string.home_blocked_parked);
+            Logger.warn("return-home blocked: parked");
+            setStatus(status);
+            setSafetyStatus(status);
+            setGotoStatus(status);
+            updateUiState();
+            return;
+        }
+        if (gotoInProgress) {
+            String status = getString(R.string.home_blocked_busy);
+            Logger.warn("return-home blocked: goto in progress");
+            setStatus(status);
+            setSafetyStatus(status);
+            setGotoStatus(status);
+            updateUiState();
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.home_goto_confirm_title)
+                .setMessage(R.string.home_goto_confirm_message)
+                .setPositiveButton(R.string.home_goto, (dialog, which) -> {
+                    logUserAction("confirm return-home");
+                    sendNativeHomeCommand(
+                            OnStepCommand.HOME_FIND,
+                            getString(R.string.home_goto_sending),
+                            getString(R.string.home_goto_done),
+                            R.string.home_goto_failed,
+                            true
+                    );
+                })
+                .setNegativeButton(android.R.string.cancel, null)
+                .show();
     }
 
-    private void captureHomeFromMount(boolean userRequested) {
+    private void sendNativeHomeCommand(
+            OnStepCommand command,
+            String sendingStatus,
+            String successStatus,
+            int failureStatusRes,
+            boolean startsMotion
+    ) {
         if (!connected || busy) {
             return;
         }
         busy = true;
-        String sendingStatus = getString(userRequested ? R.string.home_set_sending : R.string.home_initial_sending);
         setStatus(sendingStatus);
+        setSafetyStatus(sendingStatus);
         updateUiState();
-        appendLog("TX :GR#");
-        appendLog("TX :GD#");
+        logStateSnapshot((startsMotion ? "return-home" : "set-home") + "-start");
+        appendLog("TX " + command.command);
 
         int generation = connectionGeneration.get();
         ioExecutor.execute(() -> {
@@ -2356,66 +2708,68 @@ public final class MainActivity extends Activity {
                 return;
             }
             try {
-                String raReply = client.query(":GR#");
-                String decReply = client.query(":GD#");
-                double raHours = parseRightAscension(raReply);
-                double decDegrees = parseDeclination(decReply);
+                String reply = client.query(command.command);
+                if (reply == null || reply.trim().isEmpty() || isRejectedReply(reply.trim())) {
+                    throw new CommandRejectedException(command.command, reply == null ? "" : reply.trim());
+                }
                 runOnUiThread(() -> {
-                    appendLog("RX :GR# -> " + raReply);
-                    appendLog("RX :GD# -> " + decReply);
+                    appendLog("RX " + command.command + " -> " + reply);
                     busy = false;
-                    setMountPointing(raHours, decDegrees);
-                    setHomePosition(raHours, decDegrees);
-                    setStatus(getString(
-                            userRequested ? R.string.home_set_sent : R.string.home_initial_sent,
-                            formatHourAngleDisplay(homeHourAngleHours),
-                            formatDeclinationDisplay(decDegrees)
-                    ));
+                    if (startsMotion) {
+                        gotoInProgress = true;
+                        homeFindInProgress = true;
+                        parked = false;
+                        clearSyncedCurrentTarget();
+                        setGotoStatus(successStatus);
+                    }
+                    setStatus(successStatus);
+                    setSafetyStatus(successStatus);
+                    logStateSnapshot((startsMotion ? "return-home" : "set-home") + "-success");
                     updateUiState();
                 });
-            } catch (IOException | IllegalArgumentException ex) {
+            } catch (CommandRejectedException ex) {
+                Logger.warn((startsMotion ? "return-home" : "set-home") + " rejected: " + ex.reply);
                 runOnUiThread(() -> {
                     busy = false;
-                    setStatus(getString(
-                            userRequested ? R.string.home_set_failed : R.string.home_initial_failed,
-                            safeMessage(ex)
-                    ));
-                    appendLog("WARN home " + safeMessage(ex));
+                    if (startsMotion) {
+                        gotoInProgress = false;
+                        homeFindInProgress = false;
+                    }
+                    String status = getString(failureStatusRes, ex.reply == null || ex.reply.isEmpty() ? "空回包" : ex.reply);
+                    setStatus(status);
+                    setSafetyStatus(status);
+                    if (startsMotion) {
+                        setGotoStatus(status);
+                    }
+                    logStateSnapshot((startsMotion ? "return-home" : "set-home") + "-rejected");
+                    updateUiState();
+                });
+            } catch (IOException ex) {
+                markTransportFault();
+                runOnUiThread(() -> {
+                    busy = false;
+                    if (startsMotion) {
+                        gotoInProgress = false;
+                        homeFindInProgress = false;
+                    }
+                    String status = getString(failureStatusRes, safeMessage(ex));
+                    setStatus(status);
+                    setSafetyStatus(status);
+                    if (startsMotion) {
+                        setGotoStatus(status);
+                    }
+                    logStateSnapshot((startsMotion ? "return-home" : "set-home") + "-io-failed");
                     updateUiState();
                 });
             }
         });
     }
 
-    private void gotoHome() {
-        if (!connected || busy) {
-            return;
-        }
-        if (!hasHomePosition) {
-            setStatus(getString(R.string.home_no_position));
-            return;
-        }
-        if (!homePositionValid) {
-            setStatus(getString(R.string.home_invalid_no_goto));
-            return;
-        }
-        SkyChartView.Target homeTarget = SkyChartView.Target.custom(
-                getString(R.string.home_target_label),
-                currentHomeRaHours(),
-                homeDecDegrees
-        );
-        sendGotoTarget(
-                homeTarget,
-                getString(R.string.home_goto_sending),
-                getString(R.string.home_goto_sent),
-                null
-        );
-    }
-
     private void parkMount() {
         if (!connected || busy) {
             return;
         }
+        logUserAction("tap park");
         List<MountCommand> commands = new ArrayList<>();
         commands.add(MountCommand.withReply(OnStepCommand.PARK.command));
         runMountCommands(
@@ -2425,11 +2779,13 @@ public final class MainActivity extends Activity {
                 () -> {
                     parked = true;
                     gotoInProgress = false;
+                    homeFindInProgress = false;
                     trackingEnabled = false;
                     trackingUsingDualAxis = false;
                     setGotoStatus(getString(R.string.goto_status_idle));
                     setSafetyStatus(getString(R.string.safety_status_parked));
                     updateTrackingViews();
+                    logStateSnapshot("park-success");
                 }
         );
     }
@@ -2438,6 +2794,7 @@ public final class MainActivity extends Activity {
         if (!connected || busy) {
             return;
         }
+        logUserAction("tap unpark");
         List<MountCommand> commands = new ArrayList<>();
         commands.add(MountCommand.withReply(OnStepCommand.UNPARK.command));
         runMountCommands(
@@ -2447,6 +2804,7 @@ public final class MainActivity extends Activity {
                 () -> {
                     parked = false;
                     setSafetyStatus(getString(R.string.safety_status_unparked));
+                    logStateSnapshot("unpark-success");
                 }
         );
     }
@@ -2455,12 +2813,14 @@ public final class MainActivity extends Activity {
         if (!connected || busy) {
             return;
         }
+        logUserAction("tap sync-observer-to-mount " + observerLog());
         ZonedDateTime now = ZonedDateTime.now(observerState.zoneId);
         List<String> commands = buildObserverSyncCommands(now);
 
         busy = true;
         setStatus(getString(R.string.status_sync_mount_sending));
         updateUiState();
+        logStateSnapshot("observer-sync-start");
         for (String command : commands) {
             appendLog("TX " + command);
         }
@@ -2478,6 +2838,8 @@ public final class MainActivity extends Activity {
                     busy = false;
                     clearQuickPointingCorrection();
                     setStatus(getString(R.string.status_sync_mount_sent));
+                    Logger.info("observer sync success " + observerLog() + " time=" + now);
+                    logStateSnapshot("observer-sync-success");
                     updateUiState();
                 });
             } catch (IOException ex) {
@@ -2498,6 +2860,7 @@ public final class MainActivity extends Activity {
     }
 
     private void setTrackingRate(TrackingRate rate) {
+        logUserAction("select tracking-rate rate=" + rate.name());
         selectedTrackingRate = rate;
         updateTrackingViews();
         if (!connected || busy) {
@@ -2506,6 +2869,7 @@ public final class MainActivity extends Activity {
                     getString(rate.labelRes),
                     trackingModeLabel(shouldStartDualAxisTracking())
             ));
+            logStateSnapshot("tracking-rate-selected-local");
             return;
         }
 
@@ -2524,6 +2888,9 @@ public final class MainActivity extends Activity {
             return;
         }
 
+        logUserAction((trackingEnabled ? "tap tracking-stop" : "tap tracking-start")
+                + " rate=" + selectedTrackingRate.name()
+                + " dualAxis=" + shouldStartDualAxisTracking());
         List<MountCommand> commands = new ArrayList<>();
         String sendingStatus;
         String successStatus;
@@ -2560,6 +2927,7 @@ public final class MainActivity extends Activity {
                         trackingUsingDualAxis = startingDualAxis;
                     }
                     updateTrackingViews();
+                    logStateSnapshot("tracking-toggle-success");
                 }
         );
     }
@@ -2573,7 +2941,7 @@ public final class MainActivity extends Activity {
     }
 
     private boolean shouldStartDualAxisTracking() {
-        return hasThreeStarTrackingModel;
+        return isAltAzMountMode() || hasThreeStarTrackingModel;
     }
 
     private String trackingModeLabel(boolean dualAxis) {
@@ -2584,8 +2952,10 @@ public final class MainActivity extends Activity {
         if (skyChartView == null) {
             return;
         }
+        logUserAction("tap suggest-calibration-target mode=" + selectedCalibrationMode.name());
         List<SkyChartView.Target> suggestions = skyChartView.suggestedAlignmentTargets(12);
         if (suggestions.isEmpty()) {
+            Logger.warn("calibration suggestion unavailable");
             setCalibrationStatus(getString(R.string.calibration_no_suggestion));
             return;
         }
@@ -2609,6 +2979,7 @@ public final class MainActivity extends Activity {
                 formatRightAscensionDisplay(target.raHours),
                 formatDeclinationDisplay(target.decDegrees)
         ));
+        Logger.info("calibration suggested " + targetLog(target));
     }
 
     private boolean isAlignmentTargetUsed(SkyChartView.Target target) {
@@ -2638,6 +3009,7 @@ public final class MainActivity extends Activity {
         if (skyChartView == null || busy) {
             return;
         }
+        logUserAction("tap select-calibration-target-in-sky mode=" + selectedCalibrationMode.name());
         selectingCalibrationTargetFromSky = true;
         setCalibrationStatus(getString(R.string.calibration_select_in_sky_prompt));
         updatePageTabs(Page.SKY);
@@ -2698,6 +3070,8 @@ public final class MainActivity extends Activity {
     }
 
     private void acceptCalibrationTargetFromSky(SkyChartView.Target target) {
+        logUserAction("accept calibration target from sky mode=" + selectedCalibrationMode.name()
+                + " " + targetLog(target));
         selectingCalibrationTargetFromSky = false;
         setCalibrationTarget(target);
         selectedSkyTarget = target;
@@ -2732,7 +3106,7 @@ public final class MainActivity extends Activity {
             }
             alignmentSession.currentTarget = target;
             setCalibrationStatus(getString(
-                    R.string.calibration_align_selected_manual,
+                    isAltAzMountMode() ? R.string.calibration_align_selected_manual_altaz : R.string.calibration_align_selected_manual,
                     alignmentSession.currentStarNumber(),
                     alignmentSession.totalStars,
                     target.label
@@ -2757,6 +3131,8 @@ public final class MainActivity extends Activity {
         if (target == null) {
             return;
         }
+        logUserAction("show calibration target in sky mode=" + selectedCalibrationMode.name()
+                + " " + targetLog(target));
         setCalibrationTarget(target);
         applySkyTarget(target, true);
     }
@@ -2766,6 +3142,7 @@ public final class MainActivity extends Activity {
         if (target == null) {
             return;
         }
+        logUserAction("select quick-sync target " + targetLog(target));
         setCalibrationTarget(target);
         selectSkyTarget(target, true);
         setCalibrationStatus(getString(R.string.calibration_quick_selected_manual, target.label));
@@ -2781,6 +3158,7 @@ public final class MainActivity extends Activity {
             return;
         }
 
+        logUserAction("tap quick-sync " + targetLog(target));
         String raCommand = ":Sr" + formatRightAscensionCommand(target.raHours) + "#";
         String decCommand = ":Sd" + formatDeclinationCommand(target.decDegrees) + "#";
         String sendingStatus = getString(R.string.calibration_quick_sync_sending, target.label);
@@ -2788,6 +3166,7 @@ public final class MainActivity extends Activity {
         setStatus(sendingStatus);
         setCalibrationStatus(sendingStatus);
         updateUiState();
+        logStateSnapshot("quick-sync-start");
         appendLog("TX " + OnStepCommand.STOP_ALL.command);
         appendLog("TX :GR#");
         appendLog("TX :GD#");
@@ -2795,6 +3174,10 @@ public final class MainActivity extends Activity {
         appendLog("TX " + decCommand);
         appendLog("TX " + OnStepCommand.SYNC_CURRENT_TARGET.command);
         appendLog("TX " + OnStepCommand.TRACK_SIDEREAL.command);
+        if (isAltAzMountMode()) {
+            appendLog("TX " + OnStepCommand.TRACK_FULL_COMPENSATION.command);
+            appendLog("TX " + OnStepCommand.TRACK_DUAL_AXIS.command);
+        }
         appendLog("TX " + OnStepCommand.TRACK_ENABLE.command);
         appendLog("TX :GR#");
         appendLog("TX :GD#");
@@ -2834,6 +3217,10 @@ public final class MainActivity extends Activity {
                 }
 
                 client.sendNoReply(OnStepCommand.TRACK_SIDEREAL.command);
+                if (isAltAzMountMode()) {
+                    client.sendNoReply(OnStepCommand.TRACK_FULL_COMPENSATION.command);
+                    client.sendNoReply(OnStepCommand.TRACK_DUAL_AXIS.command);
+                }
                 String trackingReply = client.query(OnStepCommand.TRACK_ENABLE.command);
                 replies.add(OnStepCommand.TRACK_ENABLE.command + " -> " + trackingReply);
                 if ("0".equals(trackingReply) || trackingReply.startsWith("E")) {
@@ -2860,7 +3247,7 @@ public final class MainActivity extends Activity {
                     busy = false;
                     selectedTrackingRate = TrackingRate.SIDEREAL;
                     trackingEnabled = true;
-                    trackingUsingDualAxis = false;
+                    trackingUsingDualAxis = shouldStartDualAxisTracking();
                     gotoInProgress = false;
                     setMountPointing(target.raHours, target.decDegrees);
                     syncedCurrentTarget = target;
@@ -2884,6 +3271,8 @@ public final class MainActivity extends Activity {
                         ));
                     }
                     updateTrackingViews();
+                    logStateSnapshot("quick-sync-success " + targetLog(target)
+                            + " postSyncDistanceDeg=" + String.format(Locale.US, "%.3f", postSyncDistance));
                     updateUiState();
                     refreshMountPointing();
                 });
@@ -2895,6 +3284,9 @@ public final class MainActivity extends Activity {
                     busy = false;
                     setCalibrationStatus(commandRejectedStatus(ex.command, ex.reply));
                     setStatus(commandRejectedStatus(ex.command, ex.reply));
+                    Logger.warn("quick-sync rejected command=" + ex.command + " reply=" + ex.reply
+                            + " " + targetLog(target));
+                    logStateSnapshot("quick-sync-rejected");
                     updateUiState();
                 });
             } catch (IOException ex) {
@@ -2908,6 +3300,9 @@ public final class MainActivity extends Activity {
                     busy = false;
                     setCalibrationStatus(getString(R.string.status_bad_pointing_reply));
                     setStatus(getString(R.string.status_bad_pointing_reply));
+                    Logger.warn("quick-sync bad pointing reply " + ex.getClass().getSimpleName()
+                            + " " + safeMessage(ex));
+                    logStateSnapshot("quick-sync-bad-pointing");
                     updateUiState();
                 });
             }
@@ -2918,6 +3313,9 @@ public final class MainActivity extends Activity {
         if (!connected || busy || alignmentSession != null) {
             return;
         }
+        logUserAction("tap start-alignment stars=" + starCount
+                + " mount=" + selectedMountMode.name()
+                + " " + observerLog());
         OnStepCommand startCommand;
         if (starCount == 2) {
             startCommand = OnStepCommand.ALIGN_TWO;
@@ -2947,7 +3345,7 @@ public final class MainActivity extends Activity {
                     hasThreeStarTrackingModel = false;
                     selectedTrackingRate = TrackingRate.SIDEREAL;
                     trackingEnabled = true;
-                    trackingUsingDualAxis = false;
+                    trackingUsingDualAxis = shouldStartDualAxisTracking();
                     calibrationTarget = null;
                     calibrationTargetField.setText("");
                     clearSyncedCurrentTarget();
@@ -2956,6 +3354,7 @@ public final class MainActivity extends Activity {
                     setCalibrationStatus(getString(R.string.calibration_align_started, starCount));
                     updateTrackingViews();
                     updateCalibrationViews();
+                    logStateSnapshot("alignment-started stars=" + starCount);
                 }
         );
     }
@@ -2965,8 +3364,10 @@ public final class MainActivity extends Activity {
         if (target == null) {
             return;
         }
+        logUserAction("select alignment target star=" + alignmentSession.currentStarNumber()
+                + "/" + alignmentSession.totalStars + " " + targetLog(target));
         setCalibrationStatus(getString(
-                R.string.calibration_align_selected_manual,
+                isAltAzMountMode() ? R.string.calibration_align_selected_manual_altaz : R.string.calibration_align_selected_manual,
                 alignmentSession.currentStarNumber(),
                 alignmentSession.totalStars,
                 target.label
@@ -2997,6 +3398,8 @@ public final class MainActivity extends Activity {
         if (target == null) {
             return;
         }
+        logUserAction("tap alignment-goto star=" + alignmentSession.currentStarNumber()
+                + "/" + alignmentSession.totalStars + " " + targetLog(target));
         sendGotoTarget(
                 target,
                 getString(
@@ -3006,7 +3409,10 @@ public final class MainActivity extends Activity {
                         target.label
                 ),
                 getString(R.string.calibration_align_goto_sent, target.label),
-                () -> setCalibrationStatus(getString(R.string.calibration_align_goto_center_prompt, target.label))
+                () -> setCalibrationStatus(getString(
+                        isAltAzMountMode() ? R.string.calibration_align_goto_center_prompt_altaz : R.string.calibration_align_goto_center_prompt,
+                        target.label
+                ))
         );
     }
 
@@ -3026,6 +3432,7 @@ public final class MainActivity extends Activity {
         if (alignmentSession == null || alignmentSession.isComplete()) {
             return;
         }
+        logUserAction("tap accept-alignment-star state=" + alignmentStateSummary());
         if (alignmentSession.currentTarget == null) {
             SkyChartView.Target target = resolveCalibrationTarget();
             if (target == null) {
@@ -3036,6 +3443,7 @@ public final class MainActivity extends Activity {
         }
         SkyChartView.Target acceptedTarget = alignmentSession.currentTarget;
         if (isAcceptedAlignmentTarget(acceptedTarget)) {
+            Logger.warn("alignment accept blocked duplicate " + targetLog(acceptedTarget));
             setCalibrationStatus(getString(R.string.calibration_align_duplicate_target, acceptedTarget.label));
             return;
         }
@@ -3084,7 +3492,7 @@ public final class MainActivity extends Activity {
                 diagnosticLog.add("DIAG ALIGN_ACCEPT stop sent");
 
                 String expectedPierSide = expectedPierSideForTarget(acceptedTarget);
-                if (acceptedBefore == 0 && isPierSideMismatch(preSnapshot.pierSide, expectedPierSide)) {
+                if (!isAltAzMountMode() && acceptedBefore == 0 && isPierSideMismatch(preSnapshot.pierSide, expectedPierSide)) {
                     failureStatus = getString(
                             R.string.calibration_align_pier_side_mismatch,
                             preSnapshot.pierSide,
@@ -3151,11 +3559,14 @@ public final class MainActivity extends Activity {
                     setCalibrationStatus(getString(R.string.calibration_align_accepted, acceptedTarget.label));
                     appendLog("DIAG ALIGN_ACCEPT app advancing to next star");
                     finishAcceptedAlignmentStar(acceptedTarget);
+                    logStateSnapshot("alignment-star-accepted " + targetLog(acceptedTarget));
                 } else {
                     setStatus(finalFailureStatus);
                     setCalibrationStatus(getString(R.string.calibration_align_diag_hint, finalFailureStatus));
                     appendLog("DIAG ALIGN_ACCEPT app remains at accepted="
                             + (alignmentSession == null ? "null" : alignmentSession.acceptedStars));
+                    Logger.warn("alignment accept failed " + finalFailureStatus + " " + targetLog(acceptedTarget));
+                    logStateSnapshot("alignment-star-accept-failed");
                     updateCalibrationViews();
                     updateUiState();
                 }
@@ -3215,10 +3626,13 @@ public final class MainActivity extends Activity {
             if (alignmentSession.totalStars >= 3) {
                 hasThreeStarTrackingModel = true;
                 trackingEnabled = true;
-                trackingUsingDualAxis = false;
+                trackingUsingDualAxis = shouldStartDualAxisTracking();
             }
             setCalibrationStatus(getString(R.string.calibration_align_complete, alignmentSession.totalStars));
             alignmentSession.currentTarget = null;
+            Logger.info("alignment complete accepted=" + alignmentSession.acceptedStars
+                    + "/" + alignmentSession.totalStars
+                    + " labels=" + joinLabels(alignmentSession.acceptedLabels));
         } else {
             alignmentSession.currentTarget = null;
             calibrationTarget = null;
@@ -3241,6 +3655,7 @@ public final class MainActivity extends Activity {
         if (alignmentSession == null || !alignmentSession.isComplete()) {
             return;
         }
+        logUserAction("tap save-alignment-model state=" + alignmentStateSummary());
         List<MountCommand> commands = new ArrayList<>();
         commands.add(MountCommand.withReply(OnStepCommand.ALIGN_WRITE.command));
         runMountCommands(
@@ -3251,7 +3666,7 @@ public final class MainActivity extends Activity {
                     if (alignmentSession.totalStars >= 3) {
                         hasThreeStarTrackingModel = true;
                         trackingEnabled = true;
-                        trackingUsingDualAxis = false;
+                        trackingUsingDualAxis = shouldStartDualAxisTracking();
                     }
                     alignmentSession = null;
                     calibrationTarget = null;
@@ -3261,11 +3676,13 @@ public final class MainActivity extends Activity {
                     setCalibrationStatus(getString(R.string.calibration_align_saved));
                     updateTrackingViews();
                     updateCalibrationViews();
+                    logStateSnapshot("alignment-model-saved");
                 }
         );
     }
 
     private void cancelAlignmentSession() {
+        logUserAction("tap cancel-alignment state=" + alignmentStateSummary());
         // Reset OnStep's alignment state machine on cancel:
         // 1. :Q# stops any in-flight motion safely.
         // 2. :A0# is OnStep's abort-alignment command — it is silently ignored
@@ -3283,10 +3700,17 @@ public final class MainActivity extends Activity {
         polarRefineSyncedTarget = null;
         setCalibrationStatus(getString(R.string.calibration_align_cancelled));
         updateCalibrationViews();
+        logStateSnapshot("alignment-cancelled");
     }
 
     private void gotoRefinePolarTarget() {
+        if (isAltAzMountMode()) {
+            Logger.warn("refine-polar goto blocked: altaz mode");
+            setCalibrationStatus(getString(R.string.calibration_refine_disabled_altaz));
+            return;
+        }
         if (!hasThreeStarTrackingModel) {
+            Logger.warn("refine-polar goto blocked: missing three-star model");
             setCalibrationStatus(getString(R.string.calibration_refine_requires_three_star));
             return;
         }
@@ -3294,6 +3718,7 @@ public final class MainActivity extends Activity {
         if (target == null) {
             return;
         }
+        logUserAction("tap refine-polar-goto " + targetLog(target));
         setCalibrationTarget(target);
         selectSkyTarget(target, true);
         polarRefineSyncedTarget = null;
@@ -3305,19 +3730,28 @@ public final class MainActivity extends Activity {
                     polarRefineSyncedTarget = target;
                     setCalibrationStatus(getString(R.string.calibration_refine_ready_prompt, target.label));
                     updateCalibrationViews();
+                    logStateSnapshot("refine-polar-goto-ready " + targetLog(target));
                 }
         );
     }
 
     private void refinePolarAlignment() {
+        if (isAltAzMountMode()) {
+            Logger.warn("refine-polar blocked: altaz mode");
+            setCalibrationStatus(getString(R.string.calibration_refine_disabled_altaz));
+            return;
+        }
         if (!hasThreeStarTrackingModel) {
+            Logger.warn("refine-polar blocked: missing three-star model");
             setCalibrationStatus(getString(R.string.calibration_refine_requires_three_star));
             return;
         }
         if (polarRefineSyncedTarget == null) {
+            Logger.warn("refine-polar blocked: no synced target");
             setCalibrationStatus(getString(R.string.calibration_refine_requires_sync));
             return;
         }
+        logUserAction("tap refine-polar-align " + targetLog(polarRefineSyncedTarget));
         List<MountCommand> commands = new ArrayList<>();
         commands.add(MountCommand.noReply(OnStepCommand.REFINE_POLAR_ALIGNMENT.command));
         runMountCommands(
@@ -3332,6 +3766,7 @@ public final class MainActivity extends Activity {
                     setCalibrationStatus(getString(R.string.calibration_refine_sent));
                     updateTrackingViews();
                     updateCalibrationViews();
+                    logStateSnapshot("refine-polar-sent");
                 }
         );
     }
@@ -3440,7 +3875,60 @@ public final class MainActivity extends Activity {
         return builder.toString();
     }
 
+    private void refreshCalibrationModeChoices() {
+        if (calibrationModeSpinner == null) {
+            return;
+        }
+        List<CalibrationMode> modes = availableCalibrationModes();
+        if (!modes.contains(selectedCalibrationMode)) {
+            selectedCalibrationMode = CalibrationMode.QUICK_SYNC;
+        }
+        List<String> labels = new ArrayList<>();
+        for (CalibrationMode mode : modes) {
+            labels.add(getString(mode.labelRes));
+        }
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(
+                this,
+                android.R.layout.simple_spinner_item,
+                labels
+        );
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        suppressCalibrationModeSelection = true;
+        calibrationModeSpinner.setAdapter(adapter);
+        calibrationModeSpinner.setSelection(Math.max(0, modes.indexOf(selectedCalibrationMode)));
+        suppressCalibrationModeSelection = false;
+        calibrationModeSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                if (suppressCalibrationModeSelection || position < 0 || position >= modes.size()) {
+                    return;
+                }
+                selectedCalibrationMode = modes.get(position);
+                updateCalibrationModeViews();
+            }
+
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) {
+            }
+        });
+        updateCalibrationModeViews();
+    }
+
+    private List<CalibrationMode> availableCalibrationModes() {
+        List<CalibrationMode> modes = new ArrayList<>();
+        for (CalibrationMode mode : CalibrationMode.values()) {
+            if (mode == CalibrationMode.REFINE_POLAR && isAltAzMountMode()) {
+                continue;
+            }
+            modes.add(mode);
+        }
+        return modes;
+    }
+
     private void updateCalibrationModeViews() {
+        if (isAltAzMountMode() && selectedCalibrationMode == CalibrationMode.REFINE_POLAR) {
+            selectedCalibrationMode = CalibrationMode.QUICK_SYNC;
+        }
         boolean quickMode = selectedCalibrationMode == CalibrationMode.QUICK_SYNC;
         boolean alignMode = selectedCalibrationMode.isStarAlignment();
         boolean refineMode = selectedCalibrationMode == CalibrationMode.REFINE_POLAR;
@@ -3457,6 +3945,11 @@ public final class MainActivity extends Activity {
         if (alignStartButton != null && alignMode) {
             alignStartButton.setText(getString(R.string.calibration_align_start_count, selectedCalibrationMode.starCount));
         }
+        if (alignGotoButton != null) {
+            alignGotoButton.setText(isAltAzMountMode()
+                    ? R.string.calibration_align_goto_altaz
+                    : R.string.calibration_align_goto);
+        }
         if (hostField != null) {
             updateUiState();
         }
@@ -3472,6 +3965,8 @@ public final class MainActivity extends Activity {
             calibrationStatusText.setText(sendingStatus);
         }
         updateUiState();
+        Logger.info("mount-command-batch start count=" + commands.size() + " status=\"" + sendingStatus + "\"");
+        logStateSnapshot("mount-command-batch-start");
         for (MountCommand command : commands) {
             appendLog("TX " + command.command);
         }
@@ -3506,6 +4001,8 @@ public final class MainActivity extends Activity {
                     if (onSuccess != null) {
                         onSuccess.run();
                     }
+                    Logger.info("mount-command-batch success count=" + commands.size() + " status=\"" + successStatus + "\"");
+                    logStateSnapshot("mount-command-batch-success");
                     updateUiState();
                 });
             } catch (CommandRejectedException ex) {
@@ -3516,6 +4013,8 @@ public final class MainActivity extends Activity {
                     busy = false;
                     setCalibrationStatus(commandRejectedStatus(ex.command, ex.reply));
                     setStatus(commandRejectedStatus(ex.command, ex.reply));
+                    Logger.warn("mount-command-batch rejected command=" + ex.command + " reply=" + ex.reply);
+                    logStateSnapshot("mount-command-batch-rejected");
                     updateUiState();
                 });
             } catch (IOException ex) {
@@ -3734,100 +4233,234 @@ public final class MainActivity extends Activity {
         }
     }
 
-    private void setHomePosition(double raHours, double decDegrees) {
-        Instant now = Instant.now();
-        hasHomePosition = true;
-        homePositionValid = true;
-        homeReferenceRaHours = normalizeHours(raHours);
-        homeHourAngleHours = signedHourAngleHours(raHours, now);
-        homeDecDegrees = clamp(decDegrees, -90.0, 90.0);
-        homeReferenceInstant = now;
-        saveHomePosition();
-        updateHomeViews();
-    }
-
-    private double currentHomeRaHours() {
-        if (homeReferenceInstant == null) {
-            return homeRaHoursFromHourAngle(Instant.now());
-        }
-        return normalizeHours(homeReferenceRaHours + siderealDeltaHours(homeReferenceInstant, Instant.now()));
-    }
-
-    private double homeRaHoursFromHourAngle(Instant instant) {
-        return normalizeHours(localSiderealDegrees(instant) / 15.0 - homeHourAngleHours);
-    }
-
-    private void loadHomePosition() {
+    private void loadFirmwarePreferences() {
         SharedPreferences preferences = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
-        if (!preferences.getBoolean(PREF_HOME_HAS_POSITION, false)) {
-            hasHomePosition = false;
-            homePositionValid = false;
-            return;
-        }
-        homeHourAngleHours = clampHourAngle(readDoublePreference(preferences, PREF_HOME_HOUR_ANGLE, 0.0));
-        homeDecDegrees = clamp(readDoublePreference(preferences, PREF_HOME_DEC_DEGREES, 0.0), -90.0, 90.0);
-        hasHomePosition = true;
-        homePositionValid = preferences.getBoolean(PREF_HOME_VALID, false);
-        if (preferences.contains(PREF_HOME_REFERENCE_RA) && preferences.contains(PREF_HOME_REFERENCE_EPOCH_MS)) {
-            homeReferenceRaHours = normalizeHours(readDoublePreference(preferences, PREF_HOME_REFERENCE_RA, 0.0));
-            homeReferenceInstant = Instant.ofEpochMilli(preferences.getLong(PREF_HOME_REFERENCE_EPOCH_MS, Instant.now().toEpochMilli()));
-        } else {
-            updateHomeReferenceSnapshot();
-            saveHomePosition();
+        selectedFirmwareMode = parseEnumPreference(
+                preferences.getString(PREF_FIRMWARE_MODE, FirmwareMode.ONSTEP.name()),
+                FirmwareMode.ONSTEP
+        );
+        selectedMountMode = parseEnumPreference(
+                preferences.getString(PREF_MOUNT_MODE, MountMode.EQUATORIAL.name()),
+                MountMode.EQUATORIAL
+        );
+        if (selectedFirmwareMode == FirmwareMode.ONSTEP) {
+            selectedMountMode = MountMode.EQUATORIAL;
         }
     }
 
-    private void saveHomePosition() {
-        if (hasHomePosition && homeReferenceInstant == null) {
-            updateHomeReferenceSnapshot();
-        }
+    private void saveFirmwarePreferences() {
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
                 .edit()
-                .putBoolean(PREF_HOME_HAS_POSITION, hasHomePosition)
-                .putBoolean(PREF_HOME_VALID, homePositionValid)
-                .putLong(PREF_HOME_REFERENCE_RA, Double.doubleToRawLongBits(homeReferenceRaHours))
-                .putLong(PREF_HOME_REFERENCE_EPOCH_MS, homeReferenceInstant == null ? 0L : homeReferenceInstant.toEpochMilli())
-                .putLong(PREF_HOME_HOUR_ANGLE, Double.doubleToRawLongBits(homeHourAngleHours))
-                .putLong(PREF_HOME_DEC_DEGREES, Double.doubleToRawLongBits(homeDecDegrees))
+                .putString(PREF_FIRMWARE_MODE, selectedFirmwareMode.name())
+                .putString(PREF_MOUNT_MODE, selectedMountMode.name())
                 .apply();
     }
 
-    private void invalidateHomePosition() {
-        if (!hasHomePosition || !homePositionValid) {
-            updateHomeViews();
-            return;
-        }
-        homePositionValid = false;
-        getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-                .edit()
-                .putBoolean(PREF_HOME_HAS_POSITION, true)
-                .putBoolean(PREF_HOME_VALID, false)
-                .apply();
-        appendLog("HOME invalidated by coordinate model change");
-        updateHomeViews();
-    }
-
-    private void updateHomeReferenceSnapshot() {
-        if (!hasHomePosition) {
-            homeReferenceInstant = null;
-            return;
-        }
-        Instant now = Instant.now();
-        homeReferenceRaHours = currentHomeRaHours();
-        homeReferenceInstant = now;
-        updateHomeViews();
-    }
-
-    private static double readDoublePreference(SharedPreferences preferences, String key, double fallback) {
-        if (!preferences.contains(key)) {
+    private static <T extends Enum<T>> T parseEnumPreference(String value, T fallback) {
+        if (value == null || value.isEmpty()) {
             return fallback;
         }
-        return Double.longBitsToDouble(preferences.getLong(key, Double.doubleToRawLongBits(fallback)));
+        try {
+            return Enum.valueOf(fallback.getDeclaringClass(), value);
+        } catch (IllegalArgumentException ex) {
+            return fallback;
+        }
     }
 
-    private static double clampHourAngle(double hourAngleHours) {
-        double normalized = normalizeHours(hourAngleHours);
-        return normalized > 12.0 ? normalized - 24.0 : normalized;
+    private boolean isAltAzMountMode() {
+        return selectedFirmwareMode == FirmwareMode.ONSTEPX && selectedMountMode == MountMode.ALTAZ;
+    }
+
+    private void updateFirmwareSettingsViews() {
+        if (mountModeContainer != null) {
+            mountModeContainer.setVisibility(selectedFirmwareMode == FirmwareMode.ONSTEPX ? View.VISIBLE : View.GONE);
+        }
+        if (mountModeSpinner != null) {
+            suppressMountModeSelection = true;
+            mountModeSpinner.setSelection(selectedMountMode.ordinal());
+            suppressMountModeSelection = false;
+            mountModeSpinner.setEnabled(!busy);
+        }
+        if (firmwareModeSpinner != null) {
+            suppressFirmwareModeSelection = true;
+            firmwareModeSpinner.setSelection(selectedFirmwareMode.ordinal());
+            suppressFirmwareModeSelection = false;
+            firmwareModeSpinner.setEnabled(!busy);
+        }
+        if (firmwareSettingsStatusText != null) {
+            if (selectedFirmwareMode == FirmwareMode.ONSTEP) {
+                firmwareSettingsStatusText.setText(R.string.firmware_settings_status_onstep);
+            } else if (selectedMountMode == MountMode.ALTAZ) {
+                firmwareSettingsStatusText.setText(R.string.firmware_settings_status_onstepx_altaz);
+            } else {
+                firmwareSettingsStatusText.setText(R.string.firmware_settings_status_onstepx_equatorial);
+            }
+        }
+    }
+
+    private void requestMountModeChange(MountMode requestedMode) {
+        MountMode previousMode = selectedMountMode;
+        logUserAction("select mount-mode requested=" + requestedMode.name()
+                + " previous=" + previousMode.name()
+                + " connected=" + connected);
+        if (!connected || selectedFirmwareMode != FirmwareMode.ONSTEPX) {
+            selectedMountMode = requestedMode;
+            saveFirmwarePreferences();
+            updateFirmwareSettingsViews();
+            refreshCalibrationModeChoices();
+            updateCalibrationViews();
+            updateTrackingViews();
+            if (firmwareSettingsStatusText != null) {
+                firmwareSettingsStatusText.setText(getString(R.string.mount_mode_selected_local, getString(requestedMode.labelRes)));
+            }
+            logStateSnapshot("mount-mode-selected-local");
+            return;
+        }
+
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.mount_mode_switch_title)
+                .setMessage(getString(R.string.mount_mode_switch_message, getString(requestedMode.labelRes)))
+                .setPositiveButton(R.string.mount_mode_switch_confirm, (dialog, which) ->
+                        applyConnectedMountModeChange(requestedMode, previousMode))
+                .setNegativeButton(android.R.string.cancel, (dialog, which) -> {
+                    selectedMountMode = previousMode;
+                    updateFirmwareSettingsViews();
+                })
+                .show();
+    }
+
+    private void applyConnectedMountModeChange(MountMode requestedMode, MountMode previousMode) {
+        if (!connected || busy) {
+            selectedMountMode = previousMode;
+            updateFirmwareSettingsViews();
+            Logger.warn("mount-mode switch blocked connected=" + connected + " busy=" + busy);
+            return;
+        }
+        logUserAction("confirm connected mount-mode switch requested=" + requestedMode.name()
+                + " previous=" + previousMode.name());
+        String command = String.format(Locale.US, ":SXEM,%d#", requestedMode.onStepXCode);
+        String sendingStatus = getString(R.string.mount_mode_switch_sending, getString(requestedMode.labelRes));
+        busy = true;
+        setStatus(sendingStatus);
+        if (firmwareSettingsStatusText != null) {
+            firmwareSettingsStatusText.setText(sendingStatus);
+        }
+        updateUiState();
+        logStateSnapshot("mount-mode-switch-start");
+        appendLog("TX " + command);
+
+        int generation = connectionGeneration.get();
+        ioExecutor.execute(() -> {
+            if (!isConnectionGenerationCurrent(generation)) {
+                return;
+            }
+            List<String> switchLog = new ArrayList<>();
+            boolean commandSent = false;
+            try {
+                client.sendNoReply(command);
+                commandSent = true;
+                MountMode verifiedMode = queryOnStepXMountModeCode(switchLog);
+                runOnUiThread(() -> {
+                    for (String entry : switchLog) {
+                        appendLog(entry);
+                    }
+                    busy = false;
+                    if (verifiedMode != requestedMode) {
+                        finishMountModeWriteAndDisconnect(
+                                requestedMode,
+                                R.string.mount_mode_switch_unverified,
+                                getString(R.string.mount_mode_switch_unverified_mismatch, getString(verifiedMode.labelRes))
+                        );
+                    } else {
+                        finishMountModeWriteAndDisconnect(requestedMode, R.string.mount_mode_switch_done);
+                    }
+                });
+            } catch (IOException ex) {
+                boolean wroteCommand = commandSent;
+                if (!wroteCommand) {
+                    markTransportFault();
+                }
+                runOnUiThread(() -> {
+                    for (String entry : switchLog) {
+                        appendLog(entry);
+                    }
+                    busy = false;
+                    if (wroteCommand) {
+                        finishMountModeWriteAndDisconnect(
+                                requestedMode,
+                                R.string.mount_mode_switch_unverified,
+                                safeMessage(ex)
+                        );
+                    } else {
+                        selectedMountMode = previousMode;
+                        setStatus(getString(R.string.mount_mode_switch_failed, safeMessage(ex)));
+                        Logger.error("mount-mode switch failed before write requested=" + requestedMode.name(), ex);
+                        updateFirmwareSettingsViews();
+                        updateUiState();
+                    }
+                });
+            }
+        });
+    }
+
+    private MountMode queryOnStepXMountModeCode(List<String> switchLog) throws IOException {
+        switchLog.add("TX " + ONSTEPX_MOUNT_MODE_QUERY);
+        String reply = client.query(ONSTEPX_MOUNT_MODE_QUERY);
+        switchLog.add("RX " + ONSTEPX_MOUNT_MODE_QUERY + " -> " + reply);
+        MountMode mode = parseOnStepXMountModeCode(reply);
+        if (mode == null) {
+            throw new IOException(getString(R.string.mount_mode_switch_unrecognized_reply, reply));
+        }
+        return mode;
+    }
+
+    private MountMode parseOnStepXMountModeCode(String reply) {
+        String trimmed = reply == null ? "" : reply.trim();
+        if (trimmed.isEmpty()) {
+            return null;
+        }
+        if (isRejectedReply(trimmed)) {
+            return null;
+        }
+        for (MountMode mode : MountMode.values()) {
+            if (trimmed.equals(String.valueOf(mode.onStepXCode))) {
+                return mode;
+            }
+        }
+        if ("2".equals(trimmed)) {
+            return MountMode.EQUATORIAL;
+        }
+        return null;
+    }
+
+    private void finishMountModeWriteAndDisconnect(MountMode requestedMode, int statusRes) {
+        finishMountModeWriteAndDisconnect(requestedMode, statusRes, null);
+    }
+
+    private void finishMountModeWriteAndDisconnect(MountMode requestedMode, int statusRes, String detail) {
+        selectedMountMode = requestedMode;
+        saveFirmwarePreferences();
+        String status = detail == null
+                ? getString(statusRes, getString(requestedMode.labelRes))
+                : getString(statusRes, getString(requestedMode.labelRes), detail);
+        setStatus(status);
+        if (firmwareSettingsStatusText != null) {
+            firmwareSettingsStatusText.setText(status);
+        }
+        Logger.info("mount-mode write finished requested=" + requestedMode.name()
+                + (detail == null ? "" : " detail=" + detail));
+        logStateSnapshot("mount-mode-write-finished");
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.mount_mode_switch_done_title)
+                .setMessage(R.string.mount_mode_switch_done_message)
+                .setPositiveButton(android.R.string.ok, null)
+                .show();
+        updateFirmwareSettingsViews();
+        refreshCalibrationModeChoices();
+        updateCalibrationViews();
+        updateTrackingViews();
+        updateUiState();
+        disconnect();
     }
 
     private void updateTargetViews() {
@@ -3899,7 +4532,7 @@ public final class MainActivity extends Activity {
     }
 
     private void updateGotoProgressFromPointing() {
-        if (!gotoInProgress || selectedSkyTarget == null || !hasCurrentMountPosition) {
+        if (!gotoInProgress || homeFindInProgress || selectedSkyTarget == null || !hasCurrentMountPosition) {
             return;
         }
         double distanceDegrees = angularDistanceDegrees(
@@ -3947,10 +4580,6 @@ public final class MainActivity extends Activity {
     private double signedHourAngleHours(double raHours, Instant instant) {
         double hourAngle = normalizeHours(localSiderealDegrees(instant) / 15.0 - normalizeHours(raHours));
         return hourAngle > 12.0 ? hourAngle - 24.0 : hourAngle;
-    }
-
-    private static double siderealDeltaHours(Instant start, Instant end) {
-        return normalizeDegrees(greenwichSiderealDegrees(end) - greenwichSiderealDegrees(start)) / 15.0;
     }
 
     private String meridianStatus(double hourAngleHours) {
@@ -4212,8 +4841,7 @@ public final class MainActivity extends Activity {
     }
 
     private EditText coordinateField(double value) {
-        EditText field = new EditText(this);
-        field.setSingleLine(true);
+        EditText field = compactEditText();
         field.setText(String.format(Locale.US, "%.5f", value));
         field.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL | InputType.TYPE_NUMBER_FLAG_SIGNED);
         return field;
@@ -4227,26 +4855,32 @@ public final class MainActivity extends Activity {
     }
 
     private void applyManualLocation() {
+        logUserAction("tap apply-manual-location");
         double latitude;
         double longitude;
         try {
             latitude = Double.parseDouble(latitudeField.getText().toString().trim());
             longitude = Double.parseDouble(longitudeField.getText().toString().trim());
         } catch (NumberFormatException ex) {
+            Logger.warn("manual location invalid number");
             setObserverMessage(getString(R.string.location_bad_input));
             return;
         }
         if (latitude < -90.0 || latitude > 90.0 || longitude < -180.0 || longitude > 180.0) {
+            Logger.warn("manual location out of range lat=" + latitude + " lon=" + longitude);
             setObserverMessage(getString(R.string.location_bad_input));
             return;
         }
         observerState = new ObserverState(latitude, longitude, ZoneId.systemDefault(), getString(R.string.manual_location_name));
         updateObserverViews();
+        Logger.info("manual location applied " + observerLog());
     }
 
     private void requestGpsLocation() {
+        logUserAction("tap use-gps-location");
         if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED
                 && checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            Logger.info("gps location permission requested");
             requestPermissions(
                     new String[]{Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION},
                     LOCATION_PERMISSION_REQUEST
@@ -4260,6 +4894,7 @@ public final class MainActivity extends Activity {
         setObserverMessage(getString(R.string.gps_waiting));
         locationManager = (LocationManager) getSystemService(LOCATION_SERVICE);
         if (locationManager == null) {
+            Logger.warn("gps location unavailable: no LocationManager");
             setObserverMessage(getString(R.string.gps_unavailable));
             return;
         }
@@ -4272,11 +4907,13 @@ public final class MainActivity extends Activity {
 
         String provider = firstEnabledProvider();
         if (provider == null) {
+            Logger.warn("gps location unavailable: no enabled provider");
             setObserverMessage(getString(R.string.gps_unavailable));
             return;
         }
 
         try {
+            Logger.info("gps single update requested provider=" + provider);
             locationManager.requestSingleUpdate(provider, new LocationListener() {
                 @Override
                 public void onLocationChanged(Location location) {
@@ -4285,12 +4922,15 @@ public final class MainActivity extends Activity {
 
                 @Override
                 public void onProviderDisabled(String provider) {
+                    Logger.warn("gps provider disabled provider=" + provider);
                     setObserverMessage(getString(R.string.gps_unavailable));
                 }
             }, Looper.getMainLooper());
         } catch (SecurityException ex) {
+            Logger.warn("gps permission denied", ex);
             setObserverMessage(getString(R.string.gps_permission_denied));
         } catch (IllegalArgumentException ex) {
+            Logger.warn("gps request failed", ex);
             setObserverMessage(getString(R.string.gps_unavailable));
         }
     }
@@ -4338,9 +4978,12 @@ public final class MainActivity extends Activity {
         latitudeField.setText(String.format(Locale.US, "%.5f", observerState.latitudeDegrees));
         longitudeField.setText(String.format(Locale.US, "%.5f", observerState.longitudeDegrees));
         updateObserverViews();
+        Logger.info("gps location applied " + observerLog()
+                + " accuracy=" + (location.hasAccuracy() ? location.getAccuracy() : -1.0f));
     }
 
     private void toggleNightMode() {
+        logUserAction("toggle night-mode target=" + !nightModeEnabled);
         nightModeEnabled = !nightModeEnabled;
         applyNightModeWindow();
         setContentView(createContentView());
@@ -4350,6 +4993,7 @@ public final class MainActivity extends Activity {
         updateGotoStatusViews();
         updateSafetyStatusViews();
         updateLogText();
+        Logger.info("night-mode enabled=" + nightModeEnabled);
     }
 
     private void applyNightModeWindow() {
@@ -4361,31 +5005,31 @@ public final class MainActivity extends Activity {
     }
 
     private int pageBackgroundColor() {
-        return nightModeEnabled ? Color.rgb(18, 4, 4) : Color.rgb(245, 247, 251);
+        return nightModeEnabled ? Color.rgb(18, 4, 4) : Color.rgb(11, 18, 32);
     }
 
     private int cardBackgroundColor() {
-        return nightModeEnabled ? Color.rgb(38, 7, 7) : Color.WHITE;
+        return nightModeEnabled ? Color.rgb(38, 7, 7) : Color.rgb(17, 24, 39);
     }
 
     private int titleTextColor() {
-        return nightModeEnabled ? Color.rgb(255, 190, 190) : Color.rgb(17, 24, 39);
+        return nightModeEnabled ? Color.rgb(255, 190, 190) : Color.rgb(226, 232, 240);
     }
 
     private int labelTextColor() {
-        return nightModeEnabled ? Color.rgb(255, 175, 175) : Color.rgb(31, 41, 55);
+        return nightModeEnabled ? Color.rgb(255, 175, 175) : Color.rgb(203, 213, 225);
     }
 
     private int bodyTextColor() {
-        return nightModeEnabled ? Color.rgb(255, 145, 145) : Color.rgb(75, 85, 99);
+        return nightModeEnabled ? Color.rgb(255, 145, 145) : Color.rgb(148, 163, 184);
     }
 
     private int mutedTextColor() {
-        return nightModeEnabled ? Color.rgb(175, 80, 80) : Color.rgb(156, 163, 175);
+        return nightModeEnabled ? Color.rgb(175, 80, 80) : Color.rgb(100, 116, 139);
     }
 
     private int selectedAccentColor() {
-        return nightModeEnabled ? Color.rgb(255, 98, 98) : Color.rgb(14, 116, 144);
+        return nightModeEnabled ? Color.rgb(255, 98, 98) : Color.rgb(56, 189, 248);
     }
 
     private LinearLayout card() {
@@ -4482,6 +5126,19 @@ public final class MainActivity extends Activity {
         return button;
     }
 
+    private EditText compactEditText() {
+        EditText field = new EditText(this);
+        field.setSingleLine(true);
+        field.setTextSize(14);
+        field.setMinHeight(dp(40));
+        field.setMinimumHeight(dp(40));
+        field.setPadding(dp(6), dp(3), dp(6), dp(3));
+        field.setTextColor(titleTextColor());
+        field.setHintTextColor(mutedTextColor());
+        field.setBackground(createFieldBackground(true));
+        return field;
+    }
+
     private void compactButton(Button button) {
         button.setTextSize(14);
         button.setMinHeight(dp(40));
@@ -4489,6 +5146,8 @@ public final class MainActivity extends Activity {
         button.setMinWidth(0);
         button.setMinimumWidth(0);
         button.setPadding(dp(6), 0, dp(6), 0);
+        button.setTextColor(titleTextColor());
+        button.setBackground(createActionButtonBackground(true));
     }
 
     private LinearLayout centeredRow() {
@@ -4534,34 +5193,42 @@ public final class MainActivity extends Activity {
 
     private FrameLayout.LayoutParams sideMenuParams() {
         FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
-                dp(sideMenuExpanded ? 148 : 56),
-                sideMenuExpanded ? FrameLayout.LayoutParams.WRAP_CONTENT : dp(56)
+                dp(sideMenuExpanded ? SIDE_MENU_EXPANDED_WIDTH_DP : SIDE_MENU_COLLAPSED_SIZE_DP),
+                sideMenuExpanded ? FrameLayout.LayoutParams.WRAP_CONTENT : dp(SIDE_MENU_COLLAPSED_SIZE_DP)
         );
         params.gravity = Gravity.TOP | Gravity.START;
-        params.leftMargin = dp(8);
-        params.topMargin = dp(22);
+        params.leftMargin = dp(SIDE_MENU_MARGIN_START_DP);
+        params.topMargin = dp(SIDE_MENU_MARGIN_TOP_DP);
         return params;
     }
 
     private FrameLayout.LayoutParams floatingStopParams() {
         FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(dp(56), dp(48));
         params.gravity = Gravity.TOP | Gravity.START;
-        params.leftMargin = dp(8);
-        params.topMargin = dp(sideMenuExpanded ? 286 : 86);
+        params.leftMargin = dp(SIDE_MENU_MARGIN_START_DP);
+        params.topMargin = dp(sideMenuExpanded ? expandedFloatingStopTopMarginDp() : FLOATING_STOP_COLLAPSED_TOP_MARGIN_DP);
         return params;
+    }
+
+    private int expandedFloatingStopTopMarginDp() {
+        return SIDE_MENU_MARGIN_TOP_DP
+                + SIDE_MENU_TOGGLE_HEIGHT_DP
+                + SIDE_MENU_ITEM_TOP_MARGIN_DP
+                + SIDE_MENU_ITEM_COUNT * (SIDE_MENU_ITEM_HEIGHT_DP + SIDE_MENU_ITEM_TOP_MARGIN_DP)
+                + SIDE_MENU_FLOATING_STOP_GAP_DP;
     }
 
     private LinearLayout.LayoutParams sideMenuToggleParams() {
         return new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(48)
+                dp(SIDE_MENU_TOGGLE_HEIGHT_DP)
         );
     }
 
     private LinearLayout.LayoutParams sideMenuButtonParams(int topDp) {
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(54)
+                dp(SIDE_MENU_ITEM_HEIGHT_DP)
         );
         params.topMargin = dp(topDp);
         return params;
@@ -4601,8 +5268,8 @@ public final class MainActivity extends Activity {
             drawable.setColor(enabled ? Color.rgb(48, 10, 10) : Color.rgb(32, 7, 7));
             drawable.setStroke(dp(1), enabled ? Color.rgb(170, 58, 58) : Color.rgb(85, 30, 30));
         } else {
-            drawable.setColor(enabled ? Color.WHITE : Color.rgb(249, 250, 251));
-            drawable.setStroke(dp(1), enabled ? Color.rgb(75, 85, 99) : Color.rgb(229, 231, 235));
+            drawable.setColor(enabled ? Color.rgb(30, 41, 59) : Color.rgb(15, 23, 42));
+            drawable.setStroke(dp(1), enabled ? Color.rgb(71, 85, 105) : Color.rgb(30, 41, 59));
         }
         drawable.setCornerRadius(0);
         return drawable;
@@ -4624,8 +5291,74 @@ public final class MainActivity extends Activity {
     private GradientDrawable createHelpButtonBackground() {
         GradientDrawable drawable = new GradientDrawable();
         drawable.setShape(GradientDrawable.OVAL);
-        drawable.setColor(nightModeEnabled ? Color.rgb(48, 10, 10) : Color.rgb(238, 244, 248));
+        drawable.setColor(nightModeEnabled ? Color.rgb(48, 10, 10) : Color.rgb(30, 41, 59));
         drawable.setStroke(dp(1), selectedAccentColor());
+        return drawable;
+    }
+
+    private GradientDrawable createConnectBadgeBackground(boolean enabled) {
+        GradientDrawable drawable = new GradientDrawable();
+        drawable.setShape(GradientDrawable.RECTANGLE);
+        if (nightModeEnabled) {
+            drawable.setColor(enabled ? Color.rgb(48, 10, 10) : Color.rgb(32, 7, 7));
+            drawable.setStroke(dp(1), enabled ? Color.rgb(255, 98, 98) : Color.rgb(85, 30, 30));
+        } else {
+            drawable.setColor(enabled ? Color.rgb(15, 23, 42) : Color.rgb(11, 18, 32));
+            drawable.setStroke(dp(1), enabled ? selectedAccentColor() : Color.rgb(30, 41, 59));
+        }
+        drawable.setCornerRadius(dp(6));
+        return drawable;
+    }
+
+    private GradientDrawable createConnectChipBackground(boolean enabled) {
+        GradientDrawable drawable = new GradientDrawable();
+        drawable.setShape(GradientDrawable.RECTANGLE);
+        drawable.setColor(enabled
+                ? (nightModeEnabled ? Color.rgb(154, 28, 28) : Color.rgb(14, 116, 144))
+                : Color.rgb(75, 85, 99));
+        drawable.setCornerRadius(dp(3));
+        return drawable;
+    }
+
+    private GradientDrawable createNightModeButtonBackground() {
+        GradientDrawable drawable = new GradientDrawable();
+        drawable.setShape(GradientDrawable.RECTANGLE);
+        if (nightModeEnabled) {
+            drawable.setColor(Color.rgb(95, 16, 16));
+            drawable.setStroke(dp(1), Color.rgb(255, 98, 98));
+        } else {
+            drawable.setColor(Color.rgb(59, 130, 246));
+            drawable.setStroke(dp(1), Color.rgb(147, 197, 253));
+        }
+        drawable.setCornerRadius(dp(4));
+        return drawable;
+    }
+
+    private GradientDrawable createFieldBackground(boolean enabled) {
+        GradientDrawable drawable = new GradientDrawable();
+        drawable.setShape(GradientDrawable.RECTANGLE);
+        if (nightModeEnabled) {
+            drawable.setColor(enabled ? Color.rgb(24, 6, 6) : Color.rgb(18, 4, 4));
+            drawable.setStroke(dp(1), enabled ? Color.rgb(120, 45, 45) : Color.rgb(85, 30, 30));
+        } else {
+            drawable.setColor(enabled ? Color.rgb(15, 23, 42) : Color.rgb(11, 18, 32));
+            drawable.setStroke(dp(1), enabled ? Color.rgb(51, 65, 85) : Color.rgb(30, 41, 59));
+        }
+        drawable.setCornerRadius(dp(4));
+        return drawable;
+    }
+
+    private GradientDrawable createActionButtonBackground(boolean enabled) {
+        GradientDrawable drawable = new GradientDrawable();
+        drawable.setShape(GradientDrawable.RECTANGLE);
+        if (nightModeEnabled) {
+            drawable.setColor(enabled ? Color.rgb(48, 10, 10) : Color.rgb(32, 7, 7));
+            drawable.setStroke(dp(1), enabled ? Color.rgb(120, 45, 45) : Color.rgb(85, 30, 30));
+        } else {
+            drawable.setColor(enabled ? Color.rgb(30, 41, 59) : Color.rgb(15, 23, 42));
+            drawable.setStroke(dp(1), enabled ? Color.rgb(71, 85, 105) : Color.rgb(30, 41, 59));
+        }
+        drawable.setCornerRadius(dp(4));
         return drawable;
     }
 
@@ -4633,14 +5366,14 @@ public final class MainActivity extends Activity {
         GradientDrawable drawable = new GradientDrawable();
         drawable.setShape(GradientDrawable.RECTANGLE);
         if (!enabled) {
-            drawable.setColor(nightModeEnabled ? Color.rgb(32, 7, 7) : Color.rgb(249, 250, 251));
-            drawable.setStroke(dp(1), nightModeEnabled ? Color.rgb(85, 30, 30) : Color.rgb(229, 231, 235));
+            drawable.setColor(nightModeEnabled ? Color.rgb(32, 7, 7) : Color.rgb(15, 23, 42));
+            drawable.setStroke(dp(1), nightModeEnabled ? Color.rgb(85, 30, 30) : Color.rgb(30, 41, 59));
         } else if (selected) {
-            drawable.setColor(nightModeEnabled ? Color.rgb(74, 13, 13) : Color.rgb(224, 242, 254));
+            drawable.setColor(nightModeEnabled ? Color.rgb(74, 13, 13) : Color.rgb(8, 47, 73));
             drawable.setStroke(dp(2), selectedAccentColor());
         } else {
             drawable.setColor(cardBackgroundColor());
-            drawable.setStroke(dp(1), nightModeEnabled ? Color.rgb(120, 45, 45) : Color.rgb(156, 163, 175));
+            drawable.setStroke(dp(1), nightModeEnabled ? Color.rgb(120, 45, 45) : Color.rgb(71, 85, 105));
         }
         drawable.setCornerRadius(dp(4));
         return drawable;
@@ -4649,8 +5382,13 @@ public final class MainActivity extends Activity {
     private GradientDrawable createTabBackground(boolean selected) {
         GradientDrawable drawable = new GradientDrawable();
         drawable.setShape(GradientDrawable.RECTANGLE);
-        drawable.setColor(selected ? Color.WHITE : Color.rgb(15, 23, 42));
-        drawable.setStroke(dp(1), selected ? Color.WHITE : Color.rgb(51, 65, 85));
+        if (selected) {
+            drawable.setColor(nightModeEnabled ? Color.rgb(95, 16, 16) : Color.rgb(14, 116, 144));
+            drawable.setStroke(dp(1), selectedAccentColor());
+        } else {
+            drawable.setColor(Color.rgb(15, 23, 42));
+            drawable.setStroke(dp(1), Color.rgb(51, 65, 85));
+        }
         drawable.setCornerRadius(dp(4));
         return drawable;
     }
@@ -4710,33 +5448,63 @@ public final class MainActivity extends Activity {
     }
 
     private void appendLog(String line) {
-        logLines.addLast(line);
-        while (logLines.size() > 12) {
-            logLines.removeFirst();
+        if (line == null || line.trim().isEmpty()) {
+            return;
         }
-        updateLogText();
+        String trimmed = line.trim();
+        if (trimmed.startsWith("TX ") || trimmed.startsWith("RX ")) {
+            // OnStepClient logs the real wire TX/RX after socket write/read completion.
+            return;
+        }
+        if (trimmed.startsWith("DIAG ")) {
+            Logger.diag(trimmed.substring(5));
+        } else if (trimmed.startsWith("ERROR ")) {
+            Logger.error(trimmed.substring(6));
+        } else if (trimmed.startsWith("WARN ")) {
+            Logger.warn(trimmed.substring(5));
+        } else if (trimmed.startsWith("INFO ")) {
+            Logger.info(trimmed.substring(5));
+        } else if (trimmed.startsWith("CONNECT ") || trimmed.startsWith("DISCONNECT")) {
+            Logger.info(trimmed);
+        } else {
+            Logger.info(trimmed);
+        }
     }
 
     private void updateLogText() {
         StringBuilder builder = new StringBuilder();
-        for (String logLine : logLines) {
+        for (LogEntry entry : Logger.snapshot(1000)) {
             if (builder.length() > 0) {
                 builder.append('\n');
             }
-            builder.append(logLine);
+            builder.append(entry.formatted());
         }
         if (logText != null) {
+            boolean shouldScroll = shouldAutoScrollLog();
             logText.setText(builder.length() == 0 ? getString(R.string.log_empty) : builder.toString());
+            if (shouldScroll && logScrollView != null) {
+                logScrollView.post(() -> logScrollView.fullScroll(View.FOCUS_DOWN));
+            }
         }
+    }
+
+    private boolean shouldAutoScrollLog() {
+        if (logScrollView == null || logScrollView.getChildCount() == 0) {
+            return true;
+        }
+        View content = logScrollView.getChildAt(0);
+        int distanceFromBottom = content.getBottom() - (logScrollView.getHeight() + logScrollView.getScrollY());
+        return distanceFromBottom <= dp(16);
     }
 
     private void updateUiState() {
         hostField.setEnabled(!connected && !busy);
         portField.setEnabled(!connected && !busy);
-        connectButton.setEnabled(!connected && !busy);
+        connectTrigger.setEnabled(!connected && !busy);
+        connectTrigger.setBackground(createConnectBadgeBackground(!connected && !busy));
         disconnectButton.setEnabled(connected && !busy);
         connectionForm.setVisibility(connected ? View.GONE : View.VISIBLE);
-        connectButton.setVisibility(connected ? View.GONE : View.VISIBLE);
+        connectTrigger.setVisibility(connected ? View.GONE : View.VISIBLE);
         disconnectButton.setVisibility(connected ? View.VISIBLE : View.GONE);
         updateManualRateControl();
         if (gotoButton != null) {
@@ -4770,6 +5538,8 @@ public final class MainActivity extends Activity {
         }
         if (nightModeButton != null) {
             nightModeButton.setText(nightModeEnabled ? R.string.night_mode_off : R.string.night_mode_on);
+            nightModeButton.setTextColor(Color.WHITE);
+            nightModeButton.setBackground(createNightModeButtonBackground());
         }
         if (syncMountButton != null) {
             syncMountButton.setEnabled(connected && !busy);
@@ -4778,7 +5548,7 @@ public final class MainActivity extends Activity {
             trackingToggleButton.setEnabled(connected && !busy);
         }
         if (gotoHomeButton != null) {
-            gotoHomeButton.setEnabled(connected && !busy && hasHomePosition && homePositionValid);
+            gotoHomeButton.setEnabled(connected && !busy && !parked && !gotoInProgress);
         }
         if (setHomeButton != null) {
             setHomeButton.setEnabled(connected && !busy);
@@ -4823,10 +5593,11 @@ public final class MainActivity extends Activity {
             alignCancelButton.setEnabled(alignmentSession != null && !busy);
         }
         if (refineGotoButton != null) {
-            refineGotoButton.setEnabled(connected && !busy && hasThreeStarTrackingModel);
+            refineGotoButton.setEnabled(!isAltAzMountMode() && connected && !busy && hasThreeStarTrackingModel);
         }
         if (refinePaButton != null) {
-            refinePaButton.setEnabled(connected && !busy && hasThreeStarTrackingModel && polarRefineSyncedTarget != null);
+            refinePaButton.setEnabled(!isAltAzMountMode()
+                    && connected && !busy && hasThreeStarTrackingModel && polarRefineSyncedTarget != null);
         }
 
         boolean controlsEnabled = connected && !busy;
@@ -4838,31 +5609,13 @@ public final class MainActivity extends Activity {
         setDirectionButtonEnabled(southWestButton, controlsEnabled);
         setDirectionButtonEnabled(eastButton, controlsEnabled);
         setDirectionButtonEnabled(westButton, controlsEnabled);
-        stopButton.setEnabled(controlsEnabled);
-        stopButton.setBackground(createStopButtonBackground(controlsEnabled));
-        stopButton.setTextColor(Color.WHITE);
-        updateTrackingViews();
-        updateHomeViews();
-    }
-
-    private void updateHomeViews() {
-        if (homeStatusText != null) {
-            if (!hasHomePosition) {
-                homeStatusText.setText(R.string.home_status_none);
-            } else if (!homePositionValid) {
-                homeStatusText.setText(getString(
-                        R.string.home_status_invalid,
-                        formatHourAngleDisplay(homeHourAngleHours),
-                        formatDeclinationDisplay(homeDecDegrees)
-                ));
-            } else {
-                homeStatusText.setText(getString(
-                        R.string.home_status,
-                        formatHourAngleDisplay(homeHourAngleHours),
-                        formatDeclinationDisplay(homeDecDegrees)
-                ));
-            }
+        if (stopButton != null) {
+            stopButton.setEnabled(controlsEnabled);
+            stopButton.setBackground(createStopButtonBackground(controlsEnabled));
+            stopButton.setTextColor(Color.WHITE);
         }
+        updateTrackingViews();
+        updateFirmwareSettingsViews();
     }
 
     private void updateObserverViews() {
@@ -4963,6 +5716,54 @@ public final class MainActivity extends Activity {
 
     private void markTransportFault() {
         connectionGeneration.incrementAndGet();
+        logStateSnapshot("transport-fault");
+    }
+
+    private void logUserAction(String action) {
+        Logger.user(action);
+    }
+
+    private void logStateSnapshot(String reason) {
+        Logger.info("state " + reason
+                + " connected=" + connected
+                + " busy=" + busy
+                + " gotoInProgress=" + gotoInProgress
+                + " homeFindInProgress=" + homeFindInProgress
+                + " parked=" + parked
+                + " trackingEnabled=" + trackingEnabled
+                + " trackingMode=" + (trackingUsingDualAxis ? "dual" : "single")
+                + " rate=" + selectedTrackingRate.name()
+                + " firmware=" + selectedFirmwareMode.name()
+                + " mount=" + selectedMountMode.name()
+                + " activeDirection=" + (activeDirection == null ? "none" : activeDirection.name())
+                + " alignment=" + alignmentStateSummary());
+    }
+
+    private String alignmentStateSummary() {
+        if (alignmentSession == null) {
+            return "none";
+        }
+        return alignmentSession.acceptedStars + "/" + alignmentSession.totalStars
+                + (alignmentSession.currentTarget == null ? "" : " target=" + alignmentSession.currentTarget.label);
+    }
+
+    private String targetLog(SkyChartView.Target target) {
+        if (target == null) {
+            return "target=none";
+        }
+        return "target=\"" + target.label + "\" RA=" + formatRightAscensionDisplay(target.raHours)
+                + " Dec=" + formatDeclinationDisplay(target.decDegrees);
+    }
+
+    private String observerLog() {
+        return String.format(
+                Locale.US,
+                "observer=\"%s\" lat=%.5f lon=%.5f zone=%s",
+                observerState.locationName,
+                observerState.latitudeDegrees,
+                observerState.longitudeDegrees,
+                observerState.zoneId
+        );
     }
 
     private void updatePageTabs(Page selectedPage) {
@@ -4976,12 +5777,17 @@ public final class MainActivity extends Activity {
         if (settingsPage != null) {
             settingsPage.setVisibility(selectedPage == Page.SETTINGS ? View.VISIBLE : View.GONE);
         }
+        if (connectionSyncPage != null) {
+            connectionSyncPage.setVisibility(selectedPage == Page.CONNECTION_SYNC ? View.VISIBLE : View.GONE);
+        }
         styleTabButton(manualTabButton, selectedPage == Page.MANUAL);
         styleTabButton(skyTabButton, selectedPage == Page.SKY);
         styleTabButton(settingsTabButton, selectedPage == Page.SETTINGS);
+        styleTabButton(connectionSyncTabButton, selectedPage == Page.CONNECTION_SYNC);
     }
 
     private void selectPageFromMenu(Page selectedPage) {
+        logUserAction("select page " + selectedPage.name());
         if (selectingCalibrationTargetFromSky && selectedPage != Page.SKY) {
             selectingCalibrationTargetFromSky = false;
             if (calibrationTargetConfirmDialog != null && calibrationTargetConfirmDialog.isShowing()) {
@@ -5007,6 +5813,9 @@ public final class MainActivity extends Activity {
         if (settingsTabButton != null) {
             settingsTabButton.setVisibility(menuItemVisibility);
         }
+        if (connectionSyncTabButton != null) {
+            connectionSyncTabButton.setVisibility(menuItemVisibility);
+        }
         if (manualTabButton != null) {
             manualTabButton.setVisibility(menuItemVisibility);
         }
@@ -5027,7 +5836,7 @@ public final class MainActivity extends Activity {
         if (button == null) {
             return;
         }
-        button.setTextColor(selected ? Color.rgb(15, 23, 42) : Color.rgb(226, 232, 240));
+        button.setTextColor(selected ? Color.WHITE : Color.rgb(226, 232, 240));
         button.setTypeface(selected ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
         button.setBackground(createTabBackground(selected));
     }
@@ -5075,6 +5884,9 @@ public final class MainActivity extends Activity {
     }
 
     private void setDirectionButtonEnabled(Button button, boolean enabled) {
+        if (button == null) {
+            return;
+        }
         button.setEnabled(enabled);
         button.setTextColor(enabled ? titleTextColor() : mutedTextColor());
         button.setBackground(createDirectionButtonBackground(enabled));
@@ -5202,6 +6014,8 @@ public final class MainActivity extends Activity {
         TRACK_FULL_COMPENSATION(":To#"),
         TRACK_DUAL_AXIS(":T2#"),
         REFINE_POLAR_ALIGNMENT(":MP#"),
+        HOME_CALIBRATE(":hC#"),
+        HOME_FIND(":hF#"),
         PARK(":hP#"),
         UNPARK(":hR#"),
         GOTO_STATUS(":D#"),
@@ -5268,10 +6082,35 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private enum FirmwareMode {
+        ONSTEP(R.string.firmware_mode_onstep),
+        ONSTEPX(R.string.firmware_mode_onstepx);
+
+        private final int labelRes;
+
+        FirmwareMode(int labelRes) {
+            this.labelRes = labelRes;
+        }
+    }
+
+    private enum MountMode {
+        EQUATORIAL(R.string.mount_mode_equatorial, 1),
+        ALTAZ(R.string.mount_mode_altaz, 3);
+
+        private final int labelRes;
+        private final int onStepXCode;
+
+        MountMode(int labelRes, int onStepXCode) {
+            this.labelRes = labelRes;
+            this.onStepXCode = onStepXCode;
+        }
+    }
+
     private enum Page {
+        SETTINGS,
+        CONNECTION_SYNC,
         MANUAL,
-        SKY,
-        SETTINGS
+        SKY
     }
 
     private enum Direction {
