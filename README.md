@@ -10,7 +10,7 @@
 
 <p align="center">
   <a href="#当前状态"><img alt="Status" src="https://img.shields.io/badge/status-field--testing-orange"></a>
-  <a href="#版本说明"><img alt="Version" src="https://img.shields.io/badge/version-v0.2.1-blue"></a>
+  <a href="#版本说明"><img alt="Version" src="https://img.shields.io/badge/version-v0.2.2-blue"></a>
   <a href="#功能概览"><img alt="Platform" src="https://img.shields.io/badge/platform-Android-green"></a>
   <a href="#星图数据与授权"><img alt="Catalog" src="https://img.shields.io/badge/catalog-HYG%20%7C%20OpenNGC%20%7C%20d3--celestial-lightgrey"></a>
 </p>
@@ -37,7 +37,7 @@ MountBehave 是一个为 OnStep/LX200 兼容赤道仪开发的 Android 手控器
   <img src="docs/images/clearsky_wordmark.png" alt="Clearsky ST17 test badge" width="160">
 </p>
 
-当前版本：`v0.2.1`
+当前版本：`v0.2.2`
 
 测试状态：
 
@@ -69,7 +69,7 @@ MountBehave 是一个为 OnStep/LX200 兼容赤道仪开发的 Android 手控器
 | 观测地与时间 | 默认 Boston；支持 GPS 或手动经纬度；可同步到 OnStep |
 | 跟踪 | 恒星速、月球速、太阳速；保存两星/三星模型后请求双轴/模型补偿，否则默认单轴 |
 | 校准 | 快速同步、两星校准、三星校准、三星后极轴精调入口；经纬仪模式隐藏极轴相关流程 |
-| 安全 | 原生 Set Home / Return Home、GOTO 状态查询、取消 GOTO、Park/Unpark、夜视模式、低空/过中天提醒 |
+| 安全 | GOTO 状态查询与到位复核、取消 GOTO、Park/Unpark、夜视模式、低空/过中天提醒 |
 | 日志 | 设置页内置命令日志，可复制最近 100 行、导出当天日志、清空当天日志 |
 | 适配 | 紧凑界面、问号说明弹窗、悬浮菜单、横屏和平板宽屏布局、MountBehave 启动图标 |
 
@@ -77,13 +77,13 @@ MountBehave 是一个为 OnStep/LX200 兼容赤道仪开发的 Android 手控器
 
 ### 下载 APK
 
-推荐从 GitHub Release 下载 `MountBehave-v0.2.1.apk`。
+推荐从 GitHub Release 下载 `MountBehave-v0.2.2.apk`。
 
 ### 本地构建
 
 ```powershell
-cd D:\Android_projects\controller
-.\scripts\build-debug.ps1
+cd MountBehave
+powershell -ExecutionPolicy Bypass -File .\scripts\build-debug.ps1
 ```
 
 默认输出：
@@ -92,18 +92,24 @@ cd D:\Android_projects\controller
 app\build\outputs\apk\debug\app-debug.apk
 ```
 
-本次发布用的重命名 APK：
+Release 构建并生成可安装 APK：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build-release.ps1
+```
+
+如果未传入正式 keystore，脚本会使用本机 Android debug keystore 签名，适合现场安装测试；正式发布请传入专用 release keystore。
+
+本次发布用的安装 APK：
 
 ```text
-dist\MountBehave-v0.2.1.apk
+dist\MountBehave-v0.2.2.apk
 ```
 
 ### 安装到手机
 
 ```powershell
-.\scripts\env.ps1
-adb devices
-adb install -r dist\MountBehave-v0.2.1.apk
+powershell -ExecutionPolicy Bypass -NoProfile -Command ". .\scripts\env.ps1; adb devices; adb install -r dist\MountBehave-v0.2.2.apk"
 ```
 
 电脑模拟器通常不能直接加入赤道仪自己的 WiFi 热点。真实测试时建议把 APK 安装到手机或 Android 平板上，并让设备直接连接赤道仪 WiFi。
@@ -111,7 +117,7 @@ adb install -r dist\MountBehave-v0.2.1.apk
 ### 电脑端预览
 
 ```powershell
-.\scripts\preview-app.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\preview-app.ps1
 ```
 
 预览适合检查界面、星图和离线流程，不适合测试真实赤道仪 WiFi 热点连接。
@@ -148,16 +154,13 @@ adb install -r dist\MountBehave-v0.2.1.apk
 2. 单指拖拽改变视野方向，双指缩放视场。
 3. 点击星图目标，或通过目标搜索输入名称/坐标。
 4. 未连接时只能显示目标；连接后可以显示并 GOTO。
-5. GOTO 后可刷新 GOTO 状态，也可以随时取消 GOTO。
+5. GOTO 后 App 会自动轮询状态；控制器报告空闲时还会读取当前 RA/Dec，确认接近目标后才释放为可发起下一次 GOTO。也可以手动刷新或随时取消 GOTO。
 
-### 5. Set Home / Return Home
+### 5. 安全与 GOTO 状态
 
-Home 位于“设置”页的“安全与夜视”区域。MountBehave 直接使用 OnStep 原生命令 `:hC#` / `:hF#`，按机械轴位置标记和返回 Home，不再把 Home 存成 RA/Dec 后走普通 GOTO。
+“设置”页的“安全与夜视”区域保留全局急停、夜视模式、取消 GOTO、刷新 GOTO 状态、Park 和 Unpark。
 
-1. 通常把赤道仪放在 CWD/Home 姿态后再上电；这种情况下 OnStep 已把开机姿态当作 Home，第一次使用前不需要先点“设为 Home”。
-2. 只有在你确实想把当前轴位置改成新的 Home 时，才点击“设为 Home”并确认。
-3. 点击“回到 Home”前确认线缆、镜筒和支架不会碰撞；App 会请求 OnStep 机械回家，可用“取消 GOTO”或“全局急停”中止。
-4. Home 与 Park 是两套独立参考；已 Park 时请先 Unpark，再回 Home。
+`v0.2.2` 已移除 Set Home / Return Home。OnStep 的 Home 是机械轴参考，不同固件和安装姿态下语义差异较大；在当前实机测试里它会引入误操作风险，因此不再从 App 暴露 Home 标记或返回入口。
 
 ## 校准流程
 
@@ -247,7 +250,7 @@ MountBehave 为控制 APK 体积使用筛选后的离线数据：
 无赤道仪时可启动本地 Mock OnStep 服务：
 
 ```powershell
-.\scripts\mock-onstep.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\mock-onstep.ps1
 ```
 
 然后在 Android 模拟器中连接：
@@ -258,6 +261,12 @@ MountBehave 为控制 APK 体积使用筛选后的离线数据：
 
 ## 版本说明
 
+### v0.2.2
+
+- 移除“安全与夜视”中的 Set Home / Return Home 入口，App 不再发送 OnStep Home 标记或返回命令。
+- 修复连续 GOTO 状态判断：控制器提前报告空闲时，App 会用当前 RA/Dec 和目标角距复核，未到位则继续保持 GOTO 进行中。
+- 版本号升至 `0.2.2`，发布包使用 release 构建输出并签名为可安装 APK。
+
 ### v0.2.1
 
 - 压缩星图顶部状态区，把目标、指向、GOTO 和限位信息改成更短的观测状态文本。
@@ -267,7 +276,7 @@ MountBehave 为控制 APK 体积使用筛选后的离线数据：
 ### v0.2.0
 
 - 新增设置页、连接/同步页和 OnStepX 赤道仪/经纬仪模式。
-- 新增可导出命令日志、Home/Return Home 原生命令、安全控制重排和暗色界面。
+- 新增可导出命令日志、安全控制重排和暗色界面。
 - 改进小天体下载、彗星逐颗添加、太阳系/小天体星图精度和三星后极轴精调流程。
 
 ### v0.1.0

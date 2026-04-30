@@ -99,6 +99,10 @@ public final class MainActivity extends Activity {
     private static final int SIDE_MENU_ITEM_COUNT = 4;
     private static final int LOCATION_PERMISSION_REQUEST = 24;
     private static final long CONNECTION_POLL_INTERVAL_MS = 5_000L;
+    private static final long GOTO_STATUS_POLL_INITIAL_DELAY_MS = 2_500L;
+    private static final long GOTO_STATUS_POLL_INTERVAL_MS = 3_000L;
+    private static final int GOTO_STATUS_POLL_MAX_ATTEMPTS = 240;
+    private static final double GOTO_ARRIVAL_THRESHOLD_DEGREES = 0.25;
     private static final Pattern COORDINATE_TARGET_PATTERN = Pattern.compile(
             "^\\s*(?:RA\\s*)?([0-9]{1,2}(?::[0-9]{1,2}(?::[0-9]{1,2}(?:\\.\\d+)?)?)?|[0-9]+(?:\\.\\d+)?)\\s*[, ]+\\s*(?:DEC\\s*)?([+-]?[0-9]{1,2}(?:(?::|\\*|°)[0-9]{1,2}(?:(?::|')?[0-9]{1,2}(?:\\.\\d+)?)?)?|[+-]?[0-9]+(?:\\.\\d+)?)\\s*$",
             Pattern.CASE_INSENSITIVE
@@ -114,6 +118,12 @@ public final class MainActivity extends Activity {
         public void run() {
             updateSkyTime();
             uiHandler.postDelayed(this, CONNECTION_POLL_INTERVAL_MS);
+        }
+    };
+    private final Runnable gotoStatusPollRunnable = new Runnable() {
+        @Override
+        public void run() {
+            pollGotoStatus();
         }
     };
 
@@ -167,8 +177,6 @@ public final class MainActivity extends Activity {
     private Button trackingSolarButton;
     private Button trackingToggleButton;
     private TextView trackingStatusText;
-    private Button gotoHomeButton;
-    private Button setHomeButton;
     private TextView safetyStatusText;
     private Button emergencyStopButton;
     private Button safetyCancelGotoButton;
@@ -229,6 +237,7 @@ public final class MainActivity extends Activity {
     private TrackingRate selectedTrackingRate = TrackingRate.SIDEREAL;
     private volatile Direction activeDirection;
     private SkyChartView.Target selectedSkyTarget;
+    private SkyChartView.Target activeGotoTarget;
     private SkyChartView.Target calibrationTarget;
     private SkyChartView.Target syncedCurrentTarget;
     private SkyChartView.Target polarRefineSyncedTarget;
@@ -237,7 +246,7 @@ public final class MainActivity extends Activity {
     private boolean quickPointingCorrectionActive;
     private double quickPointingRaOffsetHours;
     private double quickPointingDecOffsetDegrees;
-    private boolean homeFindInProgress;
+    private int gotoStatusPollAttempts;
     private ManualRate selectedManualRate = ManualRate.CENTER;
     private CalibrationMode selectedCalibrationMode = CalibrationMode.QUICK_SYNC;
     private FirmwareMode selectedFirmwareMode = FirmwareMode.ONSTEP;
@@ -287,6 +296,7 @@ public final class MainActivity extends Activity {
         super.onPause();
         Logger.info("lifecycle onPause");
         uiHandler.removeCallbacks(skyClockRunnable);
+        uiHandler.removeCallbacks(gotoStatusPollRunnable);
         if (connected && activeDirection != null) {
             activeDirection = null;
             enqueueStop(getString(R.string.log_auto_stop_background));
@@ -900,20 +910,6 @@ public final class MainActivity extends Activity {
         nightModeButton.setBackground(createNightModeButtonBackground());
         stopActions.addView(nightModeButton, weightWrapWithLeftMargin(1f, 8));
         panel.addView(stopActions, matchWrap());
-
-        LinearLayout homeActions = new LinearLayout(this);
-        homeActions.setOrientation(LinearLayout.HORIZONTAL);
-        homeActions.setGravity(Gravity.CENTER_VERTICAL);
-        homeActions.setPadding(0, dp(6), 0, 0);
-
-        setHomeButton = actionButton(R.string.home_set_current);
-        setHomeButton.setOnClickListener(v -> confirmSetHomeFromMountNative());
-        homeActions.addView(setHomeButton, weightWrap(1f));
-
-        gotoHomeButton = actionButton(R.string.home_goto);
-        gotoHomeButton.setOnClickListener(v -> confirmReturnHomeNative());
-        homeActions.addView(gotoHomeButton, weightWrapWithLeftMargin(1f, 8));
-        panel.addView(homeActions, matchWrap());
 
         LinearLayout gotoActions = new LinearLayout(this);
         gotoActions.setOrientation(LinearLayout.HORIZONTAL);
@@ -2084,7 +2080,8 @@ public final class MainActivity extends Activity {
                     trackingEnabled = false;
                     trackingUsingDualAxis = false;
                     gotoInProgress = false;
-                    homeFindInProgress = false;
+                    activeGotoTarget = null;
+                    cancelGotoStatusPoll();
                     clearQuickPointingCorrection();
                     polarRefineSyncedTarget = null;
                     parked = false;
@@ -2121,7 +2118,8 @@ public final class MainActivity extends Activity {
                     mountPointingPollingPaused = true;
                     activeDirection = null;
                     gotoInProgress = false;
-                    homeFindInProgress = false;
+                    activeGotoTarget = null;
+                    cancelGotoStatusPoll();
                     parked = false;
                     setStatus(getString(R.string.status_connect_failed, ex.getMessage()));
                     setSafetyStatus(getString(R.string.safety_status_connect_failed));
@@ -2198,7 +2196,8 @@ public final class MainActivity extends Activity {
                 activeDirection = null;
                 alignmentSession = null;
                 gotoInProgress = false;
-                homeFindInProgress = false;
+                activeGotoTarget = null;
+                cancelGotoStatusPoll();
                 parked = false;
                 trackingEnabled = false;
                 trackingUsingDualAxis = false;
@@ -2221,6 +2220,7 @@ public final class MainActivity extends Activity {
         }
         Direction previousDirection = activeDirection;
         clearSyncedCurrentTarget();
+        clearGotoProgressForManualMotion();
         activeDirection = direction;
         logUserAction("hold move direction=" + direction.name()
                 + " rate=" + selectedManualRate.name()
@@ -2287,7 +2287,8 @@ public final class MainActivity extends Activity {
         clearSyncedCurrentTarget();
         activeDirection = null;
         gotoInProgress = false;
-        homeFindInProgress = false;
+        activeGotoTarget = null;
+        cancelGotoStatusPoll();
         setGotoStatus(getString(R.string.goto_status_cancelled));
         setSafetyStatus(getString(R.string.safety_status_emergency_stop));
         enqueueImmediateStop(getString(R.string.status_emergency_stop_sent));
@@ -2305,12 +2306,24 @@ public final class MainActivity extends Activity {
         clearSyncedCurrentTarget();
         activeDirection = null;
         gotoInProgress = false;
-        homeFindInProgress = false;
+        activeGotoTarget = null;
+        cancelGotoStatusPoll();
         setGotoStatus(getString(R.string.goto_status_cancelled));
         setSafetyStatus(getString(R.string.safety_status_goto_cancelled));
         enqueueImmediateStop(getString(R.string.goto_cancel_sent));
         logStateSnapshot("cancel-goto");
         updateUiState();
+    }
+
+    private void clearGotoProgressForManualMotion() {
+        if (!gotoInProgress) {
+            return;
+        }
+        gotoInProgress = false;
+        activeGotoTarget = null;
+        cancelGotoStatusPoll();
+        setGotoStatus(getString(R.string.goto_status_cancelled));
+        Logger.info("manual motion cleared local goto progress");
     }
 
     private void refreshGotoStatus() {
@@ -2326,20 +2339,61 @@ public final class MainActivity extends Activity {
         appendLog("TX " + OnStepCommand.GOTO_STATUS.command);
 
         int generation = connectionGeneration.get();
+        SkyChartView.Target statusTarget = activeGotoTarget;
         ioExecutor.execute(() -> {
             if (!isConnectionGenerationCurrent(generation)) {
                 return;
             }
             try {
                 String reply = client.query(OnStepCommand.GOTO_STATUS.command);
-                boolean moving = !reply.isEmpty();
+                boolean controllerMoving = !reply.isEmpty();
+                GotoIdleVerification idleVerification = null;
+                if (!controllerMoving && statusTarget != null) {
+                    try {
+                        idleVerification = verifyGotoIdleAgainstTarget(statusTarget);
+                    } catch (IllegalArgumentException ex) {
+                        Logger.warn("goto idle verification bad pointing reply " + safeMessage(ex));
+                    }
+                }
+                GotoIdleVerification finalIdleVerification = idleVerification;
                 runOnUiThread(() -> {
+                    if (statusTarget != null && activeGotoTarget != statusTarget) {
+                        busy = false;
+                        logStateSnapshot("goto-status-refresh-stale");
+                        updateUiState();
+                        return;
+                    }
                     busy = false;
+                    boolean moving = controllerMoving;
+                    boolean arrived = !controllerMoving
+                            && activeGotoTarget != null
+                            && finalIdleVerification != null
+                            && finalIdleVerification.arrived;
+                    if (!controllerMoving && activeGotoTarget != null && !arrived) {
+                        moving = true;
+                    }
                     gotoInProgress = moving;
                     appendLog("RX " + OnStepCommand.GOTO_STATUS.command + " -> " + (moving ? "moving" : "idle"));
-                    setGotoStatus(getString(moving ? R.string.goto_status_running : R.string.goto_status_idle));
+                    if (moving) {
+                        setGotoStatus(getString(R.string.goto_status_running));
+                    } else if (arrived) {
+                        setGotoStatus(getString(R.string.goto_status_arrived, activeGotoTarget.label));
+                    } else {
+                        setGotoStatus(getString(R.string.goto_status_idle));
+                    }
+                    if (finalIdleVerification != null) {
+                        setMountPointing(finalIdleVerification.raHours, finalIdleVerification.decDegrees);
+                    }
                     if (!moving) {
-                        homeFindInProgress = false;
+                        activeGotoTarget = null;
+                        cancelGotoStatusPoll();
+                    } else {
+                        if (!controllerMoving && activeGotoTarget != null && finalIdleVerification != null) {
+                            Logger.info("goto idle ignored; target not reached distanceDeg="
+                                    + String.format(Locale.US, "%.3f", finalIdleVerification.distanceDegrees)
+                                    + " " + targetLog(activeGotoTarget));
+                        }
+                        scheduleGotoStatusPoll(GOTO_STATUS_POLL_INTERVAL_MS);
                     }
                     logStateSnapshot("goto-status-refresh-result moving=" + moving);
                     updateUiState();
@@ -2349,6 +2403,58 @@ public final class MainActivity extends Activity {
                 runOnUiThread(() -> handleCommandFailure(ex));
             }
         });
+    }
+
+    private GotoIdleVerification verifyGotoIdleAgainstTarget(SkyChartView.Target target) throws IOException {
+        String raReply = client.query(":GR#");
+        String decReply = client.query(":GD#");
+        EquatorialPoint actualPointing = actualPointingFromMountReport(
+                parseRightAscension(raReply),
+                parseDeclination(decReply)
+        );
+        double distanceDegrees = angularDistanceDegrees(
+                actualPointing.raHours,
+                actualPointing.decDegrees,
+                target.raHours,
+                target.decDegrees
+        );
+        return new GotoIdleVerification(
+                actualPointing.raHours,
+                actualPointing.decDegrees,
+                distanceDegrees,
+                distanceDegrees <= GOTO_ARRIVAL_THRESHOLD_DEGREES
+        );
+    }
+
+    private void scheduleGotoStatusPoll(long delayMillis) {
+        uiHandler.removeCallbacks(gotoStatusPollRunnable);
+        if (!connected || !gotoInProgress) {
+            return;
+        }
+        uiHandler.postDelayed(gotoStatusPollRunnable, delayMillis);
+    }
+
+    private void cancelGotoStatusPoll() {
+        uiHandler.removeCallbacks(gotoStatusPollRunnable);
+        gotoStatusPollAttempts = 0;
+    }
+
+    private void pollGotoStatus() {
+        if (!connected || !gotoInProgress) {
+            cancelGotoStatusPoll();
+            return;
+        }
+        if (busy) {
+            scheduleGotoStatusPoll(GOTO_STATUS_POLL_INTERVAL_MS);
+            return;
+        }
+        if (gotoStatusPollAttempts >= GOTO_STATUS_POLL_MAX_ATTEMPTS) {
+            Logger.warn("goto status poll stopped after " + gotoStatusPollAttempts + " attempts");
+            return;
+        }
+        gotoStatusPollAttempts++;
+        Logger.info("goto status poll attempt=" + gotoStatusPollAttempts);
+        refreshGotoStatus();
     }
 
     private void enqueueDirectionStop(Direction direction, String logMessage) {
@@ -2537,7 +2643,8 @@ public final class MainActivity extends Activity {
         }
         if (!quickPointingCorrectionActive && isSyncedCurrentTarget(target)) {
             gotoInProgress = false;
-            homeFindInProgress = false;
+            activeGotoTarget = null;
+            cancelGotoStatusPoll();
             setStatus(getString(R.string.status_goto_already_synced, target.label));
             setGotoStatus(getString(R.string.goto_status_already_synced, target.label));
             appendLog("INFO GOTO skipped; " + target.label + " is the synced current target");
@@ -2549,7 +2656,8 @@ public final class MainActivity extends Activity {
             return;
         }
         clearSyncedCurrentTarget();
-        homeFindInProgress = false;
+        activeGotoTarget = null;
+        cancelGotoStatusPoll();
         EquatorialPoint commandPoint = gotoCommandPoint(target);
         String raCommand = ":Sr" + formatRightAscensionCommand(commandPoint.raHours) + "#";
         String decCommand = ":Sd" + formatDeclinationCommand(commandPoint.decDegrees) + "#";
@@ -2595,10 +2703,12 @@ public final class MainActivity extends Activity {
                     appendLog("RX :MS# -> " + gotoReply);
                     busy = false;
                     gotoInProgress = true;
-                    homeFindInProgress = false;
+                    activeGotoTarget = target;
+                    gotoStatusPollAttempts = 0;
                     parked = false;
                     setStatus(sentStatus);
                     setGotoStatus(getString(R.string.goto_status_sent, target.label));
+                    scheduleGotoStatusPoll(GOTO_STATUS_POLL_INITIAL_DELAY_MS);
                     logStateSnapshot("goto-sent " + targetLog(target));
                     if (onSuccess != null) {
                         onSuccess.run();
@@ -2609,7 +2719,14 @@ public final class MainActivity extends Activity {
                 runOnUiThread(() -> {
                     busy = false;
                     gotoInProgress = isGotoMovingRejection(ex);
-                    homeFindInProgress = false;
+                    if (gotoInProgress) {
+                        activeGotoTarget = null;
+                        gotoStatusPollAttempts = 0;
+                        scheduleGotoStatusPoll(GOTO_STATUS_POLL_INITIAL_DELAY_MS);
+                    } else {
+                        activeGotoTarget = null;
+                        cancelGotoStatusPoll();
+                    }
                     Logger.warn("goto rejected command=" + ex.command + " reply=" + ex.reply + " " + targetLog(target));
                     setStatus(commandRejectedStatus(ex.command, ex.reply));
                     setGotoStatus(getString(R.string.goto_status_rejected, ex.reply));
@@ -2684,149 +2801,6 @@ public final class MainActivity extends Activity {
         quickPointingDecOffsetDegrees = 0.0;
     }
 
-    private void confirmSetHomeFromMountNative() {
-        if (!connected || busy) {
-            return;
-        }
-        Logger.user("tap set-home");
-        new AlertDialog.Builder(this)
-                .setTitle(R.string.home_set_confirm_title)
-                .setMessage(R.string.home_set_confirm_message)
-                .setPositiveButton(R.string.home_set_current, (dialog, which) -> {
-                    logUserAction("confirm set-home");
-                    sendNativeHomeCommand(
-                            OnStepCommand.HOME_CALIBRATE,
-                            getString(R.string.home_set_sending),
-                            getString(R.string.home_set_done),
-                            R.string.home_set_failed,
-                            false
-                    );
-                })
-                .setNegativeButton(android.R.string.cancel, null)
-                .show();
-    }
-
-    private void confirmReturnHomeNative() {
-        if (!connected || busy) {
-            return;
-        }
-        Logger.user("tap return-home");
-        if (parked) {
-            String status = getString(R.string.home_blocked_parked);
-            Logger.warn("return-home blocked: parked");
-            setStatus(status);
-            setSafetyStatus(status);
-            setGotoStatus(status);
-            updateUiState();
-            return;
-        }
-        if (gotoInProgress) {
-            String status = getString(R.string.home_blocked_busy);
-            Logger.warn("return-home blocked: goto in progress");
-            setStatus(status);
-            setSafetyStatus(status);
-            setGotoStatus(status);
-            updateUiState();
-            return;
-        }
-        new AlertDialog.Builder(this)
-                .setTitle(R.string.home_goto_confirm_title)
-                .setMessage(R.string.home_goto_confirm_message)
-                .setPositiveButton(R.string.home_goto, (dialog, which) -> {
-                    logUserAction("confirm return-home");
-                    sendNativeHomeCommand(
-                            OnStepCommand.HOME_FIND,
-                            getString(R.string.home_goto_sending),
-                            getString(R.string.home_goto_done),
-                            R.string.home_goto_failed,
-                            true
-                    );
-                })
-                .setNegativeButton(android.R.string.cancel, null)
-                .show();
-    }
-
-    private void sendNativeHomeCommand(
-            OnStepCommand command,
-            String sendingStatus,
-            String successStatus,
-            int failureStatusRes,
-            boolean startsMotion
-    ) {
-        if (!connected || busy) {
-            return;
-        }
-        busy = true;
-        setStatus(sendingStatus);
-        setSafetyStatus(sendingStatus);
-        updateUiState();
-        logStateSnapshot((startsMotion ? "return-home" : "set-home") + "-start");
-        appendLog("TX " + command.command);
-
-        int generation = connectionGeneration.get();
-        ioExecutor.execute(() -> {
-            if (!isConnectionGenerationCurrent(generation)) {
-                return;
-            }
-            try {
-                String reply = client.queryOptionalShortReply(command.command);
-                String trimmedReply = reply == null ? "" : reply.trim();
-                if (isRejectedReply(trimmedReply)) {
-                    throw new CommandRejectedException(command.command, trimmedReply);
-                }
-                runOnUiThread(() -> {
-                    appendLog("RX " + command.command + " -> " + reply);
-                    busy = false;
-                    if (startsMotion) {
-                        gotoInProgress = true;
-                        homeFindInProgress = true;
-                        parked = false;
-                        clearSyncedCurrentTarget();
-                        setGotoStatus(successStatus);
-                    }
-                    setStatus(successStatus);
-                    setSafetyStatus(successStatus);
-                    logStateSnapshot((startsMotion ? "return-home" : "set-home") + "-success");
-                    updateUiState();
-                });
-            } catch (CommandRejectedException ex) {
-                Logger.warn((startsMotion ? "return-home" : "set-home") + " rejected: " + ex.reply);
-                runOnUiThread(() -> {
-                    busy = false;
-                    if (startsMotion) {
-                        gotoInProgress = false;
-                        homeFindInProgress = false;
-                    }
-                    String status = getString(failureStatusRes, ex.reply == null || ex.reply.isEmpty() ? "空回包" : ex.reply);
-                    setStatus(status);
-                    setSafetyStatus(status);
-                    if (startsMotion) {
-                        setGotoStatus(status);
-                    }
-                    logStateSnapshot((startsMotion ? "return-home" : "set-home") + "-rejected");
-                    updateUiState();
-                });
-            } catch (IOException ex) {
-                markTransportFault();
-                runOnUiThread(() -> {
-                    busy = false;
-                    if (startsMotion) {
-                        gotoInProgress = false;
-                        homeFindInProgress = false;
-                    }
-                    String status = getString(failureStatusRes, safeMessage(ex));
-                    setStatus(status);
-                    setSafetyStatus(status);
-                    if (startsMotion) {
-                        setGotoStatus(status);
-                    }
-                    logStateSnapshot((startsMotion ? "return-home" : "set-home") + "-io-failed");
-                    updateUiState();
-                });
-            }
-        });
-    }
-
     private void parkMount() {
         if (!connected || busy) {
             return;
@@ -2841,7 +2815,8 @@ public final class MainActivity extends Activity {
                 () -> {
                     parked = true;
                     gotoInProgress = false;
-                    homeFindInProgress = false;
+                    activeGotoTarget = null;
+                    cancelGotoStatusPoll();
                     trackingEnabled = false;
                     trackingUsingDualAxis = false;
                     setGotoStatus(getString(R.string.goto_status_idle));
@@ -3329,6 +3304,8 @@ public final class MainActivity extends Activity {
                     trackingEnabled = true;
                     trackingUsingDualAxis = shouldStartDualAxisTracking();
                     gotoInProgress = false;
+                    activeGotoTarget = null;
+                    cancelGotoStatusPoll();
                     setMountPointing(target.raHours, target.decDegrees);
                     syncedCurrentTarget = target;
                     if (postSyncDistance <= 0.25) {
@@ -4633,18 +4610,20 @@ public final class MainActivity extends Activity {
     }
 
     private void updateGotoProgressFromPointing() {
-        if (!gotoInProgress || homeFindInProgress || selectedSkyTarget == null || !hasCurrentMountPosition) {
+        if (!gotoInProgress || activeGotoTarget == null || !hasCurrentMountPosition) {
             return;
         }
         double distanceDegrees = angularDistanceDegrees(
                 currentMountRaHours,
                 currentMountDecDegrees,
-                selectedSkyTarget.raHours,
-                selectedSkyTarget.decDegrees
+                activeGotoTarget.raHours,
+                activeGotoTarget.decDegrees
         );
-        if (distanceDegrees <= 0.25) {
+        if (distanceDegrees <= GOTO_ARRIVAL_THRESHOLD_DEGREES) {
             gotoInProgress = false;
-            setGotoStatus(getString(R.string.goto_status_arrived, selectedSkyTarget.label));
+            cancelGotoStatusPoll();
+            setGotoStatus(getString(R.string.goto_status_arrived, activeGotoTarget.label));
+            activeGotoTarget = null;
             updateUiState();
         }
     }
@@ -5671,12 +5650,6 @@ public final class MainActivity extends Activity {
         if (trackingToggleButton != null) {
             trackingToggleButton.setEnabled(connected && !busy);
         }
-        if (gotoHomeButton != null) {
-            gotoHomeButton.setEnabled(connected && !busy && !parked && !gotoInProgress);
-        }
-        if (setHomeButton != null) {
-            setHomeButton.setEnabled(connected && !busy);
-        }
         setTrackingRateButtonEnabled(trackingSiderealButton, !busy);
         setTrackingRateButtonEnabled(trackingLunarButton, !busy);
         setTrackingRateButtonEnabled(trackingSolarButton, !busy);
@@ -5852,7 +5825,6 @@ public final class MainActivity extends Activity {
                 + " connected=" + connected
                 + " busy=" + busy
                 + " gotoInProgress=" + gotoInProgress
-                + " homeFindInProgress=" + homeFindInProgress
                 + " parked=" + parked
                 + " trackingEnabled=" + trackingEnabled
                 + " trackingMode=" + (trackingUsingDualAxis ? "dual" : "single")
@@ -6035,7 +6007,7 @@ public final class MainActivity extends Activity {
         try {
             return getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
         } catch (PackageManager.NameNotFoundException ex) {
-            return "0.2.1";
+            return "0.2.2";
         }
     }
 
@@ -6086,6 +6058,20 @@ public final class MainActivity extends Activity {
         EquatorialPoint(double raHours, double decDegrees) {
             this.raHours = raHours;
             this.decDegrees = decDegrees;
+        }
+    }
+
+    private static final class GotoIdleVerification {
+        final double raHours;
+        final double decDegrees;
+        final double distanceDegrees;
+        final boolean arrived;
+
+        GotoIdleVerification(double raHours, double decDegrees, double distanceDegrees, boolean arrived) {
+            this.raHours = raHours;
+            this.decDegrees = decDegrees;
+            this.distanceDegrees = distanceDegrees;
+            this.arrived = arrived;
         }
     }
 
@@ -6156,8 +6142,6 @@ public final class MainActivity extends Activity {
         TRACK_FULL_COMPENSATION(":To#"),
         TRACK_DUAL_AXIS(":T2#"),
         REFINE_POLAR_ALIGNMENT(":MP#"),
-        HOME_CALIBRATE(":hC#"),
-        HOME_FIND(":hF#"),
         PARK(":hP#"),
         UNPARK(":hR#"),
         GOTO_STATUS(":D#"),

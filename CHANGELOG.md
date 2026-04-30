@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.2.2 - 2026-04-30
+
+MountBehave 第四个测试版本，重点修复 Home 控件风险和连续 GOTO 状态判断。
+
+### 安全控制
+
+- 从“安全与夜视”中移除 Set Home / Return Home 入口，App 不再发送 OnStep Home 标记或返回命令。保留全局急停、取消 GOTO、刷新 GOTO 状态、Park/Unpark 和夜视模式。
+- 移除 Home 相关本地状态、按钮、确认弹窗、字符串和命令枚举，避免用户误把 Home 当作普通 RA/Dec 目标或 Park 替代品使用。
+
+### GOTO 状态
+
+- GOTO 发送成功后记录当前 active target，并自动轮询 `:D#` 状态。
+- 当控制器很快返回空闲时，额外读取 `:GR#` / `:GD#`，只有当前指向进入目标 `0.25°` 内才把 GOTO 释放为空闲；未到位时继续保持 GOTO 进行中并继续轮询。
+- 手动移动、取消 GOTO、急停、Park、断开连接和快速同步会清理本地 GOTO 轮询状态，避免旧目标影响下一次操作。
+
+### 发布
+
+- Android 版本号升至 `versionName 0.2.2` / `versionCode 4`。
+- 文档更新为当前安全控制和 release 构建输出。
+
 ## v0.2.1 - 2026-04-29
 
 MountBehave 第三个测试版本，重点是收紧星图与手控界面，并修复桌面预览/触控板输入下的星图拖拽误判。

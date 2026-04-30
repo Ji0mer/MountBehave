@@ -53,7 +53,7 @@ app/src/main/assets/catalog/constellation_lines.tsv
 ## 重新生成数据
 
 ```powershell
-cd D:\Android_projects\controller
+cd MountBehave
 python .\scripts\generate-sky-assets.py            # 恒星 / 深空 / 星座线
 python .\scripts\generate-vsop87.py                # 行星 VSOP87D 表(下载 + 截断)
 python .\scripts\generate-bundled-small-bodies.py  # 小天体基线(JPL SBDB)
