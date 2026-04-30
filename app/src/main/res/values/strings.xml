@@ -20,6 +20,8 @@
     <string name="small_bodies_download_starting">正在请求 JPL SBDB……</string>
     <string name="small_bodies_download_done">下载完成，更新 %1$d 个元素。</string>
     <string name="small_bodies_download_failed">下载失败：%1$s</string>
+    <string name="small_bodies_download_no_network">无法访问 JPL：当前网络没有公网 DNS/互联网。请切到有互联网的网络，或开启移动数据后重试。</string>
+    <string name="small_bodies_download_timeout">访问 JPL 超时，请确认当前网络可上网后重试。</string>
     <string name="small_bodies_cleared">已清空用户下载的小天体。</string>
     <string name="small_bodies_clear_failed">清空失败：%1$s</string>
     <string name="sky_layers">图层</string>
@@ -237,6 +239,7 @@
     <string name="goto_status_refreshing">GOTO：查询中...</string>
     <string name="goto_status_rejected">GOTO 拒绝：%1$s</string>
     <string name="goto_status_already_synced">GOTO：%1$s 已同步</string>
+    <string name="goto_status_blocked_busy">GOTO：正在移动，先取消或刷新状态</string>
     <string name="observing_alert_no_target">限位：未选目标</string>
     <string name="observing_alert_ok">限位：高 %1$.1f° 方 %2$.0f° · %3$s</string>
     <string name="observing_alert_low_altitude">低空：高 %1$.1f° 方 %2$.0f° · %3$s</string>
@@ -294,6 +297,7 @@
     <string name="status_moving">正在移动：%1$s</string>
     <string name="status_goto_sending">正在发送 GOTO：%1$s</string>
     <string name="status_goto_sent">已发送 GOTO：%1$s</string>
+    <string name="status_goto_blocked_busy">GOTO 正在进行，未向 %1$s 发送新目标。请等待完成，或先取消 GOTO / 刷新状态。</string>
     <string name="status_emergency_stop_sent">已发送全局急停命令。</string>
     <string name="status_sync_mount_sending">正在同步观测地与时间到赤道仪...</string>
     <string name="status_sync_mount_sent">已同步观测地与时间到赤道仪。</string>

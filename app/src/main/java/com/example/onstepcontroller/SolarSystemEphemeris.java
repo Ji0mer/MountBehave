@@ -48,7 +48,7 @@ final class SolarSystemEphemeris {
 
         List<Body> result = new ArrayList<>();
         result.add(new Body("sun", "太阳", "Sun", sunEquatorial.raHours, sunEquatorial.decDegrees, -26.7, 1.0));
-        result.add(new Body("moon", "月亮", "Moon", moonEquatorial.raHours, moonEquatorial.decDegrees, -12.0,
+        result.add(new Body("moon", "月球", "Moon", moonEquatorial.raHours, moonEquatorial.decDegrees, -12.0,
                 phaseFraction(sunGeometricLongitude, moon.longitudeDeg)));
 
         double j2000Days = jd - J2000_JULIAN_DAY;
@@ -66,19 +66,36 @@ final class SolarSystemEphemeris {
         if (query == null || query.trim().isEmpty()) {
             return null;
         }
-        String normalized = normalizeName(query);
         String trimmed = query.trim();
+        String normalized = normalizeName(trimmed);
+        boolean hasNormalizedQuery = !normalized.isEmpty();
         for (Body body : bodies(instant)) {
             if (body.label.equals(trimmed)
                     || body.englishName.equalsIgnoreCase(trimmed)
                     || body.id.equalsIgnoreCase(trimmed)
-                    || normalizeName(body.label).equals(normalized)
-                    || normalizeName(body.englishName).equals(normalized)
-                    || normalizeName(body.id).equals(normalized)) {
+                    || matchesAlias(body.id, trimmed)
+                    || matchesNormalizedName(body, normalized, hasNormalizedQuery)) {
                 return body;
             }
         }
         return null;
+    }
+
+    private static boolean matchesAlias(String id, String query) {
+        if ("moon".equals(id)) {
+            return "月亮".equals(query) || "月球".equals(query);
+        }
+        if ("sun".equals(id)) {
+            return "日".equals(query) || "太阳".equals(query);
+        }
+        return false;
+    }
+
+    private static boolean matchesNormalizedName(Body body, String normalized, boolean hasNormalizedQuery) {
+        return hasNormalizedQuery
+                && (normalizeName(body.label).equals(normalized)
+                        || normalizeName(body.englishName).equals(normalized)
+                        || normalizeName(body.id).equals(normalized));
     }
 
     private static MoonPosition moonPosition(double days, double sunGeometricLongitude, double sunMeanAnomaly, Nutation nutation) {

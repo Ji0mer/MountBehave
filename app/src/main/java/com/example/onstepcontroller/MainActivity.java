@@ -52,6 +52,7 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.SocketTimeoutException;
+import java.net.UnknownHostException;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
@@ -472,6 +473,7 @@ public final class MainActivity extends Activity {
         skyChartView.setObserver(observerState, Instant.now());
         skyChartView.setSmallBodyCatalog(smallBodyCatalog);
         skyChartView.setTargetSelectionListener(target -> {
+            logUserAction("select sky target " + targetLog(target));
             selectedSkyTarget = target;
             updateTargetViews();
             if (selectingCalibrationTargetFromSky) {
@@ -1158,8 +1160,7 @@ public final class MainActivity extends Activity {
             } catch (Throwable t) {
                 Logger.error("small-body asteroid download failed maxH=" + maxH, t);
                 runOnUiThread(() -> {
-                    setStatus(getString(R.string.small_bodies_download_failed,
-                            t.getMessage() == null ? t.getClass().getSimpleName() : t.getMessage()));
+                    setStatus(smallBodyDownloadFailureStatus(t));
                     smallBodyDownloadAsteroidsButton.setEnabled(true);
                 });
             }
@@ -1243,14 +1244,37 @@ public final class MainActivity extends Activity {
             } catch (Throwable t) {
                 Logger.error("small-body single fetch failed query=\"" + query + "\" comet=" + isComet, t);
                 runOnUiThread(() -> {
-                    setStatus(getString(R.string.small_bodies_download_failed,
-                            t.getMessage() == null ? t.getClass().getSimpleName() : t.getMessage()));
+                    setStatus(smallBodyDownloadFailureStatus(t));
                     if (smallBodyDownloadCometsButton != null) {
                         smallBodyDownloadCometsButton.setEnabled(true);
                     }
                 });
             }
         });
+    }
+
+    private String smallBodyDownloadFailureStatus(Throwable throwable) {
+        if (hasCause(throwable, UnknownHostException.class)) {
+            return getString(R.string.small_bodies_download_no_network);
+        }
+        if (hasCause(throwable, SocketTimeoutException.class)) {
+            return getString(R.string.small_bodies_download_timeout);
+        }
+        return getString(
+                R.string.small_bodies_download_failed,
+                throwable.getMessage() == null ? throwable.getClass().getSimpleName() : throwable.getMessage()
+        );
+    }
+
+    private static boolean hasCause(Throwable throwable, Class<? extends Throwable> type) {
+        Throwable cursor = throwable;
+        while (cursor != null) {
+            if (type.isInstance(cursor)) {
+                return true;
+            }
+            cursor = cursor.getCause();
+        }
+        return false;
     }
 
     /**
@@ -2044,6 +2068,7 @@ public final class MainActivity extends Activity {
             try {
                 SocketFactory socketFactory = stableWifiSocketFactory();
                 ConnectionAttempt connection = connectToAvailablePort(host, port, socketFactory);
+                releaseWifiBinding();
                 runOnUiThread(() -> {
                     connected = true;
                     busy = false;
@@ -2501,6 +2526,15 @@ public final class MainActivity extends Activity {
         if (!connected || busy || target == null) {
             return;
         }
+        if (gotoInProgress) {
+            String status = getString(R.string.status_goto_blocked_busy, target.label);
+            Logger.warn("goto blocked: already in progress " + targetLog(target));
+            setStatus(status);
+            setGotoStatus(getString(R.string.goto_status_blocked_busy));
+            logStateSnapshot("goto-blocked-busy " + targetLog(target));
+            updateUiState();
+            return;
+        }
         if (!quickPointingCorrectionActive && isSyncedCurrentTarget(target)) {
             gotoInProgress = false;
             homeFindInProgress = false;
@@ -2553,7 +2587,7 @@ public final class MainActivity extends Activity {
                     throw new CommandRejectedException(decCommand, decReply);
                 }
                 if (!"0".equals(gotoReply)) {
-                    throw new CommandRejectedException(":MS#", describeGotoReply(gotoReply));
+                    throw new CommandRejectedException(":MS#", gotoReply, describeGotoReply(gotoReply));
                 }
                 runOnUiThread(() -> {
                     appendLog("RX " + raCommand + " -> " + raReply);
@@ -2574,7 +2608,7 @@ public final class MainActivity extends Activity {
             } catch (CommandRejectedException ex) {
                 runOnUiThread(() -> {
                     busy = false;
-                    gotoInProgress = false;
+                    gotoInProgress = isGotoMovingRejection(ex);
                     homeFindInProgress = false;
                     Logger.warn("goto rejected command=" + ex.command + " reply=" + ex.reply + " " + targetLog(target));
                     setStatus(commandRejectedStatus(ex.command, ex.reply));
@@ -2591,6 +2625,10 @@ public final class MainActivity extends Activity {
 
     private boolean isSyncedCurrentTarget(SkyChartView.Target target) {
         return sameTargetCoordinates(syncedCurrentTarget, target);
+    }
+
+    private static boolean isGotoMovingRejection(CommandRejectedException ex) {
+        return ":MS#".equals(ex.command) && ("5".equals(ex.rawReply) || "8".equals(ex.rawReply));
     }
 
     private void clearSyncedCurrentTarget() {
@@ -2731,9 +2769,10 @@ public final class MainActivity extends Activity {
                 return;
             }
             try {
-                String reply = client.query(command.command);
-                if (reply == null || reply.trim().isEmpty() || isRejectedReply(reply.trim())) {
-                    throw new CommandRejectedException(command.command, reply == null ? "" : reply.trim());
+                String reply = client.queryOptionalShortReply(command.command);
+                String trimmedReply = reply == null ? "" : reply.trim();
+                if (isRejectedReply(trimmedReply)) {
+                    throw new CommandRejectedException(command.command, trimmedReply);
                 }
                 runOnUiThread(() -> {
                     appendLog("RX " + command.command + " -> " + reply);
@@ -4044,7 +4083,7 @@ public final class MainActivity extends Activity {
             try {
                 for (MountCommand command : commands) {
                     if (command.expectReply) {
-                        String reply = client.query(command.command);
+                        String reply = client.queryShortReply(command.command);
                         replies.add(command.command + " -> " + reply);
                         if ("0".equals(reply) || reply.startsWith("E")) {
                             throw new CommandRejectedException(command.command, reply);
@@ -6078,11 +6117,17 @@ public final class MainActivity extends Activity {
 
     private static final class CommandRejectedException extends Exception {
         final String command;
+        final String rawReply;
         final String reply;
 
         CommandRejectedException(String command, String reply) {
+            this(command, reply, reply);
+        }
+
+        CommandRejectedException(String command, String rawReply, String reply) {
             super(command + " rejected: " + reply);
             this.command = command;
+            this.rawReply = rawReply;
             this.reply = reply;
         }
     }

@@ -80,6 +80,50 @@ final class OnStepClient implements Closeable {
         }
     }
 
+    synchronized String queryShortReply(String command) throws IOException {
+        ensureConnected();
+        throttleCommandStart();
+        boolean sent = false;
+        try (Socket commandSocket = openSocket()) {
+            writeCommand(commandSocket, command);
+            sent = true;
+            BufferedInputStream input = new BufferedInputStream(commandSocket.getInputStream());
+            String reply = readShortReply(input);
+            lastCommandAtMillis = System.currentTimeMillis();
+            Logger.rx(command, reply);
+            return reply;
+        } catch (IOException ex) {
+            if (sent) {
+                Logger.rxFail(command, ex);
+            } else {
+                Logger.txFail(command, ex);
+            }
+            throw ex;
+        }
+    }
+
+    synchronized String queryOptionalShortReply(String command) throws IOException {
+        ensureConnected();
+        throttleCommandStart();
+        boolean sent = false;
+        try (Socket commandSocket = openSocket()) {
+            writeCommand(commandSocket, command);
+            sent = true;
+            BufferedInputStream input = new BufferedInputStream(commandSocket.getInputStream());
+            String reply = readOptionalShortReply(input);
+            lastCommandAtMillis = System.currentTimeMillis();
+            Logger.rx(command, reply);
+            return reply;
+        } catch (IOException ex) {
+            if (sent) {
+                Logger.rxFail(command, ex);
+            } else {
+                Logger.txFail(command, ex);
+            }
+            throw ex;
+        }
+    }
+
     private String handshakeQuery(String command) throws IOException {
         ensureConnected();
         throttleCommandStart();
@@ -148,8 +192,45 @@ final class OnStepClient implements Closeable {
         }
     }
 
-    private String readUntilHashOrClose(BufferedInputStream input) throws IOException {
+    private String readShortReply(BufferedInputStream input) throws IOException {
+        int first = input.read();
+        if (first < 0) {
+            throw new IOException("Connection closed");
+        }
+        if (first == '#') {
+            return "";
+        }
         StringBuilder reply = new StringBuilder();
+        reply.append((char) first);
+        if (first == '0' || first == '1') {
+            return reply.toString();
+        }
+        return readUntilHashOrClose(input, reply);
+    }
+
+    private String readOptionalShortReply(BufferedInputStream input) throws IOException {
+        int first;
+        try {
+            first = input.read();
+        } catch (SocketTimeoutException ex) {
+            return "";
+        }
+        if (first < 0 || first == '#') {
+            return "";
+        }
+        StringBuilder reply = new StringBuilder();
+        reply.append((char) first);
+        if (first == '0' || first == '1') {
+            return reply.toString();
+        }
+        return readUntilHashOrClose(input, reply);
+    }
+
+    private String readUntilHashOrClose(BufferedInputStream input) throws IOException {
+        return readUntilHashOrClose(input, new StringBuilder());
+    }
+
+    private String readUntilHashOrClose(BufferedInputStream input, StringBuilder reply) throws IOException {
         while (true) {
             int next;
             try {
@@ -161,9 +242,10 @@ final class OnStepClient implements Closeable {
                 throw ex;
             }
             if (next < 0) {
-                throw new IOException(reply.length() > 0
-                        ? "Connection closed mid-reply: " + reply
-                        : "Connection closed");
+                if (reply.length() > 0) {
+                    return reply.toString();
+                }
+                throw new IOException("Connection closed");
             }
             if (next == '#') {
                 return reply.toString();
