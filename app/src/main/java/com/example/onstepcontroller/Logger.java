@@ -43,6 +43,7 @@ final class Logger {
     private static final SimpleDateFormat DAY_FORMAT = new SimpleDateFormat("yyyyMMdd", Locale.US);
 
     private static volatile boolean initialized;
+    private static volatile boolean enabled = true;
     private static Context appContext;
     private static ExecutorService fileExecutor;
     private static Runnable uiCallback;
@@ -82,6 +83,28 @@ final class Logger {
 
     static void setUiCallback(Runnable callback) {
         uiCallback = callback;
+    }
+
+    static boolean isEnabled() {
+        return enabled;
+    }
+
+    static void setEnabled(boolean enabledState) {
+        boolean changed = enabled != enabledState;
+        enabled = enabledState;
+        if (!enabledState) {
+            ExecutorService executor = fileExecutor;
+            if (executor != null) {
+                executor.execute(() -> {
+                    synchronized (LOCK) {
+                        closeWriterLocked();
+                    }
+                });
+            }
+        }
+        if (changed) {
+            notifyUi();
+        }
     }
 
     static void txOk(String command) {
@@ -232,6 +255,9 @@ final class Logger {
     }
 
     private static void log(Level level, String message, Throwable throwable) {
+        if (!enabled && level != Level.FATAL) {
+            return;
+        }
         String fullMessage = message == null ? "" : message;
         if (throwable != null) {
             fullMessage = fullMessage + " " + throwableSummary(throwable);

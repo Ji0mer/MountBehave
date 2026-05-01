@@ -55,7 +55,7 @@ public final class LogShareProvider extends ContentProvider {
                 OpenableColumns.DISPLAY_NAME,
                 OpenableColumns.SIZE
         });
-        cursor.addRow(new Object[]{file.getName(), file.length()});
+        cursor.addRow(new Object[]{LogExporter.displayNameFor(file), file.length()});
         return cursor;
     }
 

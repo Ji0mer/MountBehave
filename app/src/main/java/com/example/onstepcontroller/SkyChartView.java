@@ -1,10 +1,14 @@
 package com.example.onstepcontroller;
 
 import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Path;
+import android.graphics.PorterDuff;
+import android.graphics.PorterDuffXfermode;
 import android.util.AttributeSet;
 import android.view.MotionEvent;
 import android.view.View;
@@ -23,14 +27,17 @@ public final class SkyChartView extends View {
     private static final double DEFAULT_VIEW_ALTITUDE_DEGREES = 32.0;
     private static final double MIN_VIEW_ALTITUDE_DEGREES = -78.0;
     private static final double MAX_VIEW_ALTITUDE_DEGREES = 88.0;
-    private static final double DEFAULT_MOUNT_AZIMUTH_DEGREES = 90.0;
-    private static final double DEFAULT_MOUNT_ALTITUDE_DEGREES = 0.0;
-    private static final double GALACTIC_PLANE_SAMPLE_STEP_DEGREES = 2.0;
-    private static final double GALACTIC_BAND_EDGE_DEGREES = 10.0;
+    private static final int MILKY_WAY_MESH_COLUMNS = 96;
+    private static final int MILKY_WAY_MESH_ROWS = 48;
+    private static final int MILKY_WAY_ALPHA = 64;
 
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint milkyWayPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG | Paint.DITHER_FLAG);
+    private final float[] milkyWayMeshVertices = new float[(MILKY_WAY_MESH_COLUMNS + 1) * (MILKY_WAY_MESH_ROWS + 1) * 2];
+    private final int[] milkyWayMeshColors = new int[(MILKY_WAY_MESH_COLUMNS + 1) * (MILKY_WAY_MESH_ROWS + 1)];
     private SkyCatalog catalog;
     private SmallBodyCatalog smallBodyCatalog;
+    private Bitmap milkyWayBitmap;
     private String loadError;
 
     /**
@@ -61,9 +68,6 @@ public final class SkyChartView extends View {
     private double viewAzimuthDegrees = DEFAULT_VIEW_AZIMUTH_DEGREES;
     private double viewAltitudeDegrees = DEFAULT_VIEW_ALTITUDE_DEGREES;
     private double fieldOfViewDegrees = DEFAULT_FIELD_OF_VIEW_DEGREES;
-    private boolean hasMountEquatorial;
-    private double mountRaHours;
-    private double mountDecDegrees;
     private Target selectedTarget;
     private TargetSelectionListener targetSelectionListener;
     private Runnable viewStateListener;
@@ -146,18 +150,6 @@ public final class SkyChartView extends View {
         }
         invalidate();
         notifyViewStateChanged();
-    }
-
-    void setMountEquatorial(double raHours, double decDegrees) {
-        hasMountEquatorial = true;
-        mountRaHours = normalizeHours(raHours);
-        mountDecDegrees = clamp(decDegrees, -90.0, 90.0);
-        invalidate();
-    }
-
-    void clearMountEquatorial() {
-        hasMountEquatorial = false;
-        invalidate();
     }
 
     void resetView() {
@@ -253,6 +245,8 @@ public final class SkyChartView extends View {
         setClickable(true);
         setContentDescription(context.getString(R.string.sky_section));
         setMinimumHeight(dp(460));
+        milkyWayPaint.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.SCREEN));
+        milkyWayBitmap = BitmapFactory.decodeResource(context.getResources(), R.drawable.milkyway);
         try {
             catalog = SkyCatalog.load(context);
         } catch (IOException ex) {
@@ -289,7 +283,6 @@ public final class SkyChartView extends View {
             drawSmallBodiesLayer(canvas, basis);
         }
         drawSelectedTarget(canvas, basis);
-        drawMountPointing(canvas, basis);
         drawViewReadout(canvas);
     }
 
@@ -488,94 +481,70 @@ public final class SkyChartView extends View {
     }
 
     private void drawMilkyWay(Canvas canvas, CameraBasis basis) {
-        double localSiderealDegrees = localSiderealDegrees();
-        paint.setStyle(Paint.Style.STROKE);
-        paint.setStrokeCap(Paint.Cap.ROUND);
-
-        float bandWidth = (float) clamp(
-                getHeight() * 7.0 / Math.max(1.0, fieldOfViewDegrees),
-                dp(8),
-                dp(96)
-        );
-        paint.setStrokeWidth(bandWidth);
-        paint.setColor(Color.argb(30, 226, 232, 240));
-        drawGalacticLatitudeLine(canvas, basis, localSiderealDegrees, 0.0);
-
-        paint.setStrokeWidth(dp(1));
-        paint.setColor(Color.argb(58, 203, 213, 225));
-        drawGalacticLatitudeLine(canvas, basis, localSiderealDegrees, -GALACTIC_BAND_EDGE_DEGREES);
-        drawGalacticLatitudeLine(canvas, basis, localSiderealDegrees, GALACTIC_BAND_EDGE_DEGREES);
-
-        paint.setStrokeWidth(dp(2));
-        paint.setColor(Color.argb(80, 241, 245, 249));
-        drawGalacticLatitudeLine(canvas, basis, localSiderealDegrees, 0.0);
-        paint.setStrokeCap(Paint.Cap.BUTT);
-
-        drawMilkyWayLabel(canvas, basis, localSiderealDegrees);
-    }
-
-    private void drawGalacticLatitudeLine(
-            Canvas canvas,
-            CameraBasis basis,
-            double localSiderealDegrees,
-            double galacticLatitudeDegrees
-    ) {
-        Path path = new Path();
-        ScreenPoint previous = null;
-        boolean active = false;
-        for (double longitude = 0.0; longitude <= 360.0; longitude += GALACTIC_PLANE_SAMPLE_STEP_DEGREES) {
-            EquatorialPoint equatorial = galacticToEquatorial(longitude, galacticLatitudeDegrees);
-            HorizontalPosition position = toHorizontal(equatorial.raHours, equatorial.decDegrees, localSiderealDegrees);
-            if (position.altitudeDegrees < -1.0) {
-                active = false;
-                previous = null;
-                continue;
-            }
-            ScreenPoint point = project(position, basis);
-            if (!usableLinePoint(point)) {
-                active = false;
-                previous = null;
-                continue;
-            }
-            if (!active || previous == null || distance(previous, point) > Math.max(getWidth(), getHeight()) * 0.45f) {
-                path.moveTo(point.x, point.y);
-                active = true;
-            } else {
-                path.lineTo(point.x, point.y);
-            }
-            previous = point;
-        }
-        canvas.drawPath(path, paint);
-    }
-
-    private void drawMilkyWayLabel(Canvas canvas, CameraBasis basis, double localSiderealDegrees) {
-        ScreenPoint bestPoint = null;
-        float bestDistance = Float.MAX_VALUE;
-        float centerX = getWidth() * 0.5f;
-        float centerY = getHeight() * 0.5f;
-        for (double longitude = 0.0; longitude < 360.0; longitude += 5.0) {
-            EquatorialPoint equatorial = galacticToEquatorial(longitude, 0.0);
-            HorizontalPosition position = toHorizontal(equatorial.raHours, equatorial.decDegrees, localSiderealDegrees);
-            if (position.altitudeDegrees < 2.0) {
-                continue;
-            }
-            ScreenPoint point = project(position, basis);
-            if (point == null || !isVisible(point.x, point.y, dp(40))) {
-                continue;
-            }
-            float pointDistance = distance(point.x, point.y, centerX, centerY);
-            if (pointDistance < bestDistance) {
-                bestDistance = pointDistance;
-                bestPoint = point;
-            }
-        }
-        if (bestPoint == null) {
+        if (milkyWayBitmap == null || milkyWayBitmap.isRecycled()) {
             return;
         }
-        paint.setStyle(Paint.Style.FILL);
-        paint.setTextSize(dp(11));
-        paint.setColor(Color.argb(155, 226, 232, 240));
-        canvas.drawText("银河", bestPoint.x + dp(8), bestPoint.y - dp(6), paint);
+        double localSiderealDegrees = localSiderealDegrees();
+        int vertexOffset = 0;
+        int colorOffset = 0;
+        boolean hasVisiblePoint = false;
+        for (int row = 0; row <= MILKY_WAY_MESH_ROWS; row++) {
+            double v = row / (double) MILKY_WAY_MESH_ROWS;
+            for (int column = 0; column <= MILKY_WAY_MESH_COLUMNS; column++) {
+                double u = column / (double) MILKY_WAY_MESH_COLUMNS;
+                if (populateMilkyWayMeshVertex(basis, localSiderealDegrees, u, v, vertexOffset, colorOffset)) {
+                    hasVisiblePoint = true;
+                }
+                vertexOffset += 2;
+                colorOffset++;
+            }
+        }
+
+        if (!hasVisiblePoint) {
+            return;
+        }
+        milkyWayPaint.setAlpha(MILKY_WAY_ALPHA);
+        canvas.drawBitmapMesh(
+                milkyWayBitmap,
+                MILKY_WAY_MESH_COLUMNS,
+                MILKY_WAY_MESH_ROWS,
+                milkyWayMeshVertices,
+                0,
+                milkyWayMeshColors,
+                0,
+                milkyWayPaint
+        );
+        milkyWayPaint.setAlpha(255);
+    }
+
+    private boolean populateMilkyWayMeshVertex(
+            CameraBasis basis,
+            double localSiderealDegrees,
+            double u,
+            double v,
+            int vertexOffset,
+            int colorOffset
+    ) {
+        double raHours = normalizeHours((0.5 - u) * 24.0);
+        double decDegrees = 90.0 - v * 180.0;
+        HorizontalPosition position = toHorizontal(raHours, decDegrees, localSiderealDegrees);
+        boolean aboveHorizon = position.altitudeDegrees >= 0.0;
+        ScreenPoint point = aboveHorizon ? project(position, basis) : null;
+        boolean visible = point != null;
+
+        if (point == null) {
+            double anchorAltitude = aboveHorizon ? position.altitudeDegrees : 0.0;
+            Vector3 anchor = vectorFromHorizontal(position.azimuthDegrees, anchorAltitude);
+            point = projectVector(anchor, basis);
+            if (point == null) {
+                point = projectVectorToEdge(anchor, basis);
+            }
+        }
+
+        milkyWayMeshVertices[vertexOffset] = point.x;
+        milkyWayMeshVertices[vertexOffset + 1] = point.y;
+        milkyWayMeshColors[colorOffset] = visible ? Color.WHITE : Color.TRANSPARENT;
+        return visible && isVisible(point.x, point.y, dp(72));
     }
 
     private void drawConstellationLines(Canvas canvas, CameraBasis basis) {
@@ -1021,40 +990,6 @@ public final class SkyChartView extends View {
         canvas.drawText(selectedTarget.label, point.x + dp(16), point.y - dp(10), paint);
     }
 
-    private void drawMountPointing(Canvas canvas, CameraBasis basis) {
-        HorizontalPosition position = currentMountHorizontalPosition();
-        Vector3 vector = vectorFromHorizontal(position.azimuthDegrees, position.altitudeDegrees);
-        ScreenPoint point = projectVector(vector, basis);
-        boolean inView = point != null && isVisible(point.x, point.y, dp(20));
-        if (!inView) {
-            point = projectVectorToEdge(vector, basis);
-        }
-        if (point == null) {
-            return;
-        }
-        point = clampToChart(point, dp(20));
-
-        paint.setStyle(Paint.Style.STROKE);
-        paint.setStrokeWidth(dp(2));
-        paint.setColor(inView ? Color.rgb(248, 113, 113) : Color.argb(210, 248, 113, 113));
-        float r = dp(12);
-        canvas.drawCircle(point.x, point.y, r, paint);
-        canvas.drawLine(point.x - r - dp(4), point.y, point.x + r + dp(4), point.y, paint);
-        canvas.drawLine(point.x, point.y - r - dp(4), point.x, point.y + r + dp(4), paint);
-
-        paint.setStyle(Paint.Style.FILL);
-        paint.setTextSize(dp(10));
-        paint.setColor(Color.rgb(254, 202, 202));
-        canvas.drawText(hasMountEquatorial ? "赤道仪" : "赤道仪 E", point.x + dp(14), point.y - dp(10), paint);
-    }
-
-    private HorizontalPosition currentMountHorizontalPosition() {
-        if (!hasMountEquatorial) {
-            return new HorizontalPosition(DEFAULT_MOUNT_ALTITUDE_DEGREES, DEFAULT_MOUNT_AZIMUTH_DEGREES);
-        }
-        return toHorizontal(mountRaHours, mountDecDegrees, localSiderealDegrees());
-    }
-
     private ScreenPoint projectTarget(Target target, CameraBasis basis) {
         EquatorialPoint point = currentTargetEquatorial(target);
         HorizontalPosition position = toHorizontal(point.raHours, point.decDegrees, localSiderealDegrees());
@@ -1072,6 +1007,18 @@ public final class SkyChartView extends View {
             }
         }
         return new EquatorialPoint(target.raHours, target.decDegrees);
+    }
+
+    Target refreshForCurrentTime(Target target) {
+        if (target == null || !target.solarSystemObject) {
+            return target;
+        }
+        SolarSystemEphemeris.Body body = solarSystemBodyById(target.solarSystemId);
+        if (body != null) {
+            return Target.solarSystemObject(body.id, body.label, body.raHours, body.decDegrees);
+        }
+        Target byLabel = findTarget(target.label);
+        return byLabel != null && byLabel.solarSystemObject ? byLabel : target;
     }
 
     private SolarSystemEphemeris.Body solarSystemBodyById(String id) {
@@ -1375,26 +1322,6 @@ public final class SkyChartView extends View {
         double hourAngleDegrees = Math.toDegrees(Math.atan2(y, x));
         double raHours = normalizeHours((localSiderealDegrees - hourAngleDegrees) / 15.0);
         return new EquatorialPoint(raHours, Math.toDegrees(dec));
-    }
-
-    private EquatorialPoint galacticToEquatorial(double longitudeDegrees, double latitudeDegrees) {
-        double longitude = Math.toRadians(normalizeDegrees(longitudeDegrees));
-        double latitude = Math.toRadians(latitudeDegrees);
-        double cosLatitude = Math.cos(latitude);
-        double xGalactic = cosLatitude * Math.cos(longitude);
-        double yGalactic = cosLatitude * Math.sin(longitude);
-        double zGalactic = Math.sin(latitude);
-
-        double xEquatorial = -0.0548755604 * xGalactic + 0.4941094279 * yGalactic - 0.8676661490 * zGalactic;
-        double yEquatorial = -0.8734370902 * xGalactic - 0.4448296300 * yGalactic - 0.1980763734 * zGalactic;
-        double zEquatorial = -0.4838350155 * xGalactic + 0.7469822445 * yGalactic + 0.4559837762 * zGalactic;
-
-        double raDegrees = normalizeDegrees(Math.toDegrees(Math.atan2(yEquatorial, xEquatorial)));
-        double decDegrees = Math.toDegrees(Math.atan2(
-                zEquatorial,
-                Math.sqrt(xEquatorial * xEquatorial + yEquatorial * yEquatorial)
-        ));
-        return new EquatorialPoint(raDegrees / 15.0, decDegrees);
     }
 
     private double localSiderealDegrees() {

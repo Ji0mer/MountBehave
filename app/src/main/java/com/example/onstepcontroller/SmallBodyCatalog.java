@@ -30,20 +30,11 @@ final class SmallBodyCatalog {
     private final File userFile;
 
     private volatile List<SmallBody> userDownloaded = Collections.emptyList();
-    private volatile double magnitudeLimit = 11.0;
 
     SmallBodyCatalog(File filesDir) {
         this.bundled = Collections.unmodifiableList(BundledSmallBodies.all());
         this.userFile = filesDir == null ? null : new File(filesDir, USER_FILE_NAME);
         this.userDownloaded = loadUserBodies();
-    }
-
-    double magnitudeLimit() {
-        return magnitudeLimit;
-    }
-
-    void setMagnitudeLimit(double limit) {
-        this.magnitudeLimit = limit;
     }
 
     int bundledCount() {
@@ -58,9 +49,9 @@ final class SmallBodyCatalog {
         return combined().size();
     }
 
-    /** All bodies above the magnitude cut at {@code when}; chart layer flags gate rendering. */
+    /** All small bodies with computable positions at {@code when}; chart layer flags gate rendering. */
     List<SolarSystemEphemeris.Body> bodies(Instant when) {
-        return SmallBodyEphemeris.bodies(when, combined(), magnitudeLimit);
+        return SmallBodyEphemeris.bodies(when, combined(), Double.POSITIVE_INFINITY);
     }
 
     /** Match by Chinese name, English name, designation, or numeric prefix. */
