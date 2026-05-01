@@ -7,10 +7,27 @@ $ApkPath = Join-Path $ProjectRoot 'app\build\outputs\apk\debug\app-debug.apk'
 $PreviewPath = Join-Path $ProjectRoot 'preview-onstep-controller.png'
 $AvdConfigPath = Join-Path $env:ANDROID_AVD_HOME "$AvdName.avd\config.ini"
 
-function Get-FirstEmulatorSerial {
-    $line = adb devices | Select-String 'emulator-\d+\s+device' | Select-Object -First 1
-    if ($line) {
-        return (($line.ToString() -split '\s+')[0])
+function Get-PreviewEmulatorSerial {
+    $lines = adb devices | Select-String '^\S+\s+device$'
+    foreach ($line in $lines) {
+        $serial = (($line.ToString() -split '\s+')[0])
+        if ($serial -notmatch '^emulator-\d+$') {
+            continue
+        }
+        try {
+            $avdOutput = adb -s $serial emu avd name 2>$null
+        } catch {
+            continue
+        }
+        if ($LASTEXITCODE -ne 0) {
+            continue
+        }
+        $avdName = $avdOutput |
+                Where-Object { $_ -and $_.Trim() -and $_.Trim() -ne 'OK' } |
+                Select-Object -First 1
+        if ($avdName -and $avdName.Trim() -eq $AvdName) {
+            return $serial
+        }
     }
     return $null
 }
@@ -80,7 +97,7 @@ if (-not (Test-Path (Join-Path $env:ANDROID_AVD_HOME "$AvdName.avd"))) {
 
 Ensure-PreviewAvdConfig
 
-$serial = Get-FirstEmulatorSerial
+$serial = Get-PreviewEmulatorSerial
 if ($serial -and (Device-NeedsPreviewRestart $serial)) {
     Write-Host "Restarting $serial with compact preview display settings..."
     adb -s $serial emu kill | Out-Null
@@ -101,7 +118,7 @@ if (-not $serial) {
     $deadline = (Get-Date).AddMinutes(2)
     while ((Get-Date) -lt $deadline -and -not $serial) {
         Start-Sleep -Seconds 5
-        $serial = Get-FirstEmulatorSerial
+        $serial = Get-PreviewEmulatorSerial
     }
     if (-not $serial) {
         throw "Emulator did not appear in adb devices."

@@ -51,11 +51,22 @@ public final class LogShareProvider extends ContentProvider {
         } catch (FileNotFoundException ex) {
             return null;
         }
-        MatrixCursor cursor = new MatrixCursor(new String[]{
-                OpenableColumns.DISPLAY_NAME,
-                OpenableColumns.SIZE
-        });
-        cursor.addRow(new Object[]{LogExporter.displayNameFor(file), file.length()});
+        String[] columns = projection == null || projection.length == 0
+                ? new String[]{OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE}
+                : projection;
+        MatrixCursor cursor = new MatrixCursor(columns);
+        Object[] row = new Object[columns.length];
+        for (int i = 0; i < columns.length; i++) {
+            String column = columns[i];
+            if (OpenableColumns.DISPLAY_NAME.equals(column) || "_display_name".equals(column)) {
+                row[i] = LogExporter.displayNameFor(file);
+            } else if (OpenableColumns.SIZE.equals(column) || "_size".equals(column)) {
+                row[i] = file.length();
+            } else if ("mime_type".equals(column)) {
+                row[i] = "text/plain";
+            }
+        }
+        cursor.addRow(row);
         return cursor;
     }
 

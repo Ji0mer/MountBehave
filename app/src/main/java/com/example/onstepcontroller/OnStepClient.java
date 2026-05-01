@@ -202,7 +202,7 @@ final class OnStepClient implements Closeable {
         }
         StringBuilder reply = new StringBuilder();
         reply.append((char) first);
-        if (first == '0' || first == '1') {
+        if (isSingleCharacterReply(first)) {
             return reply.toString();
         }
         return readUntilHashOrClose(input, reply);
@@ -220,10 +220,14 @@ final class OnStepClient implements Closeable {
         }
         StringBuilder reply = new StringBuilder();
         reply.append((char) first);
-        if (first == '0' || first == '1') {
+        if (isSingleCharacterReply(first)) {
             return reply.toString();
         }
         return readUntilHashOrClose(input, reply);
+    }
+
+    private static boolean isSingleCharacterReply(int value) {
+        return value >= '0' && value <= '9';
     }
 
     private String readUntilHashOrClose(BufferedInputStream input) throws IOException {
