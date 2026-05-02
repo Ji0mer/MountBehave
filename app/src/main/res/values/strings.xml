@@ -109,6 +109,7 @@
     <string name="calibration_align_idle">尚未开始校准。</string>
     <string name="calibration_align_starting">正在开始 %1$d 星校准...</string>
     <string name="calibration_align_started">已开始 %1$d 星校准，请选择第 1 颗校准星。</string>
+    <string name="calibration_align_start_failed">%1$d 星校准启动失败，已回退本地状态。请检查赤道仪连接和当前位置后重新开始。</string>
     <string name="calibration_align_progress">第 %1$d/%2$d 颗校准星，已接受 %3$d 颗。</string>
     <string name="calibration_align_progress_complete">已接受 %1$d/%2$d 颗校准星，模型已建立。</string>
     <string name="calibration_align_current_none">当前星：尚未选择。</string>
@@ -140,6 +141,7 @@
     <string name="calibration_align_pier_side_choose_other">换一颗星</string>
     <string name="calibration_align_pier_side_choose_other_status">请换一颗同侧或更安全的校准星。</string>
     <string name="calibration_align_pier_side_goto_unavailable">当前未连接或正在执行其他命令，无法开始转动。请确认连接空闲后重新点击“居中后接受”。</string>
+    <string name="calibration_align_pier_side_goto_failed">自动转到另一侧后架台侧仍不匹配。请换一颗同侧校准星，或用手控把赤道仪移动到正确侧后再点击“居中后接受”。</string>
     <string name="calibration_align_target_changed">校准目标已变化，请重新选择或再次点击接受。</string>
     <string name="calibration_align_pier_side_mismatch">当前赤道仪架台侧和目标星不匹配。请重新点击“居中后接受”并按提示先转到另一侧，或换一颗同侧校准星。</string>
     <string name="calibration_pier_side_east">东侧</string>
@@ -147,9 +149,15 @@
     <string name="calibration_pier_side_unknown">未知侧</string>
     <string name="calibration_align_next_prompt">请选择第 %1$d/%2$d 颗校准星。</string>
     <string name="calibration_align_complete">%1$d 星校准完成，正在自动保存模型；保存后后续 GOTO 使用 OnStep 指向模型，三星模型可进入极轴精调。</string>
+    <string name="calibration_align_quality_warning">警告：第 %1$d/%2$d 颗 %3$s 接受后仍偏离目标 %4$.1f°，可能没有居中。OnStep 已经接收了这颗星，无法安全只重做这一颗；请点“结束”后重新开始校准。</string>
+    <string name="calibration_align_quality_warning_complete">校准质量警告：%1$s 的接受后残差为 %2$.1f°，已停止自动保存模型。请点“结束”后重新校准，避免保存错误模型。</string>
     <string name="calibration_align_saving">正在保存 OnStep 指向模型...</string>
     <string name="calibration_align_saved">已请求 OnStep 保存指向模型，并启动模型补偿双轴跟踪。</string>
-    <string name="calibration_align_cancelled">校准流程已结束；OnStep 中已接受的点不会由手机端撤回。</string>
+    <string name="calibration_align_cancelling">正在结束校准...</string>
+    <string name="calibration_align_cancelled">校准流程已结束，可重新开始；OnStep 中已接受的点不会由手机端撤回。</string>
+    <string name="calibration_align_cancelled_busy">已结束本地校准流程；当前命令仍在进行，完成后可重新开始。</string>
+    <string name="calibration_align_connection_lost">连接已断开，当前校准进度已保留。重连后可继续当前校准；如果支架控制器已重启，请点“结束”后重新开始。</string>
+    <string name="calibration_align_reconnected">已重新连接，当前校准进度仍保留。请确认支架控制器未重启，然后继续当前星或点“结束”重新开始。</string>
     <string name="calibration_refine_intro">极轴精调只在“三星校准已完成并保存模型”后使用。\n按钮 1“Goto 精调星并居中”：让赤道仪指向当前选择的精调星；GOTO 到位后，用手控方向键把这颗星放回视场中心。\n按钮 2“Refine PA 后调极轴”：在精调星已经居中后发送 Refine PA；赤道仪会移动到极轴误差修正位置。之后不要再用方向键，只调赤道仪方位角/高度角螺丝，把同一颗星移回中心。两星模型只用于 GOTO / 跟踪补偿；经纬仪模式不显示此流程。</string>
     <string name="calibration_refine_goto">1. Goto 精调星并居中</string>
     <string name="calibration_refine_sync">2. 居中后同步</string>
@@ -294,6 +302,9 @@
     <string name="status_connected_port">已连接到端口 %1$d：%2$s</string>
     <string name="status_connected_no_reply_port">已连接到端口 %1$d，但握手命令没有返回内容。</string>
     <string name="status_connect_failed">连接失败：%1$s</string>
+    <string name="status_connection_lost">连接已断开：%1$s。请确认手机仍连接赤道仪 WiFi 后重新连接。</string>
+    <string name="status_preferred_pier_side_restored">已恢复上次临时修改的架台侧偏好。</string>
+    <string name="status_preferred_pier_side_unsupported">当前固件可能不支持 preferred pier side 恢复命令，已停止自动恢复尝试。</string>
     <string name="status_bad_pointing_reply">赤道仪指向返回格式异常，连接保持。</string>
     <string name="status_pointing_poll_failed">指向查询暂时失败 %1$d 次，连接保持：%2$s</string>
     <string name="status_pointing_poll_paused">指向查询连续失败 %1$d 次，已暂停自动查询，手控连接保持：%2$s</string>

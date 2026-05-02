@@ -89,6 +89,9 @@ public final class MainActivity extends Activity {
     private static final String PREF_LOG_PRIVACY_ACCEPTED_AT = "log_privacy_accepted_at";
     private static final long LOG_PRIVACY_ACK_VALID_MS = 24L * 60L * 60L * 1000L;
     private static final String ONSTEPX_MOUNT_MODE_QUERY = ":GXEM#";
+    private static final String PREFERRED_PIER_SIDE_QUERY = ":GX96#";
+    private static final String PREFERRED_PIER_SIDE_SET_PREFIX = ":SX96,";
+    private static final int PREFERRED_PIER_SIDE_READ_TIMEOUT_MS = 600;
     private static final int SIDE_MENU_EXPANDED_WIDTH_DP = 148;
     private static final int SIDE_MENU_COLLAPSED_SIZE_DP = 56;
     private static final int SIDE_MENU_MARGIN_START_DP = 8;
@@ -112,13 +115,19 @@ public final class MainActivity extends Activity {
     private static final double GOTO_POLAR_MIN_ARRIVAL_THRESHOLD_DEGREES = 1.0;
     private static final int GOTO_IDLE_STATIONARY_CONFIRMATIONS = 2;
     private static final double GOTO_IDLE_STATIONARY_THRESHOLD_DEGREES = 0.05;
+    private static final int GOTO_PREFLIGHT_IDLE_CONFIRMATIONS = 2;
+    private static final int GOTO_PREFLIGHT_MAX_ATTEMPTS = 8;
+    private static final long GOTO_PREFLIGHT_SETTLE_DELAY_MS = 500L;
+    private static final double GOTO_PREFLIGHT_STABLE_THRESHOLD_DEGREES = 0.05;
     private static final int GOTO_RECOVERY_FAILURE_THRESHOLD = 2;
     private static final double GOTO_RECOVERY_DISTANCE_THRESHOLD_DEGREES = 2.0;
     private static final int LOG_DISPLAY_MAX_LINES = 300;
     private static final long LOG_UI_UPDATE_MIN_INTERVAL_MS = 500L;
     private static final double QUICK_POINTING_CORRECTION_MAX_DISTANCE_DEGREES = 10.0;
     private static final double QUICK_POINTING_CORRECTION_POLAR_LIMIT_DEGREES = 80.0;
+    private static final double ALIGNMENT_ACCEPT_QUALITY_WARNING_DEGREES = 1.0;
     private static final int SMALL_BODY_ASTEROID_DOWNLOAD_MAX_H = 11;
+    private static final CalibrationMode DEFAULT_CALIBRATION_MODE = CalibrationMode.TWO_STAR;
     private static final Pattern SKY_TIME_INPUT_PATTERN = Pattern.compile(
             "^\\s*(\\d{1,2}):(\\d{1,2})(?::(\\d{1,2}))?\\s*$"
     );
@@ -280,10 +289,12 @@ public final class MainActivity extends Activity {
     private int consecutiveGotoRecoveryFailures;
     private boolean gotoRecoveryRequired;
     private String gotoRecoveryReason;
+    private volatile Boolean preferredPierSideCommandsSupported;
+    private volatile TemporaryPierSidePreference pendingPreferredPierSideRestore;
     private long lastLogUiUpdateAtMillis;
     private boolean logUiUpdateScheduled;
     private ManualRate selectedManualRate = ManualRate.CENTER;
-    private CalibrationMode selectedCalibrationMode = CalibrationMode.QUICK_SYNC;
+    private CalibrationMode selectedCalibrationMode = DEFAULT_CALIBRATION_MODE;
     private FirmwareMode selectedFirmwareMode = FirmwareMode.ONSTEP;
     private MountMode selectedMountMode = MountMode.EQUATORIAL;
     private Page currentPage = Page.SETTINGS;
@@ -2294,6 +2305,7 @@ public final class MainActivity extends Activity {
                     activeGotoTarget = null;
                     cancelGotoStatusPoll();
                     clearGotoRecoveryRequired("connect-success");
+                    preferredPierSideCommandsSupported = null;
                     clearQuickPointingCorrection();
                     polarRefineSyncedTarget = null;
                     parked = false;
@@ -2310,12 +2322,18 @@ public final class MainActivity extends Activity {
                     }
                     setGotoStatus(getString(R.string.goto_status_idle));
                     setSafetyStatus(getString(R.string.safety_status_connected));
+                    if (hasResumableAlignmentSession()) {
+                        restoreAlignmentTargetFieldFromSession();
+                        setCalibrationStatus(getString(R.string.calibration_align_reconnected));
+                        appendLog("INFO alignment session preserved after reconnect " + alignmentStateSummary());
+                    }
                     Logger.info("connect success host=" + host
                             + " requestedPort=" + port
                             + " connectedPort=" + connection.port
                             + " handshake=" + (connection.handshake.isEmpty() ? "<empty>" : connection.handshake));
                     logStateSnapshot("connect-success");
-                    updateUiState();
+                    updateCalibrationViews();
+                    attemptPendingPreferredPierSideRestoreAsync("connect-success", true);
                 });
             } catch (IOException ex) {
                 client.close();
@@ -2333,6 +2351,7 @@ public final class MainActivity extends Activity {
                     activeGotoTarget = null;
                     cancelGotoStatusPoll();
                     clearGotoRecoveryRequired("connect-failed");
+                    preferredPierSideCommandsSupported = null;
                     parked = false;
                     setStatus(getString(R.string.status_connect_failed, ex.getMessage()));
                     setSafetyStatus(getString(R.string.safety_status_connect_failed));
@@ -2378,6 +2397,8 @@ public final class MainActivity extends Activity {
         logUserAction("tap disconnect host=" + (connectedHost == null ? "<none>" : connectedHost)
                 + " port=" + connectedPort);
         dismissAlignmentPierSideGotoDialog();
+        clearPendingPreferredPierSideRestore("user-disconnect");
+        preferredPierSideCommandsSupported = null;
         busy = true;
         connectionGeneration.incrementAndGet();
         setStatus(getString(R.string.status_disconnecting));
@@ -2413,6 +2434,7 @@ public final class MainActivity extends Activity {
                 activeGotoTarget = null;
                 cancelGotoStatusPoll();
                 clearGotoRecoveryRequired("disconnect");
+                preferredPierSideCommandsSupported = null;
                 parked = false;
                 trackingEnabled = false;
                 trackingUsingDualAxis = false;
@@ -2815,6 +2837,10 @@ public final class MainActivity extends Activity {
     }
 
     private void handleCommandFailure(IOException ex) {
+        if (isConnectionLostFailure(ex)) {
+            handleConnectionLostFailure(ex, "command-failed");
+            return;
+        }
         busy = false;
         activeDirection = null;
         setStatus(getString(R.string.status_command_failed_keep_connected, safeMessage(ex)));
@@ -2825,6 +2851,10 @@ public final class MainActivity extends Activity {
     }
 
     private void handleMotionCommandFailure(IOException ex) {
+        if (isConnectionLostFailure(ex)) {
+            handleConnectionLostFailure(ex, "motion-command-failed");
+            return;
+        }
         busy = false;
         activeDirection = null;
         setStatus(getString(R.string.status_motion_failed_keep_connected, safeMessage(ex)));
@@ -2942,6 +2972,16 @@ public final class MainActivity extends Activity {
     }
 
     private void sendGotoTarget(SkyChartView.Target target, String sendingStatus, String sentStatus, Runnable onSuccess) {
+        sendGotoTarget(target, sendingStatus, sentStatus, onSuccess, null);
+    }
+
+    private void sendGotoTarget(
+            SkyChartView.Target target,
+            String sendingStatus,
+            String sentStatus,
+            Runnable onSuccess,
+            String temporaryPreferredPierSide
+    ) {
         if (!connected || busy || target == null) {
             return;
         }
@@ -2993,10 +3033,14 @@ public final class MainActivity extends Activity {
         busy = true;
         setStatus(sendingStatus);
         updateUiState();
+        String temporaryPierSideLog = temporaryPreferredPierSide == null
+                ? ""
+                : " temporaryPierSide=" + temporaryPreferredPierSide;
         Logger.info("goto start " + targetLog(commandTarget)
                 + " commandRA=" + formatRightAscensionDisplay(commandPoint.raHours)
                 + " commandDec=" + formatDeclinationDisplay(commandPoint.decDegrees)
-                + " quickCorrection=" + quickPointingCorrectionActive);
+                + " quickCorrection=" + quickPointingCorrectionActive
+                + temporaryPierSideLog);
         logStateSnapshot("goto-start");
         if (quickPointingCorrectionActive) {
             appendLog("INFO quick sync correction RA "
@@ -3022,9 +3066,36 @@ public final class MainActivity extends Activity {
                 Logger.diag("GOTO_START preflight :D# -> " + displayReply(stopStatusReply)
                         + " :GE# -> " + preStartErrorReply + describeCommandErrorSuffix(preStartErrorReply)
                         + " " + targetLog(commandTarget));
-                String raReply = client.queryShortReply(raCommand);
-                String decReply = client.queryShortReply(decCommand);
-                String gotoReply = client.queryShortReply(":MS#");
+                TemporaryPierSidePreference pendingBeforeRestore = pendingPreferredPierSideRestore;
+                PreferredPierSideRestoreResult restoreResult = restorePendingPreferredPierSideIfNeeded(
+                        "goto-start",
+                        commandTarget
+                );
+                String originalOverride = restoreResult == PreferredPierSideRestoreResult.FAILED
+                        && pendingBeforeRestore != null
+                        ? pendingBeforeRestore.originalPierSide
+                        : null;
+                if (restoreResult == PreferredPierSideRestoreResult.FAILED) {
+                    Logger.warn("pending preferred pier side restore failed before GOTO; "
+                            + "will still try current desired pier side "
+                            + targetLog(commandTarget));
+                }
+                TemporaryPierSidePreference pierSidePreference = applyTemporaryPreferredPierSide(
+                        temporaryPreferredPierSide,
+                        commandTarget,
+                        restoreResult == PreferredPierSideRestoreResult.FAILED,
+                        originalOverride
+                );
+                String raReply;
+                String decReply;
+                String gotoReply;
+                try {
+                    raReply = client.queryShortReply(raCommand);
+                    decReply = client.queryShortReply(decCommand);
+                    gotoReply = client.queryShortReply(":MS#");
+                } finally {
+                    restoreTemporaryPreferredPierSideQuietly(pierSidePreference, commandTarget, "goto-start-finally");
+                }
                 String postStartErrorReply = queryDiagnostic(":GE#");
                 Logger.diag("GOTO_START sent :MS# -> " + gotoReply
                         + " :GE# -> " + postStartErrorReply + describeCommandErrorSuffix(postStartErrorReply)
@@ -3083,24 +3154,341 @@ public final class MainActivity extends Activity {
 
     private String waitForGotoIdleAfterStop(SkyChartView.Target target) throws IOException {
         String reply = "";
-        for (int attempt = 1; attempt <= 4; attempt++) {
+        sleepForGotoPreflight(GOTO_PREFLIGHT_SETTLE_DELAY_MS, "settle after GOTO stop");
+        EquatorialPoint previousPointing = null;
+        int idleConfirmations = 0;
+        for (int attempt = 1; attempt <= GOTO_PREFLIGHT_MAX_ATTEMPTS; attempt++) {
             reply = client.query(OnStepCommand.GOTO_STATUS.command);
             if (reply.isEmpty()) {
-                return reply;
-            }
-            Logger.info("goto preflight waiting for idle attempt=" + attempt
-                    + " status=" + displayReply(reply)
-                    + " " + targetLog(target));
-            if (attempt < 4) {
-                try {
-                    Thread.sleep(350L);
-                } catch (InterruptedException ex) {
-                    Thread.currentThread().interrupt();
-                    throw new IOException("Interrupted while waiting for GOTO stop", ex);
+                EquatorialPoint currentPointing = queryGotoPreflightPointing(target, attempt);
+                double motionDegrees = Double.NaN;
+                boolean stable = true;
+                if (currentPointing != null && previousPointing != null) {
+                    motionDegrees = angularDistanceDegrees(
+                            currentPointing.raHours,
+                            currentPointing.decDegrees,
+                            previousPointing.raHours,
+                            previousPointing.decDegrees
+                    );
+                    stable = motionDegrees <= GOTO_PREFLIGHT_STABLE_THRESHOLD_DEGREES;
                 }
+                // The current idle sample becomes the first confirmation after any detected movement.
+                idleConfirmations = stable ? idleConfirmations + 1 : 1;
+                previousPointing = currentPointing == null ? previousPointing : currentPointing;
+                Logger.info("goto preflight idle confirmation attempt=" + attempt
+                        + " confirmations=" + idleConfirmations
+                        + "/" + GOTO_PREFLIGHT_IDLE_CONFIRMATIONS
+                        + " stableMotionDeg=" + (Double.isNaN(motionDegrees)
+                        ? "<none>"
+                        : String.format(Locale.US, "%.3f", motionDegrees))
+                        + " " + targetLog(target));
+                if (idleConfirmations >= GOTO_PREFLIGHT_IDLE_CONFIRMATIONS) {
+                    return reply;
+                }
+            } else {
+                idleConfirmations = 0;
+                previousPointing = null;
+                Logger.info("goto preflight waiting for idle attempt=" + attempt
+                        + " status=" + displayReply(reply)
+                        + " " + targetLog(target));
+            }
+            if (attempt < GOTO_PREFLIGHT_MAX_ATTEMPTS) {
+                sleepForGotoPreflight(GOTO_PREFLIGHT_SETTLE_DELAY_MS, "waiting for GOTO stop");
             }
         }
         return reply;
+    }
+
+    private EquatorialPoint queryGotoPreflightPointing(SkyChartView.Target target, int attempt) throws IOException {
+        String raReply = client.query(":GR#");
+        String decReply = client.query(":GD#");
+        try {
+            EquatorialPoint point = new EquatorialPoint(parseRightAscension(raReply), parseDeclination(decReply));
+            Logger.info("goto preflight pointing attempt=" + attempt
+                    + " mountRA=" + formatRightAscensionDisplay(point.raHours)
+                    + " mountDec=" + formatDeclinationDisplay(point.decDegrees)
+                    + " " + targetLog(target));
+            return point;
+        } catch (IllegalArgumentException ex) {
+            Logger.warn("goto preflight bad pointing attempt=" + attempt
+                    + " ra=" + raReply
+                    + " dec=" + decReply
+                    + " " + safeMessage(ex)
+                    + " " + targetLog(target));
+            return null;
+        }
+    }
+
+    private void sleepForGotoPreflight(long millis, String reason) throws IOException {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Interrupted while " + reason, ex);
+        }
+    }
+
+    private TemporaryPierSidePreference applyTemporaryPreferredPierSide(
+            String preferredPierSide,
+            SkyChartView.Target target,
+            boolean forceAttempt,
+            String originalOverride
+    ) {
+        String desired = normalizePreferredPierSide(preferredPierSide);
+        if (!isTargetPreferredPierSide(desired)) {
+            return null;
+        }
+        if (!forceAttempt && Boolean.FALSE.equals(preferredPierSideCommandsSupported)) {
+            Logger.info("temporary preferred pier side skipped: commands unsupported in this connection "
+                    + targetLog(target));
+            return null;
+        }
+        String normalizedOriginalOverride = normalizePreferredPierSide(originalOverride);
+        if (!isSupportedPreferredPierSide(normalizedOriginalOverride)) {
+            normalizedOriginalOverride = null;
+        }
+        try {
+            String originalReply = client.querySingleCharacterReply(
+                    PREFERRED_PIER_SIDE_QUERY,
+                    PREFERRED_PIER_SIDE_READ_TIMEOUT_MS
+            );
+            String original = normalizePreferredPierSide(originalReply);
+            String originalForRestore = normalizedOriginalOverride == null ? original : normalizedOriginalOverride;
+            Logger.diag("GOTO_PIER_PREF query " + PREFERRED_PIER_SIDE_QUERY
+                    + " -> " + displayReply(originalReply)
+                    + " normalized=" + (original.isEmpty() ? "<unknown>" : original)
+                    + " desired=" + desired
+                    + " originalForRestore=" + (originalForRestore == null ? "<none>" : originalForRestore)
+                    + " " + targetLog(target));
+            if (!isSupportedPreferredPierSide(original)) {
+                preferredPierSideCommandsSupported = false;
+                Logger.warn("temporary preferred pier side skipped unsupported original="
+                        + displayReply(originalReply) + " " + targetLog(target));
+                return null;
+            }
+            preferredPierSideCommandsSupported = true;
+            if (desired.equals(original)) {
+                Logger.info("temporary preferred pier side already " + desired
+                        + " originalForRestore=" + (originalForRestore == null ? "<none>" : originalForRestore)
+                        + " " + targetLog(target));
+                if (originalForRestore == null || desired.equals(originalForRestore)) {
+                    clearPendingPreferredPierSideRestore("preferred-pier-side-already-original");
+                    return null;
+                }
+                Logger.info("current preferred pier side already desired, will restore to "
+                        + originalForRestore + " after GOTO " + targetLog(target));
+                TemporaryPierSidePreference preference = new TemporaryPierSidePreference(
+                        originalForRestore,
+                        desired,
+                        connectionGeneration.get(),
+                        System.currentTimeMillis(),
+                        target == null ? "" : target.label
+                );
+                pendingPreferredPierSideRestore = preference;
+                return preference;
+            }
+            String setCommand = preferredPierSideSetCommand(desired);
+            String setReply = client.queryShortReply(setCommand, PREFERRED_PIER_SIDE_READ_TIMEOUT_MS);
+            Logger.diag("GOTO_PIER_PREF set " + setCommand
+                    + " -> " + displayReply(setReply)
+                    + " original=" + original
+                    + " originalForRestore=" + (originalForRestore == null ? "<none>" : originalForRestore)
+                    + " " + targetLog(target));
+            if (!isAcceptedShortReply(setReply)) {
+                if (setReply == null || setReply.trim().isEmpty()) {
+                    preferredPierSideCommandsSupported = false;
+                }
+                Logger.warn("temporary preferred pier side not accepted reply="
+                        + displayReply(setReply) + " " + targetLog(target));
+                return null;
+            }
+            if (desired.equals(originalForRestore)) {
+                clearPendingPreferredPierSideRestore("preferred-pier-side-restored-by-new-desired");
+                return null;
+            }
+            TemporaryPierSidePreference preference = new TemporaryPierSidePreference(
+                    originalForRestore,
+                    desired,
+                    connectionGeneration.get(),
+                    System.currentTimeMillis(),
+                    target == null ? "" : target.label
+            );
+            pendingPreferredPierSideRestore = preference;
+            return preference;
+        } catch (SocketTimeoutException ex) {
+            preferredPierSideCommandsSupported = false;
+            Logger.warn("temporary preferred pier side skipped timeout; commands unsupported in this connection "
+                    + targetLog(target), ex);
+            return null;
+        } catch (IOException ex) {
+            Logger.warn("temporary preferred pier side skipped " + safeMessage(ex) + " " + targetLog(target), ex);
+            return null;
+        }
+    }
+
+    private void restoreTemporaryPreferredPierSideQuietly(
+            TemporaryPierSidePreference preference,
+            SkyChartView.Target target,
+            String reason
+    ) {
+        if (preference == null || preference.originalPierSide.equals(preference.temporaryPierSide)) {
+            return;
+        }
+        String restoreCommand = preferredPierSideSetCommand(preference.originalPierSide);
+        try {
+            String restoreReply = client.queryShortReply(restoreCommand, PREFERRED_PIER_SIDE_READ_TIMEOUT_MS);
+            Logger.diag("GOTO_PIER_PREF restore " + restoreCommand
+                    + " -> " + displayReply(restoreReply)
+                    + " temporary=" + preference.temporaryPierSide
+                    + " reason=" + reason
+                    + " " + targetLog(target));
+            if (isAcceptedShortReply(restoreReply)) {
+                clearPendingPreferredPierSideRestore(preference, reason);
+            } else {
+                Logger.warn("temporary preferred pier side restore not confirmed reply="
+                        + displayReply(restoreReply)
+                        + " reason=" + reason
+                        + " " + targetLog(target));
+            }
+        } catch (IOException ex) {
+            Logger.warn("temporary preferred pier side restore failed "
+                    + safeMessage(ex)
+                    + " command=" + restoreCommand
+                    + " reason=" + reason
+                    + " " + targetLog(target), ex);
+        }
+    }
+
+    private PreferredPierSideRestoreResult restorePendingPreferredPierSideIfNeeded(String reason, SkyChartView.Target target) {
+        TemporaryPierSidePreference pending = pendingPreferredPierSideRestore;
+        if (pending == null) {
+            return PreferredPierSideRestoreResult.NONE;
+        }
+        if (Boolean.FALSE.equals(preferredPierSideCommandsSupported)) {
+            Logger.warn("pending preferred pier side restore skipped: commands unsupported in this connection "
+                    + "reason=" + reason
+                    + " pendingTarget=" + pending.targetLabel
+                    + " " + targetLog(target));
+            clearPendingPreferredPierSideRestore("preferred-pier-side-unsupported");
+            return PreferredPierSideRestoreResult.UNSUPPORTED;
+        }
+        String restoreCommand = preferredPierSideSetCommand(pending.originalPierSide);
+        try {
+            String restoreReply = client.queryShortReply(restoreCommand, PREFERRED_PIER_SIDE_READ_TIMEOUT_MS);
+            Logger.diag("GOTO_PIER_PREF pending restore " + restoreCommand
+                    + " -> " + displayReply(restoreReply)
+                    + " temporary=" + pending.temporaryPierSide
+                    + " setGeneration=" + pending.connectionGeneration
+                    + " setAgeMs=" + (System.currentTimeMillis() - pending.createdAtMillis)
+                    + " target=" + pending.targetLabel
+                    + " reason=" + reason
+                    + " " + targetLog(target));
+            if (isAcceptedShortReply(restoreReply)) {
+                clearPendingPreferredPierSideRestore(pending, reason);
+                return PreferredPierSideRestoreResult.RESTORED;
+            }
+            Logger.warn("pending preferred pier side restore not confirmed reply="
+                    + displayReply(restoreReply)
+                    + " reason=" + reason
+                    + " " + targetLog(target));
+            if (restoreReply == null || restoreReply.trim().isEmpty()) {
+                preferredPierSideCommandsSupported = false;
+                clearPendingPreferredPierSideRestore("preferred-pier-side-unsupported-empty-restore");
+                return PreferredPierSideRestoreResult.UNSUPPORTED;
+            }
+        } catch (SocketTimeoutException ex) {
+            preferredPierSideCommandsSupported = false;
+            Logger.warn("pending preferred pier side restore timed out; commands unsupported in this connection "
+                    + "reason=" + reason
+                    + " " + targetLog(target), ex);
+            clearPendingPreferredPierSideRestore("preferred-pier-side-unsupported-timeout");
+            return PreferredPierSideRestoreResult.UNSUPPORTED;
+        } catch (IOException ex) {
+            Logger.warn("pending preferred pier side restore failed "
+                    + safeMessage(ex)
+                    + " reason=" + reason
+                    + " " + targetLog(target), ex);
+        }
+        return PreferredPierSideRestoreResult.FAILED;
+    }
+
+    private void attemptPendingPreferredPierSideRestoreAsync(String reason, boolean showStatus) {
+        if (!connected || pendingPreferredPierSideRestore == null) {
+            return;
+        }
+        int generation = connectionGeneration.get();
+        ioExecutor.execute(() -> {
+            if (!isConnectionGenerationCurrent(generation)) {
+                return;
+            }
+            PreferredPierSideRestoreResult restoreResult = restorePendingPreferredPierSideIfNeeded(reason, null);
+            if (!showStatus) {
+                return;
+            }
+            runOnUiThread(() -> {
+                if (!isConnectionGenerationCurrent(generation) || !connected) {
+                    return;
+                }
+                if (restoreResult == PreferredPierSideRestoreResult.RESTORED) {
+                    setStatus(getString(R.string.status_preferred_pier_side_restored));
+                } else if (restoreResult == PreferredPierSideRestoreResult.UNSUPPORTED) {
+                    setStatus(getString(R.string.status_preferred_pier_side_unsupported));
+                }
+            });
+        });
+    }
+
+    private void clearPendingPreferredPierSideRestore(TemporaryPierSidePreference preference, String reason) {
+        if (pendingPreferredPierSideRestore == preference) {
+            pendingPreferredPierSideRestore = null;
+            Logger.info("temporary preferred pier side restore cleared reason=" + reason
+                    + " original=" + preference.originalPierSide
+                    + " temporary=" + preference.temporaryPierSide
+                    + " target=" + preference.targetLabel);
+        }
+    }
+
+    private void clearPendingPreferredPierSideRestore(String reason) {
+        // Unconditional clear is only used on the serialized UI/io lanes when ending or replacing a restore chain.
+        TemporaryPierSidePreference pending = pendingPreferredPierSideRestore;
+        if (pending == null) {
+            return;
+        }
+        pendingPreferredPierSideRestore = null;
+        Logger.info("temporary preferred pier side restore cleared reason=" + reason
+                + " original=" + pending.originalPierSide
+                + " temporary=" + pending.temporaryPierSide
+                + " target=" + pending.targetLabel);
+    }
+
+    private static boolean isAcceptedShortReply(String reply) {
+        return reply != null && "1".equals(reply.trim());
+    }
+
+    private static String preferredPierSideSetCommand(String pierSide) {
+        return PREFERRED_PIER_SIDE_SET_PREFIX + pierSide + "#";
+    }
+
+    private static String normalizePreferredPierSide(String value) {
+        if (value == null) {
+            return "";
+        }
+        String trimmed = value.trim().toUpperCase(Locale.US);
+        if (trimmed.length() != 1) {
+            return "";
+        }
+        return trimmed;
+    }
+
+    private static boolean isTargetPreferredPierSide(String pierSide) {
+        return "E".equals(pierSide) || "W".equals(pierSide);
+    }
+
+    private static boolean isSupportedPreferredPierSide(String pierSide) {
+        return "A".equals(pierSide)
+                || "B".equals(pierSide)
+                || "E".equals(pierSide)
+                || "W".equals(pierSide);
     }
 
     private static String displayReply(String reply) {
@@ -3836,6 +4224,9 @@ public final class MainActivity extends Activity {
                 + " mount=" + selectedMountMode.name()
                 + " commands=" + trackingStartCommandLog(TrackingRate.SIDEREAL, alignmentDualAxisTracking));
         appendLog("INFO alignment start syncs observer time/location first");
+        List<String> failureCleanupCommands = new ArrayList<>();
+        failureCleanupCommands.add(OnStepCommand.STOP_ALL.command);
+        failureCleanupCommands.add(OnStepCommand.ALIGN_ABORT.command);
         runMountCommands(
                 commands,
                 getString(R.string.calibration_align_starting, starCount),
@@ -3856,8 +4247,28 @@ public final class MainActivity extends Activity {
                     updateTrackingViews();
                     updateCalibrationViews();
                     logStateSnapshot("alignment-started stars=" + starCount);
-                }
+                },
+                () -> handleAlignmentStartFailed(starCount),
+                failureCleanupCommands
         );
+    }
+
+    private void handleAlignmentStartFailed(int starCount) {
+        alignmentSession = null;
+        calibrationTarget = null;
+        polarRefineSyncedTarget = null;
+        dismissAlignmentPierSideGotoDialog();
+        clearQuickPointingCorrection();
+        if (calibrationTargetField != null) {
+            calibrationTargetField.setText("");
+        }
+        String message = getString(R.string.calibration_align_start_failed, starCount);
+        setCalibrationStatus(message);
+        if (connected) {
+            setStatus(message);
+        }
+        updateCalibrationViews();
+        logStateSnapshot("alignment-start-failed stars=" + starCount);
     }
 
     private void selectAlignmentTargetOnly() {
@@ -3895,6 +4306,10 @@ public final class MainActivity extends Activity {
             return null;
         }
         dismissAlignmentPierSideGotoDialog();
+        if (!sameTargetCoordinates(alignmentSession.currentTarget, target)) {
+            alignmentSession.pierSideGotoAttemptedTarget = null;
+            alignmentSession.pierSideGotoExpectedSide = null;
+        }
         setCalibrationTarget(target);
         alignmentSession.currentTarget = target;
         selectSkyTarget(target, centerView);
@@ -3915,6 +4330,11 @@ public final class MainActivity extends Activity {
             return;
         }
         final SkyChartView.Target gotoTarget = target;
+        final String expectedPierSide = expectedPierSideForTarget(gotoTarget);
+        if (alignmentSession != null) {
+            alignmentSession.pierSideGotoAttemptedTarget = gotoTarget;
+            alignmentSession.pierSideGotoExpectedSide = expectedPierSide;
+        }
         logUserAction("confirm alignment-pier-goto star=" + alignmentSession.currentStarNumber()
                 + "/" + alignmentSession.totalStars + " " + targetLog(gotoTarget));
         sendGotoTarget(
@@ -3929,7 +4349,8 @@ public final class MainActivity extends Activity {
                 () -> setCalibrationStatus(getString(
                         isAltAzMountMode() ? R.string.calibration_align_goto_center_prompt_altaz : R.string.calibration_align_goto_center_prompt,
                         gotoTarget.label
-                ))
+                )),
+                expectedPierSide
         );
     }
 
@@ -3997,19 +4418,48 @@ public final class MainActivity extends Activity {
 
         int generation = connectionGeneration.get();
         ioExecutor.execute(() -> {
-            String pierReply = queryDiagnostic(":Gm#");
-            String currentPierSide = normalizeGmPierSide(pierReply);
+            String pierReply;
+            IOException pierError = null;
+            try {
+                pierReply = client.query(":Gm#");
+            } catch (IOException ex) {
+                pierError = ex;
+                pierReply = "<" + ex.getClass().getSimpleName() + " " + safeMessage(ex) + ">";
+            }
+            String finalPierReply = pierReply;
+            IOException finalPierError = pierError;
+            String currentPierSide = normalizeGmPierSide(finalPierReply);
             runOnUiThread(() -> {
                 busy = false;
-                appendLog("DIAG ALIGN_PREFLIGHT :Gm# -> " + pierReply
+                appendLog("DIAG ALIGN_PREFLIGHT :Gm# -> " + finalPierReply
                         + " normalized=" + currentPierSide
                         + " expected=" + expectedPierSide);
+                if (finalPierError != null && isConnectionLostFailure(finalPierError)) {
+                    Logger.warn("alignment preflight detected connection loss " + safeMessage(finalPierError)
+                            + " " + targetLog(acceptedTarget));
+                    handleConnectionLostFailure(finalPierError, "alignment-preflight");
+                    return;
+                }
                 if (!isConnectionGenerationCurrent(generation) || !isCurrentAlignmentTarget(acceptedTarget)) {
-                    setCalibrationStatus(getString(R.string.calibration_align_target_changed));
+                    if (!isConnectionGenerationCurrent(generation)) {
+                        Logger.warn("alignment preflight result ignored after connection generation changed "
+                                + targetLog(acceptedTarget));
+                    } else {
+                        setCalibrationStatus(getString(R.string.calibration_align_target_changed));
+                    }
                     updateCalibrationViews();
                     return;
                 }
                 if (isPierSideMismatch(currentPierSide, expectedPierSide)) {
+                    if (hasTriedPierSideGotoForCurrentTarget(acceptedTarget)) {
+                        Logger.warn("alignment pier-side goto already attempted but mismatch remains current="
+                                + currentPierSide + " expected=" + expectedPierSide
+                                + " " + targetLog(acceptedTarget));
+                        setStatus(getString(R.string.calibration_align_pier_side_goto_failed));
+                        setCalibrationStatus(getString(R.string.calibration_align_pier_side_goto_failed));
+                        updateCalibrationViews();
+                        return;
+                    }
                     setCalibrationStatus(getString(
                             R.string.calibration_align_pier_side_needs_goto,
                             acceptedTarget.label
@@ -4020,6 +4470,11 @@ public final class MainActivity extends Activity {
                 }
             });
         });
+    }
+
+    private boolean hasTriedPierSideGotoForCurrentTarget(SkyChartView.Target target) {
+        return alignmentSession != null
+                && sameTargetCoordinates(alignmentSession.pierSideGotoAttemptedTarget, target);
     }
 
     private void showAlignmentPierSideGotoDialog(
@@ -4099,6 +4554,7 @@ public final class MainActivity extends Activity {
             List<String> diagnosticLog = new ArrayList<>();
             boolean accepted = false;
             String failureStatus = null;
+            IOException connectionLostFailure = null;
             try {
                 AlignmentDiagnosticSnapshot preSnapshot = collectAlignmentDiagnostics(diagnosticLog, "pre", acceptedTarget);
                 client.sendNoReply(OnStepCommand.STOP_ALL.command);
@@ -4111,12 +4567,12 @@ public final class MainActivity extends Activity {
                             + preSnapshot.pierSide + " targetPierSide=" + expectedPierSide
                             + "; alignment preflight should run goto before accepting");
                 } else {
-                    String raReply = client.query(raCommand);
+                    String raReply = client.queryShortReply(raCommand);
                     diagnosticLog.add("RX " + raCommand + " -> " + raReply);
                     if (isRejectedReply(raReply)) {
                         failureStatus = commandRejectedStatus(raCommand, raReply);
                     } else {
-                        String decReply = client.query(decCommand);
+                        String decReply = client.queryShortReply(decCommand);
                         diagnosticLog.add("RX " + decCommand + " -> " + decReply);
                         if (isRejectedReply(decReply)) {
                             failureStatus = commandRejectedStatus(decCommand, decReply);
@@ -4134,6 +4590,9 @@ public final class MainActivity extends Activity {
                                 failureStatus = getString(R.string.status_command_failed_keep_connected, safeMessage(ex));
                                 diagnosticLog.add("DIAG ALIGN_ACCEPT " + syncCommand + " exception: "
                                         + ex.getClass().getSimpleName() + " " + safeMessage(ex));
+                                if (isConnectionLostFailure(ex)) {
+                                    connectionLostFailure = ex;
+                                }
                             }
                         }
                     }
@@ -4142,6 +4601,9 @@ public final class MainActivity extends Activity {
                 failureStatus = getString(R.string.status_command_failed_keep_connected, safeMessage(ex));
                 diagnosticLog.add("DIAG ALIGN_ACCEPT command exception: "
                         + ex.getClass().getSimpleName() + " " + safeMessage(ex));
+                if (isConnectionLostFailure(ex)) {
+                    connectionLostFailure = ex;
+                }
             }
 
             if (!accepted) {
@@ -4151,23 +4613,63 @@ public final class MainActivity extends Activity {
                 } catch (IOException ex) {
                     diagnosticLog.add("DIAG ALIGN_ACCEPT cleanup :Q# failed: "
                             + ex.getClass().getSimpleName() + " " + safeMessage(ex));
+                    if (connectionLostFailure == null && isConnectionLostFailure(ex)) {
+                        connectionLostFailure = ex;
+                    }
                 }
             }
-            collectAlignmentDiagnostics(diagnosticLog, "post", acceptedTarget);
+            AlignmentDiagnosticSnapshot postSnapshot = collectAlignmentDiagnostics(diagnosticLog, "post", acceptedTarget);
             boolean finalAccepted = accepted;
             String finalFailureStatus = failureStatus == null
                     ? getString(R.string.calibration_align_diag_not_accepted)
                     : failureStatus;
+            double finalPostAcceptDeltaDegrees = postSnapshot.targetDeltaDegrees;
+            IOException finalConnectionLostFailure = connectionLostFailure;
             runOnUiThread(() -> {
                 for (String line : diagnosticLog) {
                     appendLog(line);
                 }
+                if (finalConnectionLostFailure != null) {
+                    Logger.warn("alignment accept detected connection loss "
+                            + safeMessage(finalConnectionLostFailure)
+                            + " " + targetLog(acceptedTarget));
+                    handleConnectionLostFailure(finalConnectionLostFailure, "alignment-accept");
+                    return;
+                }
                 busy = false;
+                if (!isConnectionGenerationCurrent(generation)) {
+                    Logger.warn("alignment accept result ignored after connection generation changed "
+                            + targetLog(acceptedTarget));
+                    if (alignmentSession != null && isCurrentAlignmentTarget(acceptedTarget)) {
+                        setCalibrationStatus(getString(
+                                connected
+                                        ? R.string.calibration_align_reconnected
+                                        : R.string.calibration_align_connection_lost
+                        ));
+                    }
+                    logStateSnapshot("alignment-star-accept-stale-generation");
+                    updateCalibrationViews();
+                    updateUiState();
+                    return;
+                }
+                if (alignmentSession == null || !isCurrentAlignmentTarget(acceptedTarget)) {
+                    Logger.warn("alignment accept result ignored after local session changed "
+                            + targetLog(acceptedTarget));
+                    if (alignmentSession == null) {
+                        setCalibrationStatus(getString(R.string.calibration_align_cancelled));
+                    } else {
+                        setCalibrationStatus(getString(R.string.calibration_align_target_changed));
+                    }
+                    logStateSnapshot("alignment-star-accept-stale");
+                    updateCalibrationViews();
+                    updateUiState();
+                    return;
+                }
                 if (finalAccepted) {
                     setStatus(getString(R.string.calibration_align_accepted, acceptedTarget.label));
                     setCalibrationStatus(getString(R.string.calibration_align_accepted, acceptedTarget.label));
                     appendLog("DIAG ALIGN_ACCEPT app advancing to next star");
-                    finishAcceptedAlignmentStar(acceptedTarget);
+                    finishAcceptedAlignmentStar(acceptedTarget, finalPostAcceptDeltaDegrees);
                     logStateSnapshot("alignment-star-accepted " + targetLog(acceptedTarget));
                 } else {
                     setStatus(finalFailureStatus);
@@ -4203,6 +4705,7 @@ public final class MainActivity extends Activity {
         diagnosticLog.add("RX " + stage + " :GR# -> " + raReply);
         diagnosticLog.add("RX " + stage + " :GD# -> " + decReply);
         diagnosticLog.add("RX " + stage + " :GE# -> " + errorReply + describeCommandErrorSuffix(errorReply));
+        double targetDeltaDegrees = Double.NaN;
         try {
             double readRaHours = parseRightAscension(raReply);
             double readDecDegrees = parseDeclination(decReply);
@@ -4212,18 +4715,19 @@ public final class MainActivity extends Activity {
                     target.raHours,
                     target.decDegrees
             );
+            targetDeltaDegrees = distanceDegrees;
             diagnosticLog.add("DIAG ALIGN_ACCEPT " + stage + " mountTargetDeltaDeg="
                     + String.format(Locale.US, "%.3f", distanceDegrees)
                     + " mountRA=" + formatRightAscensionDisplay(readRaHours)
                     + " mountDec=" + formatDeclinationDisplay(readDecDegrees));
         } catch (Exception ex) {
             diagnosticLog.add("DIAG ALIGN_ACCEPT " + stage + " readback exception: "
-                    + ex.getClass().getSimpleName() + " " + safeMessage(ex));
+                + ex.getClass().getSimpleName() + " " + safeMessage(ex));
         }
-        return new AlignmentDiagnosticSnapshot(pierReply);
+        return new AlignmentDiagnosticSnapshot(pierReply, targetDeltaDegrees);
     }
 
-    private void finishAcceptedAlignmentStar(SkyChartView.Target acceptedTarget) {
+    private void finishAcceptedAlignmentStar(SkyChartView.Target acceptedTarget, double postAcceptDeltaDegrees) {
         if (alignmentSession == null || alignmentSession.isComplete()) {
             return;
         }
@@ -4231,8 +4735,29 @@ public final class MainActivity extends Activity {
         alignmentSession.acceptedTargets.add(acceptedTarget);
         alignmentSession.acceptedLabels.add(acceptedTarget.label);
         setMountPointing(acceptedTarget.raHours, acceptedTarget.decDegrees);
+        boolean qualityWarning = isAlignmentQualityWarning(postAcceptDeltaDegrees);
+        if (qualityWarning) {
+            recordAlignmentQualityWarning(acceptedTarget, postAcceptDeltaDegrees);
+            Logger.warn("alignment accepted with high residual star=" + alignmentSession.acceptedStars
+                    + "/" + alignmentSession.totalStars
+                    + " residualDeg=" + String.format(Locale.US, "%.3f", postAcceptDeltaDegrees)
+                    + " " + targetLog(acceptedTarget));
+            appendLog("WARN ALIGN_ACCEPT quality residualDeg="
+                    + String.format(Locale.US, "%.3f", postAcceptDeltaDegrees)
+                    + " thresholdDeg="
+                    + String.format(Locale.US, "%.1f", ALIGNMENT_ACCEPT_QUALITY_WARNING_DEGREES)
+                    + " " + targetLog(acceptedTarget));
+        }
         if (alignmentSession.isComplete()) {
-            setCalibrationStatus(getString(R.string.calibration_align_complete, alignmentSession.totalStars));
+            if (alignmentSession.hasQualityWarning) {
+                setCalibrationStatus(getString(
+                        R.string.calibration_align_quality_warning_complete,
+                        alignmentSession.qualityWarningLabel,
+                        alignmentSession.maxQualityDeltaDegrees
+                ));
+            } else {
+                setCalibrationStatus(getString(R.string.calibration_align_complete, alignmentSession.totalStars));
+            }
             alignmentSession.currentTarget = null;
             Logger.info("alignment complete accepted=" + alignmentSession.acceptedStars
                     + "/" + alignmentSession.totalStars
@@ -4241,11 +4766,21 @@ public final class MainActivity extends Activity {
             alignmentSession.currentTarget = null;
             calibrationTarget = null;
             calibrationTargetField.setText("");
-            setCalibrationStatus(getString(
-                    R.string.calibration_align_next_prompt,
-                    alignmentSession.currentStarNumber(),
-                    alignmentSession.totalStars
-            ));
+            if (qualityWarning) {
+                setCalibrationStatus(getString(
+                        R.string.calibration_align_quality_warning,
+                        alignmentSession.acceptedStars,
+                        alignmentSession.totalStars,
+                        acceptedTarget.label,
+                        postAcceptDeltaDegrees
+                ));
+            } else {
+                setCalibrationStatus(getString(
+                        R.string.calibration_align_next_prompt,
+                        alignmentSession.currentStarNumber(),
+                        alignmentSession.totalStars
+                ));
+            }
         }
         clearSyncedCurrentTarget();
         clearQuickPointingCorrection();
@@ -4253,8 +4788,31 @@ public final class MainActivity extends Activity {
         updateCalibrationViews();
         updateTrackingViews();
         refreshMountPointing();
-        if (alignmentSession != null && alignmentSession.isComplete()) {
+        if (alignmentSession != null && alignmentSession.isComplete() && !alignmentSession.hasQualityWarning) {
             saveAlignmentModel(true);
+        } else if (alignmentSession != null && alignmentSession.isComplete()) {
+            Logger.warn("alignment auto-save skipped because quality warning label="
+                    + alignmentSession.qualityWarningLabel
+                    + " residualDeg="
+                    + String.format(Locale.US, "%.3f", alignmentSession.maxQualityDeltaDegrees));
+        }
+    }
+
+    private boolean isAlignmentQualityWarning(double postAcceptDeltaDegrees) {
+        return !Double.isNaN(postAcceptDeltaDegrees)
+                && postAcceptDeltaDegrees > ALIGNMENT_ACCEPT_QUALITY_WARNING_DEGREES;
+    }
+
+    private void recordAlignmentQualityWarning(SkyChartView.Target target, double postAcceptDeltaDegrees) {
+        if (alignmentSession == null) {
+            return;
+        }
+        if (!alignmentSession.hasQualityWarning
+                || Double.isNaN(alignmentSession.maxQualityDeltaDegrees)
+                || postAcceptDeltaDegrees > alignmentSession.maxQualityDeltaDegrees) {
+            alignmentSession.hasQualityWarning = true;
+            alignmentSession.maxQualityDeltaDegrees = postAcceptDeltaDegrees;
+            alignmentSession.qualityWarningLabel = target == null ? "" : target.label;
         }
     }
 
@@ -4305,24 +4863,57 @@ public final class MainActivity extends Activity {
     private void cancelAlignmentSession() {
         logUserAction("tap cancel-alignment state=" + alignmentStateSummary());
         dismissAlignmentPierSideGotoDialog();
-        // Reset OnStep's alignment state machine on cancel:
-        // 1. :Q# stops any in-flight motion safely.
-        // 2. :A0# is OnStep's abort-alignment command — it is silently ignored
-        //    on firmware that does not implement it (no error reply), so it is
-        //    safe to send unconditionally.
-        // 3. The next :A1#/:A2#/:A3# (when the user starts a new session) will
-        //    further reset the state machine on essentially all firmware.
-        if (connected) {
-            enqueueCommands(
-                    new OnStepCommand[]{OnStepCommand.STOP_ALL, OnStepCommand.ALIGN_ABORT},
-                    getString(R.string.log_stop_sent));
+        if (!connected) {
+            clearLocalAlignmentAfterCancel();
+            return;
         }
+        if (busy) {
+            Logger.warn("cancel-alignment local-only because busy state=" + alignmentStateSummary());
+            clearLocalAlignmentAfterCancel();
+            setCalibrationStatus(getString(R.string.calibration_align_cancelled_busy));
+            updateCalibrationViews();
+            return;
+        }
+        List<MountCommand> commands = new ArrayList<>();
+        commands.add(MountCommand.noReply(OnStepCommand.STOP_ALL.command));
+        commands.add(MountCommand.noReply(OnStepCommand.ALIGN_ABORT.command));
+        runMountCommands(
+                commands,
+                getString(R.string.calibration_align_cancelling),
+                getString(R.string.calibration_align_cancelled),
+                this::clearLocalAlignmentAfterCancel,
+                this::clearLocalAlignmentAfterCancel,
+                null
+        );
+    }
+
+    private void clearLocalAlignmentAfterCancel() {
         alignmentSession = null;
         calibrationTarget = null;
         polarRefineSyncedTarget = null;
+        clearQuickPointingCorrection();
+        if (calibrationTargetField != null) {
+            calibrationTargetField.setText("");
+        }
         setCalibrationStatus(getString(R.string.calibration_align_cancelled));
         updateCalibrationViews();
         logStateSnapshot("alignment-cancelled");
+    }
+
+    private boolean hasResumableAlignmentSession() {
+        return alignmentSession != null && !alignmentSession.isComplete();
+    }
+
+    private void restoreAlignmentTargetFieldFromSession() {
+        SkyChartView.Target target = alignmentSession == null ? null : alignmentSession.currentTarget;
+        calibrationTarget = target;
+        if (calibrationTargetField != null) {
+            calibrationTargetField.setText(target == null ? "" : target.label);
+            if (target != null) {
+                calibrationTargetField.setSelection(calibrationTargetField.getText().length());
+            }
+        }
+        updateCalibrationTargetActionButton();
     }
 
     private void gotoRefinePolarTarget() {
@@ -4560,7 +5151,7 @@ public final class MainActivity extends Activity {
         }
         List<CalibrationMode> modes = availableCalibrationModes();
         if (!modes.contains(selectedCalibrationMode)) {
-            selectedCalibrationMode = CalibrationMode.QUICK_SYNC;
+            selectedCalibrationMode = DEFAULT_CALIBRATION_MODE;
         }
         List<String> labels = new ArrayList<>();
         for (CalibrationMode mode : modes) {
@@ -4606,7 +5197,7 @@ public final class MainActivity extends Activity {
 
     private void updateCalibrationModeViews() {
         if (isAltAzMountMode() && selectedCalibrationMode == CalibrationMode.REFINE_POLAR) {
-            selectedCalibrationMode = CalibrationMode.QUICK_SYNC;
+            selectedCalibrationMode = DEFAULT_CALIBRATION_MODE;
         }
         boolean quickMode = selectedCalibrationMode == CalibrationMode.QUICK_SYNC;
         boolean alignMode = selectedCalibrationMode.isStarAlignment();
@@ -4632,6 +5223,17 @@ public final class MainActivity extends Activity {
     }
 
     private void runMountCommands(List<MountCommand> commands, String sendingStatus, String successStatus, Runnable onSuccess) {
+        runMountCommands(commands, sendingStatus, successStatus, onSuccess, null, null);
+    }
+
+    private void runMountCommands(
+            List<MountCommand> commands,
+            String sendingStatus,
+            String successStatus,
+            Runnable onSuccess,
+            Runnable onFailure,
+            List<String> failureCleanupCommands
+    ) {
         if (!connected || busy) {
             return;
         }
@@ -4679,6 +5281,7 @@ public final class MainActivity extends Activity {
                     updateUiState();
                 });
             } catch (CommandRejectedException ex) {
+                runFailureCleanupCommands(failureCleanupCommands, "rejected " + ex.command);
                 runOnUiThread(() -> {
                     for (String reply : replies) {
                         appendLog("RX " + reply);
@@ -4686,15 +5289,52 @@ public final class MainActivity extends Activity {
                     busy = false;
                     setCalibrationStatus(commandRejectedStatus(ex.command, ex.reply));
                     setStatus(commandRejectedStatus(ex.command, ex.reply));
+                    if (onFailure != null) {
+                        onFailure.run();
+                    }
                     Logger.warn("mount-command-batch rejected command=" + ex.command + " reply=" + ex.reply);
                     logStateSnapshot("mount-command-batch-rejected");
                     updateUiState();
                 });
             } catch (IOException ex) {
+                boolean connectionLost = isConnectionLostFailure(ex);
+                if (!connectionLost) {
+                    runFailureCleanupCommands(failureCleanupCommands, "io " + safeMessage(ex));
+                } else {
+                    Logger.warn("mount-command-batch cleanup skipped after connection-lost failure "
+                            + safeMessage(ex));
+                }
                 markTransportFault();
-                runOnUiThread(() -> handleCommandFailure(ex));
+                runOnUiThread(() -> {
+                    if (connectionLost && onFailure != null) {
+                        // Roll back command-local state first; then the transport handler can
+                        // decide whether an already-active alignment session is still resumable.
+                        onFailure.run();
+                    }
+                    handleCommandFailure(ex);
+                    if (!connectionLost && onFailure != null) {
+                        onFailure.run();
+                    }
+                });
             }
         });
+    }
+
+    private void runFailureCleanupCommands(List<String> commands, String reason) {
+        if (commands == null || commands.isEmpty()) {
+            return;
+        }
+        Logger.info("mount-command-batch cleanup start reason=" + reason
+                + " commands=" + commands);
+        for (String command : commands) {
+            try {
+                client.sendNoReply(command);
+                Logger.info("mount-command-batch cleanup sent " + command);
+            } catch (IOException ex) {
+                Logger.warn("mount-command-batch cleanup failed " + command + " " + safeMessage(ex), ex);
+                return;
+            }
+        }
     }
 
     private static boolean isRejectedReply(String reply) {
@@ -5026,6 +5666,10 @@ public final class MainActivity extends Activity {
     }
 
     private void handleMountPointingPollFailure(IOException ex) {
+        if (isConnectionLostFailure(ex)) {
+            handleConnectionLostFailure(ex, "pointing-poll-failed");
+            return;
+        }
         mountPointingFailureCount++;
         String reason = safeMessage(ex);
         appendLog("WARN pointing poll " + reason);
@@ -6457,7 +7101,9 @@ public final class MainActivity extends Activity {
             alignStartButton.setEnabled(canStartAlignment && selectedCalibrationMode.starCount > 0);
         }
         boolean alignmentActive = connected && !busy && !gotoInProgress
-                && alignmentSession != null && !alignmentSession.isComplete();
+                && alignmentSession != null
+                && !alignmentSession.isComplete()
+                && !alignmentSession.hasQualityWarning;
         if (alignSelectButton != null) {
             alignSelectButton.setEnabled(alignmentActive);
             alignSelectButton.setText(R.string.calibration_align_set_target);
@@ -6636,6 +7282,91 @@ public final class MainActivity extends Activity {
 
     private boolean isConnectionGenerationCurrent(int generation) {
         return generation == connectionGeneration.get();
+    }
+
+    private void handleConnectionLostFailure(IOException ex, String source) {
+        boolean preserveAlignment = hasResumableAlignmentSession();
+        client.close();
+        releaseWifiBinding();
+        connected = false;
+        busy = false;
+        connectionGeneration.incrementAndGet();
+        connectedHost = null;
+        connectedPort = DEFAULT_PORT;
+        mountPointingFailureCount = 0;
+        mountPointingPollingPaused = true;
+        hasCurrentMountPosition = false;
+        hasAlignmentTrackingModel = false;
+        savedAlignmentStarCount = 0;
+        activeDirection = null;
+        if (preserveAlignment && alignmentSession != null) {
+            alignmentSession.pierSideGotoAttemptedTarget = null;
+            alignmentSession.pierSideGotoExpectedSide = null;
+            restoreAlignmentTargetFieldFromSession();
+        } else {
+            alignmentSession = null;
+            calibrationTarget = null;
+        }
+        syncedCurrentTarget = null;
+        gotoInProgress = false;
+        activeGotoTarget = null;
+        cancelGotoStatusPoll();
+        clearGotoRecoveryRequired("connection-lost");
+        preferredPierSideCommandsSupported = null;
+        parked = false;
+        trackingEnabled = false;
+        trackingUsingDualAxis = false;
+        dismissAlignmentPierSideGotoDialog();
+        clearQuickPointingCorrection();
+        polarRefineSyncedTarget = null;
+        if (!preserveAlignment && calibrationTargetField != null) {
+            calibrationTargetField.setText("");
+        }
+        if (preserveAlignment) {
+            setCalibrationStatus(getString(R.string.calibration_align_connection_lost));
+        }
+        setStatus(getString(R.string.status_connection_lost, safeMessage(ex)));
+        setGotoStatus(getString(R.string.goto_status_idle));
+        setSafetyStatus(getString(R.string.safety_status_connect_failed));
+        appendLog("WARN connection lost source=" + source + " " + safeMessage(ex));
+        if (preserveAlignment) {
+            appendLog("INFO alignment session preserved after connection loss " + alignmentStateSummary());
+        }
+        clearMountPointing();
+        updateCalibrationViews();
+        logStateSnapshot("connection-lost " + source);
+        updateUiState();
+    }
+
+    private static boolean isConnectionLostFailure(Throwable throwable) {
+        Throwable current = throwable;
+        while (current != null) {
+            if (current instanceof UnknownHostException) {
+                return true;
+            }
+            if (current instanceof SocketTimeoutException) {
+                return false;
+            }
+            String className = current.getClass().getName();
+            String message = current.getMessage();
+            String text = (className + " " + (message == null ? "" : message)).toUpperCase(Locale.US);
+            if (text.contains("ENONET")
+                    || text.contains("EHOSTUNREACH")
+                    || text.contains("ENETUNREACH")
+                    || text.contains("EPIPE")
+                    || text.contains("ECONNRESET")
+                    || text.contains("ECONNABORTED")
+                    || text.contains("MACHINE IS NOT ON THE NETWORK")
+                    || text.contains("NETWORK IS UNREACHABLE")
+                    || text.contains("NO ROUTE TO HOST")
+                    || text.contains("BROKEN PIPE")
+                    || text.contains("CONNECTION RESET")
+                    || text.contains("SOFTWARE CAUSED CONNECTION ABORT")) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 
     private void markTransportFault() {
@@ -6844,6 +7575,11 @@ public final class MainActivity extends Activity {
         final List<String> acceptedLabels = new ArrayList<>();
         int acceptedStars;
         SkyChartView.Target currentTarget;
+        SkyChartView.Target pierSideGotoAttemptedTarget;
+        String pierSideGotoExpectedSide;
+        boolean hasQualityWarning;
+        double maxQualityDeltaDegrees = Double.NaN;
+        String qualityWarningLabel = "";
 
         AlignmentSession(int totalStars) {
             this.totalStars = totalStars;
@@ -6856,6 +7592,35 @@ public final class MainActivity extends Activity {
         boolean isComplete() {
             return acceptedStars >= totalStars;
         }
+    }
+
+    private static final class TemporaryPierSidePreference {
+        final String originalPierSide;
+        final String temporaryPierSide;
+        final int connectionGeneration;
+        final long createdAtMillis;
+        final String targetLabel;
+
+        TemporaryPierSidePreference(
+                String originalPierSide,
+                String temporaryPierSide,
+                int connectionGeneration,
+                long createdAtMillis,
+                String targetLabel
+        ) {
+            this.originalPierSide = originalPierSide;
+            this.temporaryPierSide = temporaryPierSide;
+            this.connectionGeneration = connectionGeneration;
+            this.createdAtMillis = createdAtMillis;
+            this.targetLabel = targetLabel;
+        }
+    }
+
+    private enum PreferredPierSideRestoreResult {
+        NONE,
+        RESTORED,
+        FAILED,
+        UNSUPPORTED
     }
 
     private static final class ConnectionAttempt {
@@ -6912,9 +7677,11 @@ public final class MainActivity extends Activity {
 
     private static final class AlignmentDiagnosticSnapshot {
         final String pierSide;
+        final double targetDeltaDegrees;
 
-        AlignmentDiagnosticSnapshot(String pierSide) {
+        AlignmentDiagnosticSnapshot(String pierSide, double targetDeltaDegrees) {
             this.pierSide = pierSide == null ? "" : pierSide.trim();
+            this.targetDeltaDegrees = targetDeltaDegrees;
         }
     }
 

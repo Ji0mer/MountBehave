@@ -81,10 +81,14 @@ final class OnStepClient implements Closeable {
     }
 
     synchronized String queryShortReply(String command) throws IOException {
+        return queryShortReply(command, READ_TIMEOUT_MS);
+    }
+
+    synchronized String queryShortReply(String command, int readTimeoutMs) throws IOException {
         ensureConnected();
         throttleCommandStart();
         boolean sent = false;
-        try (Socket commandSocket = openSocket()) {
+        try (Socket commandSocket = openSocket(readTimeoutMs)) {
             writeCommand(commandSocket, command);
             sent = true;
             BufferedInputStream input = new BufferedInputStream(commandSocket.getInputStream());
@@ -111,6 +115,32 @@ final class OnStepClient implements Closeable {
             sent = true;
             BufferedInputStream input = new BufferedInputStream(commandSocket.getInputStream());
             String reply = readOptionalShortReply(input);
+            lastCommandAtMillis = System.currentTimeMillis();
+            Logger.rx(command, reply);
+            return reply;
+        } catch (IOException ex) {
+            if (sent) {
+                Logger.rxFail(command, ex);
+            } else {
+                Logger.txFail(command, ex);
+            }
+            throw ex;
+        }
+    }
+
+    synchronized String querySingleCharacterReply(String command) throws IOException {
+        return querySingleCharacterReply(command, READ_TIMEOUT_MS);
+    }
+
+    synchronized String querySingleCharacterReply(String command, int readTimeoutMs) throws IOException {
+        ensureConnected();
+        throttleCommandStart();
+        boolean sent = false;
+        try (Socket commandSocket = openSocket(readTimeoutMs)) {
+            writeCommand(commandSocket, command);
+            sent = true;
+            BufferedInputStream input = new BufferedInputStream(commandSocket.getInputStream());
+            String reply = readSingleCharacterReply(input);
             lastCommandAtMillis = System.currentTimeMillis();
             Logger.rx(command, reply);
             return reply;
@@ -163,12 +193,16 @@ final class OnStepClient implements Closeable {
     }
 
     private Socket openSocket() throws IOException {
+        return openSocket(READ_TIMEOUT_MS);
+    }
+
+    private Socket openSocket(int readTimeoutMs) throws IOException {
         Socket commandSocket = socketFactory.createSocket();
         commandSocket.setKeepAlive(true);
         commandSocket.setTcpNoDelay(true);
         commandSocket.setReuseAddress(true);
         commandSocket.connect(new InetSocketAddress(host, port), CONNECT_TIMEOUT_MS);
-        commandSocket.setSoTimeout(READ_TIMEOUT_MS);
+        commandSocket.setSoTimeout(Math.max(1, readTimeoutMs));
         return commandSocket;
     }
 
@@ -224,6 +258,10 @@ final class OnStepClient implements Closeable {
             return reply.toString();
         }
         return readUntilHashOrClose(input, reply);
+    }
+
+    private String readSingleCharacterReply(BufferedInputStream input) throws IOException {
+        return readUntilHashOrClose(input);
     }
 
     private static boolean isSingleCharacterReply(int value) {
