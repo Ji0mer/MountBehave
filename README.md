@@ -80,7 +80,11 @@ MountBehave 是一个为 OnStep/LX200 兼容赤道仪开发的 Android 手控器
 
 ### 下载 APK
 
-推荐从 GitHub Release 下载 `MountBehave-v0.2.4.apk`；测试版也会在仓库 `dist/` 目录保留同名 APK。
+推荐从 GitHub Release 下载 `MountBehave-v0.2.4.apk`：
+
+<https://github.com/Ji0mer/MountBehave/releases/tag/v0.2.4>
+
+APK 不放在仓库代码目录里。仓库里的 `dist/` 仅作为本地构建输出目录，发布包请以 GitHub Release 附件为准。
 
 ### 本地构建
 
