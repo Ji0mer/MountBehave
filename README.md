@@ -10,12 +10,12 @@
 
 <p align="center">
   <a href="#当前状态"><img alt="Status" src="https://img.shields.io/badge/status-field--testing-orange"></a>
-  <a href="#版本说明"><img alt="Version" src="https://img.shields.io/badge/version-v0.2.3-blue"></a>
+  <a href="#版本说明"><img alt="Version" src="https://img.shields.io/badge/version-v0.2.4-blue"></a>
   <a href="#功能概览"><img alt="Platform" src="https://img.shields.io/badge/platform-Android-green"></a>
   <a href="#星图数据与授权"><img alt="Catalog" src="https://img.shields.io/badge/catalog-HYG%20%7C%20OpenNGC%20%7C%20NASA%20SVS-lightgrey"></a>
 </p>
 
-MountBehave 是一个为 OnStep/LX200 兼容赤道仪开发的 Android 手控器。它面向手机和平板上的目视观测流程，提供 WiFi 连接、方向键移动、停止/GOTO、离线星图、观测地与时间同步、跟踪控制、两星/三星校准和三星后极轴精调入口。`v0.2.x` 系列加入 OnStepX 与经纬仪模式适配。
+MountBehave 是一个为 OnStep/LX200 兼容赤道仪开发的 Android 手控器。它面向手机和平板上的目视观测流程，提供 WiFi 连接、方向键移动、停止/GOTO、离线星图、星图同步、观测地与时间同步、跟踪控制、两星/三星校准和三星后极轴精调入口。`v0.2.x` 系列加入 OnStepX 与经纬仪模式适配。
 
 这个项目目前不是 OnStep 官方 App，也还没有经过充分的跨设备测试。真实赤道仪测试时请始终保留实体断电、控制盒急停或其他独立安全手段。
 
@@ -38,14 +38,14 @@ MountBehave 是一个为 OnStep/LX200 兼容赤道仪开发的 Android 手控器
   <img src="docs/images/clearsky_wordmark.png" alt="Clearsky ST17 test badge" width="160">
 </p>
 
-当前版本：`v0.2.3`
+当前版本：`v0.2.4`
 
 测试状态：
 
 - 已在晴空谐波赤道仪 `ST17` 上完成 WiFi 连接、手动移动/停止、两星校准、GOTO 目标查找等实机验证。
 - 新增 OnStepX 固件选择、赤道仪/经纬仪模式切换、经纬仪校准流程和双轴跟踪语义；OnStepX 真机仍需要更多设备覆盖。
 - 新增可导出的全应用日志，覆盖 TX/RX、用户动作、状态快照、校准诊断和小天体下载错误，方便现场排查。
-- `v0.2.3` 补强北天极附近 GOTO 到位判定、连续限位/硬件错误后的手控恢复保护、命令日志本地保存、平板旋转后的连接保持和星图银河背景显示。
+- `v0.2.4` 增加星图同步与渐进式指向修正模型，修复同步时 OnStep `E8` 拒绝、手控移动时 WiFi 假断开等实机问题。
 - 其他 OnStep 固件版本、其他品牌控制器、USB-C 有线连接、Park/Unpark、三星后极轴精调和长时间跟踪仍需要更多实机验证。
 
 适合当前尝试的场景：
@@ -67,10 +67,11 @@ MountBehave 是一个为 OnStep/LX200 兼容赤道仪开发的 Android 手控器
 | 小天体 | 内置 17 颗著名小行星 / 彗星基线;可在设置页按需在线下载亮小行星或逐颗添加彗星(JPL SBDB)。小行星橙色菱形,彗星带远日方向尾迹 |
 | 图层切换 | 星图"图层"按钮 → 7 项独立开关(星座连线 / 太阳系 / 星团 / 星云 / 星系 / 小行星 / 彗星);恒星与银河背景固定常显 |
 | 星图交互 | 单指拖拽、双指缩放，最窄视场约 `1°`，恒星显示到约 `12` 等；顶部状态区已压缩 |
-| GOTO | 星图点选、目标名称搜索、RA/Dec 坐标输入，连接后发送 `:Sr...#`、`:Sd...#`、`:MS#`；极区和机械停止场景有到位兜底，连续限位/硬件错误后会暂停新 GOTO 并要求手控恢复 |
+| GOTO | 星图点选、目标名称搜索、RA/Dec 坐标输入，连接后发送 `:Sr...#`、`:Sd...#`、`:MS#`；星图 GOTO 按钮在移动中变为“取消”；极区和机械停止场景有到位兜底，连续限位/硬件错误后会暂停新 GOTO 并要求手控恢复 |
+| 星图同步 | GOTO 后手动居中并点击“同步”，App 发送 `:CM#`；保存两星/三星模型后会追加多点残差修正，后续 GOTO 前自动预修正目标坐标 |
 | 观测地与时间 | 默认 Boston；支持 GPS 或手动经纬度；可同步到 OnStep |
 | 跟踪 | 恒星速、月球速、太阳速；保存两星/三星模型后请求双轴/模型补偿，否则默认单轴 |
-| 校准 | 快速同步、两星校准、三星校准、三星后极轴精调入口；经纬仪模式隐藏极轴相关流程 |
+| 校准 | 两星校准、三星校准、三星后极轴精调入口；经纬仪模式隐藏极轴相关流程 |
 | 安全 | GOTO 状态查询与到位复核、取消 GOTO、Park/Unpark、夜视模式、低空/过中天提醒 |
 | 日志 | 设置页内置命令日志，可勾选记录、保存到 `Download/MountBehave`、选择位置保存、分享或清空当天日志 |
 | 适配 | 紧凑界面、问号说明弹窗、悬浮菜单、横屏和平板宽屏布局、旋转屏幕后保持连接、MountBehave 启动图标 |
@@ -79,7 +80,7 @@ MountBehave 是一个为 OnStep/LX200 兼容赤道仪开发的 Android 手控器
 
 ### 下载 APK
 
-推荐从 GitHub Release 下载 `MountBehave-v0.2.3.apk`。
+推荐从 GitHub Release 下载 `MountBehave-v0.2.4.apk`；测试版也会在仓库 `dist/` 目录保留同名 APK。
 
 ### 本地构建
 
@@ -105,13 +106,13 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build-release.ps1
 本次发布用的安装 APK：
 
 ```text
-dist\MountBehave-v0.2.3.apk
+dist\MountBehave-v0.2.4.apk
 ```
 
 ### 安装到手机
 
 ```powershell
-powershell -ExecutionPolicy Bypass -NoProfile -Command ". .\scripts\env.ps1; adb devices; adb install -r dist\MountBehave-v0.2.3.apk"
+powershell -ExecutionPolicy Bypass -NoProfile -Command ". .\scripts\env.ps1; adb devices; adb install -r dist\MountBehave-v0.2.4.apk"
 ```
 
 电脑模拟器通常不能直接加入赤道仪自己的 WiFi 热点。真实测试时建议把 APK 安装到手机或 Android 平板上，并让设备直接连接赤道仪 WiFi。
@@ -160,10 +161,11 @@ powershell -ExecutionPolicy Bypass -File .\scripts\preview-app.ps1
 2. 单指拖拽改变视野方向，双指缩放视场。
 3. 需要检查其他时间的天区时，点击“时间”设置星图日期/时间，或点“现在”回到当前时刻。
 4. 点击星图目标，或通过目标搜索输入名称/坐标。
-5. 未连接时只能显示目标；连接后可以显示并 GOTO。
-6. GOTO、校准、同步等会移动赤道仪的操作会自动把星图时间恢复为现在，避免把历史/未来时刻的行星或月亮位置发给赤道仪。
-7. 低空目标只做遮挡/限位提示，不会被 App 硬性阻止。
-8. GOTO 后 App 会自动轮询状态；控制器报告空闲时还会读取当前 RA/Dec，确认接近目标后才释放为可发起下一次 GOTO。极区目标和机械限位/停止场景会用更宽的极区阈值和静止检测兜底；如果停住但离目标很远，日志会记录 OnStep `:GE#` 与架台侧诊断。连续两次出现限位/硬件类错误且离目标仍很远时，App 会暂停新的 GOTO，提示先用手控把赤道仪移出危险位置。也可以手动刷新或随时取消 GOTO。
+5. 未连接时只能显示目标；连接后可以显示并 GOTO。GOTO 进行中同一个按钮会变为“取消”。
+6. GOTO 到位后，如果目镜中仍有小偏差，用手控把目标居中，然后点击“同步”。App 会发送 `:CM#`；保存过两星/三星模型后，App 会把同步后的残差加入多点修正模型，后续 GOTO 会自动参考这些点。
+7. GOTO、校准、同步等会移动赤道仪的操作会自动把星图时间恢复为现在，避免把历史/未来时刻的行星或月亮位置发给赤道仪。
+8. 低空目标只做遮挡/限位提示，不会被 App 硬性阻止。
+9. GOTO 后 App 会自动轮询状态；控制器报告空闲时还会读取当前 RA/Dec，确认接近目标后才释放为可发起下一次 GOTO。极区目标和机械限位/停止场景会用更宽的极区阈值和静止检测兜底；如果停住但离目标很远，日志会记录 OnStep `:GE#` 与架台侧诊断。连续两次出现限位/硬件类错误且离目标仍很远时，App 会暂停新的 GOTO，提示先用手控把赤道仪移出危险位置。也可以手动刷新或随时取消 GOTO。
 
 ### 5. 安全与 GOTO 状态
 
@@ -174,15 +176,6 @@ powershell -ExecutionPolicy Bypass -File .\scripts\preview-app.ps1
 ## 校准流程
 
 校准入口位于“手控”页上方的“架台校准”区域。当前流程面向目视使用，不依赖相机解析。OnStepX 经纬仪模式不需要对极轴，App 会隐藏极轴精调流程。
-
-### 快速同步
-
-适合只想让当前区域的 GOTO 大致可用：
-
-1. 选择“快速同步”。
-2. 选择一颗亮星作为同步目标。
-3. 用方向键把这颗星移动到目镜中心。
-4. 点击“居中后同步”。
 
 ### 两星/三星校准
 
@@ -199,7 +192,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\preview-app.ps1
 7. 对剩余校准星重复以上步骤。
 8. 接受最后一颗星后 App 会自动请求保存模型。
 
-如果接受后 App 检测到该星仍偏离目标超过 `1°`，会阻止继续保存模型并提示这颗星可能没有居中。OnStep 已经接收了该星，App 不能安全地只重做这一颗；请点击“结束”后重新开始本轮校准。
+如果接受后 App 检测到该星仍偏离目标超过 `1°`，会提示这颗星可能没有完全居中，但不会阻止继续校准或保存模型。若现场判断这颗星确实没居中，可点击“结束”后重新开始本轮校准。
 
 ### 极轴精调
 
@@ -247,6 +240,8 @@ MountBehave 为控制 APK 体积使用筛选后的离线数据：
 
 ## 开发信息
 
+本项目的代码实现、调试分析、文档整理和发布准备主要由 OpenAI Codex 与 Anthropic Claude Code 辅助完成，并结合实机日志和人工测试反馈迭代。项目仍由维护者负责最终验证、发布和赤道仪实机安全判断。
+
 项目内已配置便携工具链：
 
 - JDK 17
@@ -277,6 +272,16 @@ powershell -ExecutionPolicy Bypass -File .\scripts\mock-onstep.ps1
 
 ## 版本说明
 
+### v0.2.4
+
+- 星图新增“同步”按钮：GOTO 到位后手控居中并同步当前位置，App 会发送 `:CM#`。
+- 保存两星/三星模型后，星图同步会记录 `:CM#` 之后 OnStep 仍未吸收的残差，并用最多 30 个局部校正点在后续 GOTO 前渐进式修正目标坐标。
+- 星图 GOTO 和取消合并为同一个按钮：移动中显示“取消”，到位或停止后恢复为“Goto 目标”。
+- 修复星图同步太快发送 `:CM#` 导致 OnStep 返回 `E8` 的问题；同步前现在会等待 `:D#` 空闲且 RA/Dec 稳定。
+- 修复手控移动/停止过程中部分 WiFi 抖动被误判为断开的情况，停止命令加入短重试和兜底全停止。
+- 校准残差超过 `1°` 时只提示风险，不再强制用户重开本轮校准。
+- Android 版本号升至 `versionName 0.2.4` / `versionCode 6`。
+
 ### v0.2.3
 
 - 修复北天极附近 GOTO 到位后仍卡在“移动中”的问题：极区目标使用动态到位阈值，固件空闲且位置稳定时会释放本地 GOTO 状态。
@@ -286,7 +291,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\mock-onstep.ps1
 - 星图加入 NASA SVS 银河背景图，替代简化银河轮廓；亮度略增，仍以低透明度显示。
 - 星图“重置视图”改为“时间”弹窗，可设置星图时间或一键回到现在；会移动赤道仪的操作自动回到当前时刻。
 - 压缩两星/三星校准 UI，默认进入两星校准；最后一颗星接受后自动保存模型；极轴精调说明与按钮关系更明确。
-- 校准接受后会检查残差，超过 `1°` 时阻止保存坏模型并提示重新开始；WiFi 短暂断开后会尽量保留未完成的校准会话。
+- 校准接受后会检查残差，超过 `1°` 时提示可能未居中，但仍继续后续校准和自动保存；WiFi 短暂断开后会尽量保留未完成的校准会话。
 - 平板横竖屏旋转时不再销毁 Activity 和断开 OnStep 连接，只重建界面布局。
 - Android 版本号升至 `versionName 0.2.3` / `versionCode 5`。
 
