@@ -29,7 +29,7 @@ public final class SkyChartView extends View {
     private static final double MAX_VIEW_ALTITUDE_DEGREES = 88.0;
     private static final int MILKY_WAY_MESH_COLUMNS = 96;
     private static final int MILKY_WAY_MESH_ROWS = 48;
-    private static final int MILKY_WAY_ALPHA = 64;
+    private static final int MILKY_WAY_ALPHA = 85;
 
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint milkyWayPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG | Paint.DITHER_FLAG);

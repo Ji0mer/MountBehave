@@ -213,6 +213,12 @@ public final class MainActivity extends Activity {
     private Button trackingToggleButton;
     private TextView trackingStatusText;
     private TextView safetyStatusText;
+    private TextView deviceConnectionStatusText;
+    private TextView deviceFlowStatusText;
+    private TextView deviceTrackingStatusText;
+    private TextView deviceGotoStatusText;
+    private TextView deviceParkStatusText;
+    private TextView deviceSafetyStatusText;
     private Button emergencyStopButton;
     private Button safetyCancelGotoButton;
     private Button gotoStatusRefreshButton;
@@ -780,9 +786,7 @@ public final class MainActivity extends Activity {
     private LinearLayout createSettingsPage() {
         LinearLayout page = new LinearLayout(this);
         page.setOrientation(LinearLayout.VERTICAL);
-        page.addView(sectionTitleWithHelp(R.string.firmware_settings_section, R.string.firmware_settings_intro), matchWrap());
-        page.addView(createFirmwareSettingsPanel(), matchWrap());
-
+        page.addView(createDeviceStatusPanel(), matchWrap());
         addAdvancedSettingsSections(page);
         return page;
     }
@@ -826,12 +830,44 @@ public final class MainActivity extends Activity {
     }
 
     private void addAdvancedSettingsSections(LinearLayout parent) {
-        parent.addView(sectionTitleWithHelp(R.string.safety_section, R.string.safety_intro), matchWrapWithTopMargin(8));
+        parent.addView(sectionTitleWithHelp(R.string.safety_section, R.string.safety_intro), matchWrapWithTopMargin(12));
         parent.addView(createSafetyPanel(), matchWrap());
-        parent.addView(sectionTitleWithHelp(R.string.small_bodies_section, R.string.small_bodies_intro), matchWrapWithTopMargin(8));
+        parent.addView(sectionTitleWithHelp(R.string.firmware_settings_section, R.string.firmware_settings_intro), matchWrapWithTopMargin(12));
+        parent.addView(createFirmwareSettingsPanel(), matchWrap());
+        parent.addView(sectionTitleWithHelp(R.string.small_bodies_section, R.string.small_bodies_intro), matchWrapWithTopMargin(12));
         parent.addView(createSmallBodiesPanel(), matchWrap());
-        parent.addView(sectionTitle(R.string.command_log_section), matchWrapWithTopMargin(8));
+        parent.addView(sectionTitle(R.string.command_log_section), matchWrapWithTopMargin(12));
         parent.addView(createCommandLogPanel(), matchWrap());
+    }
+
+    private View createDeviceStatusPanel() {
+        LinearLayout panel = card();
+        panel.addView(panelTitle(R.string.device_status_section), matchWrap());
+
+        deviceConnectionStatusText = statusValueText();
+        deviceTrackingStatusText = statusValueText();
+        deviceFlowStatusText = statusValueText();
+        deviceGotoStatusText = statusValueText();
+        deviceParkStatusText = statusValueText();
+        deviceSafetyStatusText = statusValueText();
+
+        LinearLayout firstRow = metricRow();
+        firstRow.addView(statusMetric(R.string.device_status_connection_label, deviceConnectionStatusText), weightWrap(1f));
+        firstRow.addView(statusMetric(R.string.device_status_tracking_label, deviceTrackingStatusText), weightWrapWithLeftMargin(1f, 8));
+        panel.addView(firstRow, matchWrapWithTopMargin(8));
+
+        LinearLayout secondRow = metricRow();
+        secondRow.addView(statusMetric(R.string.device_status_flow_label, deviceFlowStatusText), weightWrap(1f));
+        secondRow.addView(statusMetric(R.string.device_status_goto_label, deviceGotoStatusText), weightWrapWithLeftMargin(1f, 8));
+        panel.addView(secondRow, matchWrapWithTopMargin(8));
+
+        LinearLayout thirdRow = metricRow();
+        thirdRow.addView(statusMetric(R.string.device_status_park_label, deviceParkStatusText), weightWrap(1f));
+        thirdRow.addView(statusMetric(R.string.device_status_safety_label, deviceSafetyStatusText), weightWrapWithLeftMargin(1f, 8));
+        panel.addView(thirdRow, matchWrapWithTopMargin(8));
+
+        updateDeviceStatusPanel();
+        return panel;
     }
 
     private View createFirmwareSettingsPanel() {
@@ -928,28 +964,45 @@ public final class MainActivity extends Activity {
     private View createSafetyPanel() {
         LinearLayout panel = card();
 
-        LinearLayout stopActions = new LinearLayout(this);
-        stopActions.setOrientation(LinearLayout.HORIZONTAL);
-        stopActions.setGravity(Gravity.CENTER_VERTICAL);
-
         emergencyStopButton = actionButton(R.string.emergency_stop);
         emergencyStopButton.setTextColor(Color.WHITE);
         emergencyStopButton.setTypeface(Typeface.DEFAULT_BOLD);
         emergencyStopButton.setBackground(createStopButtonBackground());
         emergencyStopButton.setOnClickListener(v -> emergencyStop());
-        stopActions.addView(emergencyStopButton, weightWrap(1f));
+        panel.addView(emergencyStopButton, matchWrap());
 
-        nightModeButton = actionButton(nightModeEnabled ? R.string.night_mode_off : R.string.night_mode_on);
+        TextView emergencyHint = bodyText(R.string.emergency_stop_hint);
+        emergencyHint.setTextSize(13);
+        emergencyHint.setPadding(0, dp(5), 0, dp(8));
+        panel.addView(emergencyHint, matchWrap());
+
+        LinearLayout nightModeRow = new LinearLayout(this);
+        nightModeRow.setOrientation(LinearLayout.HORIZONTAL);
+        nightModeRow.setGravity(Gravity.CENTER_VERTICAL);
+        nightModeRow.setPadding(0, dp(2), 0, dp(6));
+
+        TextView nightModeLabel = labelText(R.string.night_mode_label);
+        nightModeLabel.setTypeface(Typeface.DEFAULT_BOLD);
+        nightModeRow.addView(nightModeLabel, weightWrap(1f));
+
+        nightModeButton = actionButton(nightModeEnabled
+                ? R.string.night_mode_enabled_short
+                : R.string.night_mode_disabled_short);
         nightModeButton.setOnClickListener(v -> toggleNightMode());
         nightModeButton.setTextColor(Color.WHITE);
         nightModeButton.setBackground(createNightModeButtonBackground());
-        stopActions.addView(nightModeButton, weightWrapWithLeftMargin(1f, 8));
-        panel.addView(stopActions, matchWrap());
+        nightModeRow.addView(nightModeButton, new LinearLayout.LayoutParams(dp(96), dp(40)));
+        panel.addView(nightModeRow, matchWrap());
+
+        TextView gotoLabel = labelText(R.string.safety_goto_label);
+        gotoLabel.setTypeface(Typeface.DEFAULT_BOLD);
+        gotoLabel.setPadding(0, dp(4), 0, 0);
+        panel.addView(gotoLabel, matchWrap());
 
         LinearLayout gotoActions = new LinearLayout(this);
         gotoActions.setOrientation(LinearLayout.HORIZONTAL);
         gotoActions.setGravity(Gravity.CENTER_VERTICAL);
-        gotoActions.setPadding(0, dp(6), 0, 0);
+        gotoActions.setPadding(0, dp(5), 0, 0);
 
         safetyCancelGotoButton = actionButton(R.string.goto_cancel);
         safetyCancelGotoButton.setOnClickListener(v -> cancelGoto());
@@ -957,13 +1010,19 @@ public final class MainActivity extends Activity {
 
         gotoStatusRefreshButton = actionButton(R.string.goto_refresh_status);
         gotoStatusRefreshButton.setOnClickListener(v -> refreshGotoStatus());
+        gotoStatusRefreshButton.setBackground(createSecondaryButtonBackground(true));
         gotoActions.addView(gotoStatusRefreshButton, weightWrapWithLeftMargin(1f, 8));
         panel.addView(gotoActions, matchWrap());
+
+        TextView parkLabel = labelText(R.string.safety_park_label);
+        parkLabel.setTypeface(Typeface.DEFAULT_BOLD);
+        parkLabel.setPadding(0, dp(10), 0, 0);
+        panel.addView(parkLabel, matchWrap());
 
         LinearLayout parkActions = new LinearLayout(this);
         parkActions.setOrientation(LinearLayout.HORIZONTAL);
         parkActions.setGravity(Gravity.CENTER_VERTICAL);
-        parkActions.setPadding(0, dp(6), 0, 0);
+        parkActions.setPadding(0, dp(5), 0, 0);
 
         parkButton = actionButton(R.string.park_mount);
         parkButton.setOnClickListener(v -> parkMount());
@@ -971,11 +1030,11 @@ public final class MainActivity extends Activity {
 
         unparkButton = actionButton(R.string.unpark_mount);
         unparkButton.setOnClickListener(v -> unparkMount());
-        parkActions.addView(unparkButton, weightWrapWithLeftMargin(1f, 8));
+        parkActions.addView(unparkButton, weightWrap(1f));
         panel.addView(parkActions, matchWrap());
 
         safetyStatusText = bodyText(R.string.safety_status_idle);
-        safetyStatusText.setPadding(0, dp(8), 0, 0);
+        safetyStatusText.setPadding(0, dp(10), 0, 0);
         if (safetyStatusMessage != null) {
             safetyStatusText.setText(safetyStatusMessage);
         }
@@ -999,11 +1058,11 @@ public final class MainActivity extends Activity {
         logScrollView.setFillViewport(false);
         logText = bodyText(R.string.log_empty);
         logText.setTextColor(bodyTextColor());
-        logText.setMinLines(8);
+        logText.setMinLines(5);
         logText.setGravity(Gravity.START);
         logText.setTextIsSelectable(true);
         logScrollView.addView(logText, matchWrap());
-        panel.addView(logScrollView, matchFixedHeight(180));
+        panel.addView(logScrollView, matchFixedHeight(132));
 
         logActions = new LinearLayout(this);
         logActions.setOrientation(LinearLayout.HORIZONTAL);
@@ -1201,6 +1260,8 @@ public final class MainActivity extends Activity {
 
         smallBodyClearUserButton = actionButton(R.string.small_bodies_clear_user);
         smallBodyClearUserButton.setOnClickListener(v -> clearUserSmallBodies());
+        smallBodyClearUserButton.setTextColor(nightModeEnabled ? Color.rgb(255, 145, 145) : Color.rgb(248, 113, 113));
+        smallBodyClearUserButton.setBackground(createSubtleDangerButtonBackground(true));
         LinearLayout.LayoutParams clearParams = matchWrap();
         clearParams.topMargin = dp(8);
         panel.addView(smallBodyClearUserButton, clearParams);
@@ -5811,6 +5872,85 @@ public final class MainActivity extends Activity {
         return selectedFirmwareMode == FirmwareMode.ONSTEPX && selectedMountMode == MountMode.ALTAZ;
     }
 
+    private void updateDeviceStatusPanel() {
+        if (deviceConnectionStatusText == null) {
+            return;
+        }
+        deviceConnectionStatusText.setText(connected
+                ? getString(R.string.device_status_connected)
+                : getString(R.string.device_status_disconnected));
+        deviceConnectionStatusText.setTextColor(connected ? statusGoodColor() : mutedTextColor());
+
+        deviceFlowStatusText.setText(deviceFlowStatusLabel());
+        deviceFlowStatusText.setTextColor(titleTextColor());
+
+        deviceTrackingStatusText.setText(deviceTrackingStatusLabel());
+        deviceTrackingStatusText.setTextColor(trackingEnabled ? selectedAccentColor() : mutedTextColor());
+
+        deviceGotoStatusText.setText(deviceGotoStatusLabel());
+        deviceGotoStatusText.setTextColor(gotoInProgress || gotoRecoveryRequired ? statusWarningColor() : titleTextColor());
+
+        deviceParkStatusText.setText(parked
+                ? getString(R.string.device_status_parked)
+                : getString(R.string.device_status_unparked));
+        deviceParkStatusText.setTextColor(parked ? statusWarningColor() : titleTextColor());
+
+        deviceSafetyStatusText.setText(deviceSafetyStatusLabel());
+        deviceSafetyStatusText.setTextColor(connected && !busy ? statusGoodColor() : mutedTextColor());
+    }
+
+    private String deviceFlowStatusLabel() {
+        if (selectedFirmwareMode == FirmwareMode.ONSTEP) {
+            return getString(R.string.device_status_flow_onstep);
+        }
+        if (selectedMountMode == MountMode.ALTAZ) {
+            return getString(R.string.device_status_flow_onstepx_altaz);
+        }
+        return getString(R.string.device_status_flow_onstepx_equatorial);
+    }
+
+    private String deviceTrackingStatusLabel() {
+        if (!trackingEnabled) {
+            return getString(R.string.device_status_tracking_off);
+        }
+        return getString(
+                R.string.device_status_tracking_on,
+                getString(selectedTrackingRate.labelRes),
+                trackingModeLabel(trackingUsingDualAxis)
+        );
+    }
+
+    private String deviceGotoStatusLabel() {
+        if (gotoRecoveryRequired) {
+            return getString(R.string.device_status_goto_recovery);
+        }
+        if (gotoInProgress) {
+            String target = activeGotoTarget == null
+                    ? getString(R.string.device_status_goto_unknown_target)
+                    : activeGotoTarget.label;
+            return getString(R.string.device_status_goto_running, target);
+        }
+        return getString(R.string.device_status_goto_idle);
+    }
+
+    private String deviceSafetyStatusLabel() {
+        if (!connected) {
+            return getString(R.string.device_status_safety_offline);
+        }
+        if (busy) {
+            return getString(R.string.device_status_safety_busy);
+        }
+        return getString(R.string.device_status_safety_ready);
+    }
+
+    private int statusGoodColor() {
+        return nightModeEnabled ? Color.rgb(255, 145, 145) : Color.rgb(34, 197, 94);
+    }
+
+    private int statusWarningColor() {
+        return nightModeEnabled ? Color.rgb(255, 120, 120) : Color.rgb(245, 158, 11);
+    }
+
     private void updateFirmwareSettingsViews() {
         if (mountModeContainer != null) {
             mountModeContainer.setVisibility(selectedFirmwareMode == FirmwareMode.ONSTEPX ? View.VISIBLE : View.GONE);
@@ -5836,6 +5976,7 @@ public final class MainActivity extends Activity {
                 firmwareSettingsStatusText.setText(R.string.firmware_settings_status_onstepx_equatorial);
             }
         }
+        updateDeviceStatusPanel();
     }
 
     private void requestMountModeChange(MountMode requestedMode) {
@@ -6599,8 +6740,8 @@ public final class MainActivity extends Activity {
     private LinearLayout card() {
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
-        panel.setPadding(dp(10), dp(10), dp(10), dp(10));
-        panel.setBackgroundColor(cardBackgroundColor());
+        panel.setPadding(dp(14), dp(14), dp(14), dp(14));
+        panel.setBackground(createCardBackground());
         return panel;
     }
 
@@ -6626,6 +6767,49 @@ public final class MainActivity extends Activity {
         return textView;
     }
 
+    private TextView panelTitle(int textRes) {
+        TextView textView = titleText(textRes, 17);
+        textView.setTypeface(Typeface.DEFAULT_BOLD);
+        textView.setIncludeFontPadding(false);
+        return textView;
+    }
+
+    private TextView statusValueText() {
+        TextView textView = new TextView(this);
+        textView.setTextSize(15);
+        textView.setTypeface(Typeface.DEFAULT_BOLD);
+        textView.setTextColor(titleTextColor());
+        textView.setGravity(Gravity.START);
+        textView.setSingleLine(false);
+        textView.setIncludeFontPadding(false);
+        return textView;
+    }
+
+    private LinearLayout metricRow() {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        return row;
+    }
+
+    private View statusMetric(int labelRes, TextView valueText) {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(10), dp(9), dp(10), dp(9));
+        box.setBackground(createMetricBackground());
+
+        TextView label = bodyText(labelRes);
+        label.setTextColor(mutedTextColor());
+        label.setTextSize(12);
+        label.setIncludeFontPadding(false);
+        box.addView(label, matchWrap());
+
+        LinearLayout.LayoutParams valueParams = matchWrap();
+        valueParams.topMargin = dp(5);
+        box.addView(valueText, valueParams);
+        return box;
+    }
+
     private LinearLayout sectionTitleWithHelp(int titleRes, int helpRes) {
         LinearLayout row = titleWithHelp(titleRes, helpRes, 16);
         row.setPadding(0, 0, 0, dp(4));
@@ -6649,19 +6833,19 @@ public final class MainActivity extends Activity {
 
         Button help = new Button(this);
         help.setAllCaps(false);
-        help.setText("?");
-        help.setTextSize(13);
+        help.setText("i");
+        help.setTextSize(11);
         help.setTypeface(Typeface.DEFAULT_BOLD);
-        help.setTextColor(selectedAccentColor());
+        help.setTextColor(labelTextColor());
         help.setMinWidth(0);
         help.setMinHeight(0);
         help.setMinimumWidth(0);
         help.setMinimumHeight(0);
-        help.setPadding(0, 0, 0, dp(1));
+        help.setPadding(0, 0, 0, 0);
         help.setContentDescription(getString(R.string.help_button_content_description));
         help.setBackground(createHelpButtonBackground());
         help.setOnClickListener(v -> showHelpDialog(titleRes, helpRes));
-        row.addView(help, squareParams(30));
+        row.addView(help, squareParams(24));
         return row;
     }
 
@@ -6716,12 +6900,12 @@ public final class MainActivity extends Activity {
     }
 
     private void compactButton(Button button) {
-        button.setTextSize(14);
-        button.setMinHeight(dp(40));
-        button.setMinimumHeight(dp(40));
+        button.setTextSize(15);
+        button.setMinHeight(dp(44));
+        button.setMinimumHeight(dp(44));
         button.setMinWidth(0);
         button.setMinimumWidth(0);
-        button.setPadding(dp(6), 0, dp(6), 0);
+        button.setPadding(dp(10), 0, dp(10), 0);
         button.setTextColor(titleTextColor());
         button.setBackground(createActionButtonBackground(true));
     }
@@ -6848,6 +7032,23 @@ public final class MainActivity extends Activity {
         return params;
     }
 
+    private GradientDrawable createCardBackground() {
+        GradientDrawable drawable = new GradientDrawable();
+        drawable.setShape(GradientDrawable.RECTANGLE);
+        drawable.setColor(cardBackgroundColor());
+        drawable.setStroke(dp(1), nightModeEnabled ? Color.rgb(70, 18, 18) : Color.rgb(37, 48, 68));
+        drawable.setCornerRadius(dp(8));
+        return drawable;
+    }
+
+    private GradientDrawable createMetricBackground() {
+        GradientDrawable drawable = new GradientDrawable();
+        drawable.setShape(GradientDrawable.RECTANGLE);
+        drawable.setColor(nightModeEnabled ? Color.rgb(30, 6, 6) : Color.rgb(15, 23, 42));
+        drawable.setCornerRadius(dp(8));
+        return drawable;
+    }
+
     private GradientDrawable createDirectionButtonBackground(boolean enabled) {
         GradientDrawable drawable = new GradientDrawable();
         drawable.setShape(GradientDrawable.RECTANGLE);
@@ -6869,17 +7070,20 @@ public final class MainActivity extends Activity {
     private GradientDrawable createStopButtonBackground(boolean enabled) {
         GradientDrawable drawable = new GradientDrawable();
         drawable.setShape(GradientDrawable.RECTANGLE);
-        drawable.setColor(enabled ? Color.rgb(139, 0, 0) : Color.rgb(190, 90, 90));
-        drawable.setStroke(dp(1), enabled ? Color.rgb(90, 0, 0) : Color.rgb(150, 70, 70));
-        drawable.setCornerRadius(0);
+        if (enabled) {
+            drawable.setColor(nightModeEnabled ? Color.rgb(127, 29, 29) : Color.rgb(220, 38, 38));
+        } else {
+            drawable.setColor(nightModeEnabled ? Color.rgb(85, 30, 30) : Color.rgb(127, 73, 73));
+        }
+        drawable.setCornerRadius(dp(12));
         return drawable;
     }
 
     private GradientDrawable createHelpButtonBackground() {
         GradientDrawable drawable = new GradientDrawable();
         drawable.setShape(GradientDrawable.OVAL);
-        drawable.setColor(nightModeEnabled ? Color.rgb(48, 10, 10) : Color.rgb(30, 41, 59));
-        drawable.setStroke(dp(1), selectedAccentColor());
+        drawable.setColor(nightModeEnabled ? Color.rgb(30, 6, 6) : Color.rgb(15, 23, 42));
+        drawable.setStroke(dp(1), nightModeEnabled ? Color.rgb(90, 35, 35) : Color.rgb(51, 65, 85));
         return drawable;
     }
 
@@ -6911,13 +7115,13 @@ public final class MainActivity extends Activity {
         GradientDrawable drawable = new GradientDrawable();
         drawable.setShape(GradientDrawable.RECTANGLE);
         if (nightModeEnabled) {
-            drawable.setColor(Color.rgb(95, 16, 16));
-            drawable.setStroke(dp(1), Color.rgb(255, 98, 98));
+            drawable.setColor(Color.rgb(127, 29, 29));
+            drawable.setStroke(dp(1), Color.rgb(220, 38, 38));
         } else {
-            drawable.setColor(Color.rgb(59, 130, 246));
-            drawable.setStroke(dp(1), Color.rgb(147, 197, 253));
+            drawable.setColor(Color.rgb(22, 78, 99));
+            drawable.setStroke(dp(1), Color.rgb(56, 189, 248));
         }
-        drawable.setCornerRadius(dp(4));
+        drawable.setCornerRadius(dp(18));
         return drawable;
     }
 
@@ -6931,7 +7135,7 @@ public final class MainActivity extends Activity {
             drawable.setColor(enabled ? Color.rgb(15, 23, 42) : Color.rgb(11, 18, 32));
             drawable.setStroke(dp(1), enabled ? Color.rgb(51, 65, 85) : Color.rgb(30, 41, 59));
         }
-        drawable.setCornerRadius(dp(4));
+        drawable.setCornerRadius(dp(8));
         return drawable;
     }
 
@@ -6939,13 +7143,41 @@ public final class MainActivity extends Activity {
         GradientDrawable drawable = new GradientDrawable();
         drawable.setShape(GradientDrawable.RECTANGLE);
         if (nightModeEnabled) {
-            drawable.setColor(enabled ? Color.rgb(48, 10, 10) : Color.rgb(32, 7, 7));
-            drawable.setStroke(dp(1), enabled ? Color.rgb(120, 45, 45) : Color.rgb(85, 30, 30));
+            drawable.setColor(enabled ? Color.rgb(48, 10, 10) : Color.rgb(30, 6, 6));
+            drawable.setStroke(dp(1), enabled ? Color.rgb(95, 32, 32) : Color.rgb(70, 18, 18));
         } else {
-            drawable.setColor(enabled ? Color.rgb(30, 41, 59) : Color.rgb(15, 23, 42));
-            drawable.setStroke(dp(1), enabled ? Color.rgb(71, 85, 105) : Color.rgb(30, 41, 59));
+            drawable.setColor(enabled ? Color.rgb(30, 41, 59) : Color.rgb(17, 24, 39));
+            drawable.setStroke(dp(1), enabled ? Color.rgb(51, 65, 85) : Color.rgb(37, 48, 68));
         }
-        drawable.setCornerRadius(dp(4));
+        drawable.setCornerRadius(dp(12));
+        return drawable;
+    }
+
+    private GradientDrawable createSecondaryButtonBackground(boolean enabled) {
+        GradientDrawable drawable = new GradientDrawable();
+        drawable.setShape(GradientDrawable.RECTANGLE);
+        if (nightModeEnabled) {
+            drawable.setColor(enabled ? Color.rgb(32, 7, 7) : Color.rgb(24, 6, 6));
+            drawable.setStroke(dp(1), enabled ? Color.rgb(85, 30, 30) : Color.rgb(70, 18, 18));
+        } else {
+            drawable.setColor(enabled ? Color.rgb(15, 23, 42) : Color.rgb(11, 18, 32));
+            drawable.setStroke(dp(1), enabled ? Color.rgb(51, 65, 85) : Color.rgb(30, 41, 59));
+        }
+        drawable.setCornerRadius(dp(12));
+        return drawable;
+    }
+
+    private GradientDrawable createSubtleDangerButtonBackground(boolean enabled) {
+        GradientDrawable drawable = new GradientDrawable();
+        drawable.setShape(GradientDrawable.RECTANGLE);
+        if (nightModeEnabled) {
+            drawable.setColor(enabled ? Color.rgb(30, 6, 6) : Color.rgb(24, 6, 6));
+            drawable.setStroke(dp(1), enabled ? Color.rgb(127, 29, 29) : Color.rgb(70, 18, 18));
+        } else {
+            drawable.setColor(enabled ? Color.rgb(24, 24, 34) : Color.rgb(15, 23, 42));
+            drawable.setStroke(dp(1), enabled ? Color.rgb(127, 29, 29) : Color.rgb(51, 65, 85));
+        }
+        drawable.setCornerRadius(dp(12));
         return drawable;
     }
 
@@ -7010,11 +7242,13 @@ public final class MainActivity extends Activity {
         if (manualStatusText != null) {
             manualStatusText.setText(text);
         }
+        updateDeviceStatusPanel();
     }
 
     private void setGotoStatus(String text) {
         gotoStatusMessage = text;
         updateGotoStatusViews();
+        updateDeviceStatusPanel();
     }
 
     private void updateGotoStatusViews() {
@@ -7026,6 +7260,7 @@ public final class MainActivity extends Activity {
     private void setSafetyStatus(String text) {
         safetyStatusMessage = text;
         updateSafetyStatusViews();
+        updateDeviceStatusPanel();
     }
 
     private void updateSafetyStatusViews() {
@@ -7124,10 +7359,16 @@ public final class MainActivity extends Activity {
             skySyncButton.setEnabled(connected && !busy && !gotoInProgress && selectedSkyTarget != null);
         }
         if (safetyCancelGotoButton != null) {
-            safetyCancelGotoButton.setEnabled(connected && !busy && gotoInProgress);
+            boolean enabled = connected && !busy && gotoInProgress;
+            safetyCancelGotoButton.setEnabled(enabled);
+            safetyCancelGotoButton.setAlpha(enabled ? 1.0f : 0.55f);
+            safetyCancelGotoButton.setBackground(createActionButtonBackground(enabled));
         }
         if (gotoStatusRefreshButton != null) {
-            gotoStatusRefreshButton.setEnabled(connected && !busy);
+            boolean enabled = connected && !busy;
+            gotoStatusRefreshButton.setEnabled(enabled);
+            gotoStatusRefreshButton.setAlpha(enabled ? 1.0f : 0.55f);
+            gotoStatusRefreshButton.setBackground(createSecondaryButtonBackground(enabled));
         }
         if (floatingStopButton != null) {
             floatingStopButton.setEnabled(connected);
@@ -7140,13 +7381,23 @@ public final class MainActivity extends Activity {
             emergencyStopButton.setTextColor(Color.WHITE);
         }
         if (parkButton != null) {
-            parkButton.setEnabled(connected && !busy);
+            boolean enabled = connected && !busy;
+            parkButton.setEnabled(enabled);
+            parkButton.setAlpha(enabled ? 1.0f : 0.55f);
+            parkButton.setBackground(createActionButtonBackground(enabled));
+            parkButton.setVisibility(parked ? View.GONE : View.VISIBLE);
         }
         if (unparkButton != null) {
-            unparkButton.setEnabled(connected && !busy);
+            boolean enabled = connected && !busy;
+            unparkButton.setEnabled(enabled);
+            unparkButton.setAlpha(enabled ? 1.0f : 0.55f);
+            unparkButton.setBackground(createActionButtonBackground(enabled));
+            unparkButton.setVisibility(parked ? View.VISIBLE : View.GONE);
         }
         if (nightModeButton != null) {
-            nightModeButton.setText(nightModeEnabled ? R.string.night_mode_off : R.string.night_mode_on);
+            nightModeButton.setText(nightModeEnabled
+                    ? R.string.night_mode_enabled_short
+                    : R.string.night_mode_disabled_short);
             nightModeButton.setTextColor(Color.WHITE);
             nightModeButton.setBackground(createNightModeButtonBackground());
         }
@@ -7210,6 +7461,7 @@ public final class MainActivity extends Activity {
         }
         updateTrackingViews();
         updateFirmwareSettingsViews();
+        updateDeviceStatusPanel();
     }
 
     private void updateObserverViews() {
@@ -7602,6 +7854,7 @@ public final class MainActivity extends Activity {
                 ));
             }
         }
+        updateDeviceStatusPanel();
     }
 
     private void styleTrackingRateButton(Button button, TrackingRate rate) {
