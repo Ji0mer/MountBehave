@@ -1,14 +1,14 @@
-# MountBehave 测试人员使用教学
+﻿# MountBehave 测试人员使用教学
 
-适用版本：`v0.2.4`
+适用版本：`v0.2.5`
 
 本文面向参与实机测试的用户，目标是让测试人员可以独立完成安装、连接、手控、星图 GOTO、校准、日志导出和问题反馈。MountBehave 当前仍是测试版，不是 OnStep 官方 App，也不适合无人值守控制。
 
 ## 本版测试重点
 
-`v0.2.4` 的 APK 通过 GitHub Release 发布，不再放在仓库代码目录里。测试人员应从 Release 页面下载附件 `MountBehave-v0.2.4.apk`：
+`v0.2.5` 的 APK 通过 GitHub Release 发布，不再放在仓库代码目录里。测试人员应从 Release 页面下载附件 `MountBehave-v0.2.5.apk`：
 
-<https://github.com/Ji0mer/MountBehave/releases/tag/v0.2.4>
+<https://github.com/Ji0mer/MountBehave/releases/tag/v0.2.5>
 
 本版请重点观察这些变化：
 
@@ -36,7 +36,7 @@
 测试人员需要准备：
 
 - 一台 Android 手机或平板，建议 Android 8.0 或更新版本。
-- 从 GitHub Release 下载的 `MountBehave-v0.2.4.apk`。
+- 从 GitHub Release 下载的 `MountBehave-v0.2.5.apk`。
 - 一台可通过 WiFi TCP 控制的 OnStep / OnStepX 赤道仪。
 - 赤道仪 WiFi 名称、密码、IP 和端口。默认常见值是 `192.168.0.1:9999`。
 - 观测地经纬度，或允许手机使用定位权限。
@@ -54,8 +54,8 @@
 
 ### 从 GitHub Release 安装
 
-1. 打开 Release 页面：<https://github.com/Ji0mer/MountBehave/releases/tag/v0.2.4>。
-2. 在 Assets / 资产中下载 `MountBehave-v0.2.4.apk`。
+1. 打开 Release 页面：<https://github.com/Ji0mer/MountBehave/releases/tag/v0.2.5>。
+2. 在 Assets / 资产中下载 `MountBehave-v0.2.5.apk`。
 3. 打开 APK。
 4. 如果系统提示“禁止安装未知来源应用”，允许当前浏览器或文件管理器安装未知来源应用。
 5. 安装完成后打开 MountBehave。
@@ -67,7 +67,7 @@
 如果使用 ADB：
 
 ```powershell
-adb install -r MountBehave-v0.2.4.apk
+adb install -r MountBehave-v0.2.5.apk
 ```
 
 `-r` 表示覆盖安装，通常可以保留 App 数据。若测试前需要完全清空设置和日志，可以在系统设置里清除 MountBehave 的应用数据。
@@ -236,13 +236,13 @@ adb install -r MountBehave-v0.2.4.apk
 4. 再点击 GOTO。
 5. 观察是否能正常发送并移动到目标 B。
 
-如果状态显示“移动中”但赤道仪已经不动，先等待 10-20 秒。v0.2.4 会额外读取 RA/Dec 并判断是否到位或静止。如果仍无法恢复，点击“取消”，然后导出日志反馈。
+如果状态显示“移动中”但赤道仪已经不动，先等待 10-20 秒。v0.2.5 会额外读取 RA/Dec 并判断是否到位或静止。如果仍无法恢复，点击“取消”，然后导出日志反馈。
 
 如果状态提示“GOTO：需手控恢复”，说明 App 连续检测到赤道仪已停住、离目标仍很远，并且 OnStep 报告限位或硬件类错误。此时不要继续反复点 GOTO，先用手控低速把赤道仪移出限位/危险位置，确认方向键可以正常移动后再重新选择目标。
 
 ### 北天极附近 GOTO
 
-v0.2.4 仍包含北天极附近目标卡住问题的修复。测试这类目标时请更谨慎：
+v0.2.5 仍包含北天极附近目标卡住问题的修复。测试这类目标时请更谨慎：
 
 - 确认镜筒和线缆不会接近极限。
 - 先用低速或中速熟悉设备行为。
@@ -371,7 +371,7 @@ mountbehave-20260501.txt
 反馈问题时请尽量包含：
 
 ```text
-App 版本：v0.2.4
+App 版本：v0.2.5
 手机/平板型号：
 Android 版本：
 赤道仪型号：
@@ -425,7 +425,7 @@ App 当时显示的状态：
 
 ### GOTO 显示移动中但赤道仪已经不动
 
-等待几次轮询。v0.2.4 会用 RA/Dec 到位复核和静止检测兜底。如果仍无法恢复，点击“取消”，导出日志。
+等待几次轮询。v0.2.5 会用 RA/Dec 到位复核和静止检测兜底。如果仍无法恢复，点击“取消”，导出日志。
 
 ### GOTO 提示需手控恢复
 
@@ -433,7 +433,7 @@ App 当时显示的状态：
 
 ### 平板旋转后连接断开
 
-v0.2.4 已修复这个问题。若仍复现，请记录旋转前后的页面、是否正在 GOTO、是否正在移动，并导出日志。
+v0.2.5 已修复这个问题。若仍复现，请记录旋转前后的页面、是否正在 GOTO、是否正在移动，并导出日志。
 
 ### 日志在手机里能看，电脑或 QQ 找不到
 

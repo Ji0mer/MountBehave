@@ -10,7 +10,7 @@
 
 <p align="center">
   <a href="#当前状态"><img alt="Status" src="https://img.shields.io/badge/status-field--testing-orange"></a>
-  <a href="#版本说明"><img alt="Version" src="https://img.shields.io/badge/version-v0.2.4-blue"></a>
+  <a href="#版本说明"><img alt="Version" src="https://img.shields.io/badge/version-v0.2.5-blue"></a>
   <a href="#功能概览"><img alt="Platform" src="https://img.shields.io/badge/platform-Android-green"></a>
   <a href="#星图数据与授权"><img alt="Catalog" src="https://img.shields.io/badge/catalog-HYG%20%7C%20OpenNGC%20%7C%20NASA%20SVS-lightgrey"></a>
 </p>
@@ -38,7 +38,7 @@ MountBehave 是一个为 OnStep/LX200 兼容赤道仪开发的 Android 手控器
   <img src="docs/images/clearsky_wordmark.png" alt="Clearsky ST17 test badge" width="160">
 </p>
 
-当前版本：`v0.2.4`
+当前版本：`v0.2.5`
 
 测试状态：
 
@@ -46,7 +46,7 @@ MountBehave 是一个为 OnStep/LX200 兼容赤道仪开发的 Android 手控器
 - 新增 OnStepX 固件选择、赤道仪/经纬仪模式切换、经纬仪校准流程和双轴跟踪语义；OnStepX 真机仍需要更多设备覆盖。
 - 新增可导出的全应用日志，覆盖 TX/RX、用户动作、状态快照、校准诊断和小天体下载错误，方便现场排查。
 - `v0.2.4` 增加星图同步与渐进式指向修正模型，修复同步时 OnStep `E8` 拒绝、手控移动时 WiFi 假断开等实机问题。
-- 当前 `main` 已完成设置页控制台式 UI 优化：顶部设备状态卡、安全控制降噪、夜视开关强化辨识度，并把银河背景透明度调到更适合目视参考的中低强度。
+- `v0.2.5` 完成设置页控制台式 UI 优化：顶部设备状态卡、安全控制降噪、夜视开关强化辨识度，并把银河背景透明度调到更适合目视参考的中低强度。
 - 其他 OnStep 固件版本、其他品牌控制器、USB-C 有线连接、Park/Unpark、三星后极轴精调和长时间跟踪仍需要更多实机验证。
 
 适合当前尝试的场景：
@@ -81,9 +81,9 @@ MountBehave 是一个为 OnStep/LX200 兼容赤道仪开发的 Android 手控器
 
 ### 下载 APK
 
-推荐从 GitHub Release 下载 `MountBehave-v0.2.4.apk`：
+推荐从 GitHub Release 下载 `MountBehave-v0.2.5.apk`：
 
-<https://github.com/Ji0mer/MountBehave/releases/tag/v0.2.4>
+<https://github.com/Ji0mer/MountBehave/releases/tag/v0.2.5>
 
 APK 不放在仓库代码目录里。仓库里的 `dist/` 仅作为本地构建输出目录，发布包请以 GitHub Release 附件为准。
 
@@ -111,13 +111,13 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build-release.ps1
 本次发布用的安装 APK：
 
 ```text
-dist\MountBehave-v0.2.4.apk
+dist\MountBehave-v0.2.5.apk
 ```
 
 ### 安装到手机
 
 ```powershell
-powershell -ExecutionPolicy Bypass -NoProfile -Command ". .\scripts\env.ps1; adb devices; adb install -r dist\MountBehave-v0.2.4.apk"
+powershell -ExecutionPolicy Bypass -NoProfile -Command ". .\scripts\env.ps1; adb devices; adb install -r dist\MountBehave-v0.2.5.apk"
 ```
 
 电脑模拟器通常不能直接加入赤道仪自己的 WiFi 热点。真实测试时建议把 APK 安装到手机或 Android 平板上，并让设备直接连接赤道仪 WiFi。
@@ -277,12 +277,13 @@ powershell -ExecutionPolicy Bypass -File .\scripts\mock-onstep.ps1
 
 ## 版本说明
 
-### 当前 main
+### v0.2.5
 
 - 设置页重排为设备状态优先：顶部卡片集中显示连接、流程、跟踪、GOTO、停放和安全状态。
 - 安全控制改为更克制的暗色控制台布局：紧急停止独立突出，夜视模式改为可识别的低亮 chip，普通按钮恢复细描边和更清楚的禁用态。
 - 小天体星历与命令日志区域进一步降噪，日志固定在设置页底部。
 - 星图银河背景透明度调整为 `85/255`，比原始低透明度更容易辨认，但不压过恒星和目标标记。
+- Android 版本号升至 `versionName 0.2.5` / `versionCode 7`。
 
 ### v0.2.4
 
