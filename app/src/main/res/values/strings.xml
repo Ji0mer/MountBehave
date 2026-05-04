@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="help_button_content_description">查看说明</string>
-    <string name="app_name">MountBehave</string>
+    <string name="app_name">ClearskyGoto</string>
     <string name="small_bodies_section">小天体星历</string>
     <string name="small_bodies_intro">内置精选 17 个著名小行星 / 彗星;在星图工具栏的"图层"对话框可独立显隐小行星与彗星。可下载亮小行星,彗星逐颗按名称添加(避免大量长周期彗星拥挤地堆在天图)。</string>
     <string name="small_bodies_status">内置 %1$d · 小行星 %2$d · 彗星 %3$d</string>
