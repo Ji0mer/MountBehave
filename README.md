@@ -1,11 +1,11 @@
-# MountBehave
+# ClearskyGoto
 
 <p align="center">
   <img src="docs/images/mountbehave_icon.png" alt="MountBehave app icon" width="150">
 </p>
 
 <p align="center">
-  <strong>面向 OnStep 赤道仪的 Android 目视手控器</strong>
+  <strong>基于 MountBehave v0.2.5 的晴空天文定制开发分支</strong>
 </p>
 
 <p align="center">
@@ -15,12 +15,20 @@
   <a href="#星图数据与授权"><img alt="Catalog" src="https://img.shields.io/badge/catalog-HYG%20%7C%20OpenNGC%20%7C%20NASA%20SVS-lightgrey"></a>
 </p>
 
-MountBehave 是一个为 OnStep/LX200 兼容赤道仪开发的 Android 手控器。它面向手机和平板上的目视观测流程，提供 WiFi 连接、方向键移动、停止/GOTO、离线星图、星图同步、观测地与时间同步、跟踪控制、两星/三星校准和三星后极轴精调入口。`v0.2.x` 系列加入 OnStepX 与经纬仪模式适配。
+ClearskyGoto 是根据晴空天文的需求进行开发的 Android 赤道仪控制分支，基于 MountBehave `v0.2.5` 继续演进。它继承 MountBehave 面向 OnStep/LX200 兼容赤道仪的目视观测流程，提供 WiFi 连接、方向键移动、停止/GOTO、离线星图、星图同步、观测地与时间同步、跟踪控制、两星/三星校准和三星后极轴精调入口。`v0.2.x` 系列加入 OnStepX 与经纬仪模式适配。
 
-这个项目目前不是 OnStep 官方 App，也还没有经过充分的跨设备测试。真实赤道仪测试时请始终保留实体断电、控制盒急停或其他独立安全手段。
+这个分支仍然不是 OnStep 官方 App，也还没有经过充分的跨设备测试。真实赤道仪测试时请始终保留实体断电、控制盒急停或其他独立安全手段。
+
+## 分支说明
+
+- 当前分支：`ClearskyGoto`
+- 开发来源：基于 MountBehave `v0.2.5`
+- 开发目标：根据晴空天文的设备与使用流程需求，继续调整应用命名、界面、连接/GOTO/校准体验和后续专用功能。
+- 上游基线：MountBehave `v0.2.5` 的 release tag 保留在 `main` 分支，`ClearskyGoto` 分支在此基础上继续开发。
 
 ## 目录
 
+- [分支说明](#分支说明)
 - [当前状态](#当前状态)
 - [功能概览](#功能概览)
 - [安装与构建](#安装与构建)
