@@ -10,6 +10,9 @@ import android.content.SharedPreferences;
 import android.content.res.Configuration;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.graphics.Canvas;
+import android.graphics.Paint;
+import android.graphics.Rect;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.location.Location;
@@ -30,6 +33,8 @@ import android.text.TextWatcher;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewGroup;
+import android.view.ViewParent;
 import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.CheckBox;
@@ -60,6 +65,7 @@ import java.security.cert.X509Certificate;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.List;
@@ -85,8 +91,11 @@ public final class MainActivity extends Activity {
     private static final String PREFS_NAME = "mountbehave_prefs";
     private static final String PREF_FIRMWARE_MODE = "firmware_mode";
     private static final String PREF_MOUNT_MODE = "mount_mode";
+    private static final String PREF_UI_LANGUAGE = "ui_language";
     private static final String PREF_LOGGING_ENABLED = "logging_enabled";
     private static final String PREF_LOG_PRIVACY_ACCEPTED_AT = "log_privacy_accepted_at";
+    private static final String UI_LANGUAGE_CHINESE = "zh";
+    private static final String UI_LANGUAGE_ENGLISH = "en";
     private static final long LOG_PRIVACY_ACK_VALID_MS = 24L * 60L * 60L * 1000L;
     private static final String ONSTEPX_MOUNT_MODE_QUERY = ":GXEM#";
     private static final String PREFERRED_PIER_SIDE_QUERY = ":GX96#";
@@ -103,7 +112,7 @@ public final class MainActivity extends Activity {
     private static final int SIDE_MENU_VERSION_HEIGHT_DP = 28;
     private static final int SIDE_MENU_FLOATING_STOP_GAP_DP = 8;
     private static final int FLOATING_STOP_COLLAPSED_TOP_MARGIN_DP = 86;
-    private static final int SIDE_MENU_ITEM_COUNT = 4;
+    private static final int SIDE_MENU_ITEM_COUNT = 3;
     private static final int LOCATION_PERMISSION_REQUEST = 24;
     private static final int LOG_EXPORT_CREATE_DOCUMENT_REQUEST = 25;
     private static final long CONNECTION_POLL_INTERVAL_MS = 5_000L;
@@ -126,7 +135,6 @@ public final class MainActivity extends Activity {
     private static final int LOG_DISPLAY_MAX_LINES = 300;
     private static final long LOG_UI_UPDATE_MIN_INTERVAL_MS = 500L;
     private static final double ALIGNMENT_ACCEPT_QUALITY_WARNING_DEGREES = 1.0;
-    private static final int SMALL_BODY_ASTEROID_DOWNLOAD_MAX_H = 11;
     private static final CalibrationMode DEFAULT_CALIBRATION_MODE = CalibrationMode.TWO_STAR;
     private static final Pattern SKY_TIME_INPUT_PATTERN = Pattern.compile(
             "^\\s*(\\d{1,2}):(\\d{1,2})(?::(\\d{1,2}))?\\s*$"
@@ -163,7 +171,6 @@ public final class MainActivity extends Activity {
         }
     };
 
-    private Button manualTabButton;
     private Button skyTabButton;
     private Button settingsTabButton;
     private Button connectionSyncTabButton;
@@ -171,7 +178,8 @@ public final class MainActivity extends Activity {
     private Button floatingStopButton;
     private TextView sideMenuVersionText;
     private LinearLayout sideMenu;
-    private LinearLayout manualPage;
+    private ScrollView mainScrollView;
+    private View appHeaderView;
     private LinearLayout skyPage;
     private LinearLayout settingsPage;
     private LinearLayout connectionSyncPage;
@@ -180,52 +188,48 @@ public final class MainActivity extends Activity {
     private LinearLayout connectionForm;
     private View connectTrigger;
     private Button disconnectButton;
-    private Spinner firmwareModeSpinner;
-    private Spinner mountModeSpinner;
+    private TextView firmwareModeText;
+    private Button mountModeEquatorialButton;
+    private Button mountModeAltAzButton;
     private LinearLayout mountModeContainer;
     private TextView firmwareSettingsStatusText;
-    private Button stopButton;
-    private Button northButton;
-    private Button northEastButton;
-    private Button northWestButton;
-    private Button southButton;
-    private Button southEastButton;
-    private Button southWestButton;
-    private Button eastButton;
-    private Button westButton;
-    private Spinner manualRateSpinner;
     private ObserverState observerState = ObserverState.boston();
     private EditText latitudeField;
     private EditText longitudeField;
+    private EditText observerDateField;
+    private EditText observerTimeField;
+    private TextView latitudeSyncAlertText;
+    private TextView longitudeSyncAlertText;
+    private TextView dateSyncAlertText;
+    private TextView timeSyncAlertText;
+    private TextView observerSyncWarningText;
     private TextView observerStatusText;
     private TextView timeStatusText;
     private SkyChartView skyChartView;
+    private TextView skyTitleTimeText;
     private TextView skySummaryText;
     private TextView targetStatusText;
     private TextView gotoStatusText;
     private TextView observingAlertText;
     private Button gotoButton;
     private Button skySyncButton;
+    private Button skyCalibrationButton;
+    private View skyIconRail;
+    private View skyCalibrationOverlay;
+    private ManualPadView manualPadView;
+    private Button manualPadToggleButton;
+    private Button manualRateButton;
     private Button syncMountButton;
-    private Button trackingSiderealButton;
-    private Button trackingLunarButton;
-    private Button trackingSolarButton;
+    private Spinner trackingRateSpinner;
+    private TextView languageText;
     private Button trackingToggleButton;
     private TextView trackingStatusText;
     private TextView safetyStatusText;
-    private TextView deviceConnectionStatusText;
-    private TextView deviceFlowStatusText;
-    private TextView deviceTrackingStatusText;
-    private TextView deviceGotoStatusText;
-    private TextView deviceParkStatusText;
-    private TextView deviceSafetyStatusText;
-    private Button emergencyStopButton;
-    private Button safetyCancelGotoButton;
-    private Button gotoStatusRefreshButton;
-    private Button parkButton;
-    private Button unparkButton;
-    private Button nightModeButton;
-    private Spinner calibrationModeSpinner;
+    private TextView safetyCancelGotoButton;
+    private TextView gotoStatusRefreshButton;
+    private TextView parkButton;
+    private TextView nightModeStateText;
+    private TextView calibrationModeText;
     private LinearLayout alignCalibrationPanel;
     private LinearLayout refineCalibrationPanel;
     private EditText calibrationTargetField;
@@ -233,8 +237,6 @@ public final class MainActivity extends Activity {
     private Button calibrationSuggestButton;
     private Button calibrationShowButton;
     private Button alignStartButton;
-    private Button alignSelectButton;
-    private Button alignAcceptButton;
     private Button alignCancelButton;
     private Button refineGotoButton;
     private Button refinePaButton;
@@ -281,6 +283,8 @@ public final class MainActivity extends Activity {
     private SkyChartView.Target syncedCurrentTarget;
     private SkyChartView.Target polarRefineSyncedTarget;
     private boolean selectingCalibrationTargetFromSky;
+    private boolean skyCalibrationExpanded;
+    private boolean manualPadVisible = true;
     private AlertDialog calibrationTargetConfirmDialog;
     private AlertDialog alignmentPierSideGotoDialog;
     private final PointingCorrectionModel pointingModel = new PointingCorrectionModel();
@@ -294,7 +298,7 @@ public final class MainActivity extends Activity {
     private volatile TemporaryPierSidePreference pendingPreferredPierSideRestore;
     private long lastLogUiUpdateAtMillis;
     private boolean logUiUpdateScheduled;
-    private ManualRate selectedManualRate = ManualRate.CENTER;
+    private ManualRate selectedManualRate = ManualRate.FIND;
     private CalibrationMode selectedCalibrationMode = DEFAULT_CALIBRATION_MODE;
     private FirmwareMode selectedFirmwareMode = FirmwareMode.ONSTEP;
     private MountMode selectedMountMode = MountMode.EQUATORIAL;
@@ -306,13 +310,27 @@ public final class MainActivity extends Activity {
     private Button smallBodyDownloadAsteroidsButton;
     private Button smallBodyDownloadCometsButton;
     private Button smallBodyClearUserButton;
-    private boolean suppressCalibrationModeSelection;
-    private boolean suppressFirmwareModeSelection;
-    private boolean suppressMountModeSelection;
+    private final AtomicInteger smallBodyFetchInFlight = new AtomicInteger();
+    private boolean suppressTrackingRateSelection;
+    private boolean suppressObserverFieldChanges;
+    private boolean observerTimeManuallyEdited;
+    private boolean observerSyncedToMount;
+    private boolean defaultGpsRequested;
+    private String selectedUiLanguage = UI_LANGUAGE_CHINESE;
+
+    @Override
+    protected void attachBaseContext(Context newBase) {
+        String language = normalizedUiLanguage(newBase
+                .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getString(PREF_UI_LANGUAGE, UI_LANGUAGE_CHINESE));
+        super.attachBaseContext(localizedContext(newBase, language));
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        selectedUiLanguage = normalizedUiLanguage(getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .getString(PREF_UI_LANGUAGE, UI_LANGUAGE_CHINESE));
         Logger.setEnabled(getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
                 .getBoolean(PREF_LOGGING_ENABLED, true));
         Logger.init(getApplicationContext());
@@ -324,6 +342,7 @@ public final class MainActivity extends Activity {
         loadFirmwarePreferences();
         smallBodyCatalog = new SmallBodyCatalog(getFilesDir());
         rebuildContentView();
+        uiHandler.post(this::requestDefaultGpsLocation);
     }
 
     @Override
@@ -437,25 +456,26 @@ public final class MainActivity extends Activity {
         boolean wideLayout = isWideLayout();
         FrameLayout shell = new FrameLayout(this);
         shell.setBackgroundColor(pageBackgroundColor());
+        shell.addView(new StarFieldBackgroundView(this), frameMatchParent());
+        shell.addView(createHeaderWatermark(), headerWatermarkParams());
 
         ScrollView scrollView = new ScrollView(this);
+        mainScrollView = scrollView;
         scrollView.setFillViewport(true);
-        scrollView.setBackgroundColor(pageBackgroundColor());
+        scrollView.setBackgroundColor(Color.TRANSPARENT);
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(wideLayout ? 20 : 10), dp(14), dp(wideLayout ? 20 : 10), dp(18));
+        root.setPadding(dp(wideLayout ? 20 : 10), dp(34), dp(wideLayout ? 20 : 10), dp(18));
         scrollView.addView(root, matchWrap());
 
         LinearLayout header = new LinearLayout(this);
+        appHeaderView = header;
         header.setOrientation(LinearLayout.VERTICAL);
         header.setPadding(dp(60), 0, 0, dp(8));
-        TextView title = titleText(R.string.app_name, 23);
+        TextView title = titleText(R.string.app_name, 26);
+        title.setTypeface(Typeface.DEFAULT_BOLD);
         header.addView(title, matchWrap());
-
-        TextView subtitle = bodyText(R.string.app_subtitle);
-        subtitle.setPadding(0, dp(4), 0, 0);
-        header.addView(subtitle, matchWrap());
         root.addView(header, matchWrap());
 
         settingsPage = createSettingsPage();
@@ -464,26 +484,6 @@ public final class MainActivity extends Activity {
         connectionSyncPage = createConnectionSyncPage();
         connectionSyncPage.setVisibility(View.GONE);
         root.addView(connectionSyncPage, matchWrap());
-
-        manualPage = new LinearLayout(this);
-        manualPage.setOrientation(LinearLayout.VERTICAL);
-        manualStatusText = bodyText(R.string.status_disconnected);
-        manualStatusText.setTextColor(labelTextColor());
-        manualStatusText.setBackgroundColor(cardBackgroundColor());
-        manualStatusText.setPadding(
-                dp(SIDE_MENU_COLLAPSED_SIZE_DP + SIDE_MENU_MARGIN_START_DP + 8),
-                dp(8),
-                dp(10),
-                dp(8)
-        );
-        if (currentStatusMessage != null) {
-            manualStatusText.setText(currentStatusMessage);
-        }
-        manualPage.addView(manualStatusText, matchWrap());
-        manualPage.addView(createCalibrationPage(), matchWrapWithTopMargin(8));
-        manualPage.addView(sectionTitle(R.string.manual_control_section), matchWrapWithTopMargin(8));
-        manualPage.addView(createControlPanel(), matchWrap());
-        root.addView(manualPage, matchWrap());
 
         skyPage = createSkyPage();
         skyPage.setVisibility(View.GONE);
@@ -520,12 +520,6 @@ public final class MainActivity extends Activity {
         connectionSyncTabButton.setOnClickListener(v -> selectPageFromMenu(Page.CONNECTION_SYNC));
         sideMenu.addView(connectionSyncTabButton, sideMenuButtonParams(SIDE_MENU_ITEM_TOP_MARGIN_DP));
 
-        manualTabButton = new Button(this);
-        configureTabButton(manualTabButton);
-        manualTabButton.setText(R.string.tab_manual);
-        manualTabButton.setOnClickListener(v -> selectPageFromMenu(Page.MANUAL));
-        sideMenu.addView(manualTabButton, sideMenuButtonParams(SIDE_MENU_ITEM_TOP_MARGIN_DP));
-
         skyTabButton = new Button(this);
         configureTabButton(skyTabButton);
         skyTabButton.setText(R.string.tab_sky);
@@ -551,7 +545,7 @@ public final class MainActivity extends Activity {
         floatingStopButton.setTextColor(Color.WHITE);
         floatingStopButton.setTypeface(Typeface.DEFAULT_BOLD);
         floatingStopButton.setBackground(createStopButtonBackground());
-        floatingStopButton.setVisibility(View.GONE);
+        floatingStopButton.setVisibility(View.VISIBLE);
         floatingStopButton.setOnClickListener(v -> emergencyStop());
         return floatingStopButton;
     }
@@ -560,13 +554,45 @@ public final class MainActivity extends Activity {
         LinearLayout page = new LinearLayout(this);
         page.setOrientation(LinearLayout.VERTICAL);
 
-        page.addView(sectionTitleWithHelp(R.string.sky_section, R.string.sky_planet_note), matchWrap());
+        page.addView(createSkyStatusPanel(), matchWrap());
+        page.addView(createSkyChartPanel(), matchWrapWithTopMargin(12));
+        return page;
+    }
 
+    private View createSkyStatusPanel() {
         LinearLayout panel = card();
-        skySummaryText = bodyText(R.string.sky_loading);
-        compactSkyText(skySummaryText);
-        skySummaryText.setPadding(0, 0, 0, dp(4));
-        panel.addView(skySummaryText, matchWrap());
+        panel.addView(settingsPanelTitle(R.string.sky_status_section, "▱"), matchWrap());
+
+        LinearLayout statusBox = settingsSubPanel();
+        manualStatusText = bodyText(R.string.status_disconnected);
+        if (currentStatusMessage != null) {
+            manualStatusText.setText(currentStatusMessage);
+        }
+        manualStatusText.setTextColor(labelTextColor());
+        manualStatusText.setTextSize(14);
+        manualStatusText.setPadding(0, 0, 0, 0);
+        statusBox.addView(manualStatusText, matchWrap());
+
+        gotoStatusText = bodyText(R.string.goto_status_idle);
+        gotoStatusText.setTextSize(14);
+        gotoStatusText.setTextColor(labelTextColor());
+        gotoStatusText.setPadding(0, dp(6), 0, 0);
+        if (gotoStatusMessage != null) {
+            gotoStatusText.setText(gotoStatusMessage);
+        }
+        statusBox.addView(gotoStatusText, matchWrap());
+
+        skySummaryText = null;
+        observingAlertText = null;
+
+        panel.addView(statusBox, matchWrapWithTopMargin(10));
+        updateManualStatusForCurrentMode();
+        return panel;
+    }
+
+    private View createSkyChartPanel() {
+        LinearLayout panel = card();
+        panel.addView(createSkyChartHeader(), matchWrap());
 
         skyChartView = new SkyChartView(this);
         skyChartView.setObserver(observerState, currentSkyInstant());
@@ -579,58 +605,19 @@ public final class MainActivity extends Activity {
                 handleCalibrationTargetSelectedInSky(target);
             }
         });
-        skyChartView.setViewStateListener(() -> skySummaryText.setText(skyChartView.summary()));
+        skyChartView.setViewStateListener(() -> { });
         if (selectedSkyTarget != null) {
             skyChartView.setSelectedTarget(selectedSkyTarget, false);
         }
-        skySummaryText.setText(skyChartView.summary());
+        FrameLayout chartFrame = new FrameLayout(this);
+        chartFrame.addView(skyChartView, frameMatchParent());
 
-        LinearLayout targetGotoRow = new LinearLayout(this);
-        targetGotoRow.setOrientation(LinearLayout.HORIZONTAL);
-        targetGotoRow.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout iconRail = new LinearLayout(this);
+        iconRail.setOrientation(LinearLayout.VERTICAL);
+        iconRail.setGravity(Gravity.CENTER);
+        skyIconRail = iconRail;
 
-        targetStatusText = bodyText(R.string.sky_target_none);
-        compactSkyText(targetStatusText);
-        targetStatusText.setSingleLine(true);
-        targetStatusText.setEllipsize(TextUtils.TruncateAt.END);
-        targetStatusText.setPadding(0, 0, 0, 0);
-        if (selectedSkyTarget != null) {
-            targetStatusText.setText(getString(R.string.sky_target_status, selectedSkyTarget.label));
-        }
-        targetGotoRow.addView(targetStatusText, weightWrap(1f));
-
-        gotoStatusText = bodyText(R.string.goto_status_idle);
-        compactSkyText(gotoStatusText);
-        gotoStatusText.setSingleLine(true);
-        gotoStatusText.setEllipsize(TextUtils.TruncateAt.END);
-        gotoStatusText.setPadding(0, 0, 0, 0);
-        if (gotoStatusMessage != null) {
-            gotoStatusText.setText(gotoStatusMessage);
-        }
-        targetGotoRow.addView(gotoStatusText, weightWrapWithLeftMargin(1f, 8));
-        panel.addView(targetGotoRow, matchWrap());
-
-        observingAlertText = bodyText(R.string.observing_alert_no_target);
-        compactSkyText(observingAlertText);
-        observingAlertText.setPadding(0, dp(2), 0, 0);
-        panel.addView(observingAlertText, matchWrap());
-
-        LinearLayout actions = new LinearLayout(this);
-        actions.setOrientation(LinearLayout.HORIZONTAL);
-        actions.setGravity(Gravity.CENTER_VERTICAL);
-        actions.setPadding(0, dp(8), 0, 0);
-
-        Button timeButton = new Button(this);
-        timeButton.setAllCaps(false);
-        compactButton(timeButton);
-        timeButton.setText(R.string.sky_time);
-        timeButton.setOnClickListener(v -> showSkyTimeDialog());
-        actions.addView(timeButton, weightWrap(1f));
-
-        gotoButton = new Button(this);
-        gotoButton.setAllCaps(false);
-        compactButton(gotoButton);
-        gotoButton.setText(R.string.sky_goto_target);
+        gotoButton = skyOverlayIconButton("⌕", R.string.sky_find_target);
         gotoButton.setOnClickListener(v -> {
             if (connected && gotoInProgress) {
                 cancelGoto();
@@ -638,41 +625,261 @@ public final class MainActivity extends Activity {
                 showTargetDialog();
             }
         });
-        actions.addView(gotoButton, weightWrapWithLeftMargin(1f, 6));
+        iconRail.addView(gotoButton, squareParams(42));
 
-        skySyncButton = new Button(this);
-        skySyncButton.setAllCaps(false);
-        compactButton(skySyncButton);
-        skySyncButton.setText(R.string.sky_sync_target);
+        skySyncButton = skyOverlayIconButton("⇄", R.string.sky_sync_target);
         skySyncButton.setOnClickListener(v -> syncSelectedSkyTarget());
-        actions.addView(skySyncButton, weightWrapWithLeftMargin(1f, 6));
+        iconRail.addView(skySyncButton, squareParamsWithTopMargin(42, 8));
 
-        Button layersButton = new Button(this);
-        layersButton.setAllCaps(false);
-        compactButton(layersButton);
-        layersButton.setText(R.string.sky_layers);
+        Button layersButton = skyOverlayIconButton("▣", R.string.sky_layers);
         layersButton.setOnClickListener(v -> showLayerDialog());
-        actions.addView(layersButton, weightWrapWithLeftMargin(1f, 6));
+        iconRail.addView(layersButton, squareParamsWithTopMargin(42, 8));
 
-        panel.addView(actions, matchWrap());
+        skyCalibrationButton = skyTelescopeIconButton(R.string.calibration_section);
+        skyCalibrationButton.setOnClickListener(v -> setSkyCalibrationExpanded(!skyCalibrationExpanded));
+        iconRail.addView(skyCalibrationButton, squareParamsWithTopMargin(42, 8));
 
-        panel.addView(skyChartView, matchFixedHeight(isWideLayout() ? 620 : 480));
+        FrameLayout.LayoutParams iconParams = new FrameLayout.LayoutParams(
+                dp(44),
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP | Gravity.END
+        );
+        iconParams.setMargins(0, dp(10), dp(10), 0);
+        chartFrame.addView(iconRail, iconParams);
 
-        page.addView(panel, matchWrap());
-        return page;
+        targetStatusText = bodyText(R.string.sky_target_none);
+        targetStatusText.setTextSize(13);
+        targetStatusText.setTextColor(labelTextColor());
+        targetStatusText.setPadding(0, 0, 0, 0);
+        targetStatusText.setBackgroundColor(Color.TRANSPARENT);
+        targetStatusText.setVisibility(selectedSkyTarget == null ? View.GONE : View.VISIBLE);
+        if (selectedSkyTarget != null) {
+            targetStatusText.setText(skyTargetOverlayText(selectedSkyTarget));
+        }
+        FrameLayout.LayoutParams targetParams = new FrameLayout.LayoutParams(
+                dp(isWideLayout() ? 250 : 190),
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM | Gravity.START
+        );
+        targetParams.setMargins(dp(2), 0, 0, dp(8));
+        chartFrame.addView(targetStatusText, targetParams);
+
+        manualPadView = new ManualPadView(this);
+        manualPadView.setControlsEnabled(connected && !busy && !parked);
+        FrameLayout.LayoutParams padParams = new FrameLayout.LayoutParams(
+                dp(isWideLayout() ? 220 : 176),
+                dp(isWideLayout() ? 220 : 176),
+                Gravity.TOP | Gravity.END
+        );
+        padParams.setMargins(0, dp(60), dp(isWideLayout() ? 18 : 10), 0);
+        chartFrame.addView(manualPadView, padParams);
+
+        skyCalibrationOverlay = createSkyCalibrationOverlay();
+        FrameLayout.LayoutParams calibrationParams = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                dp(skyCalibrationOverlayHeightDp()),
+                Gravity.BOTTOM
+        );
+        calibrationParams.setMargins(dp(8), 0, dp(8), dp(8));
+        chartFrame.addView(skyCalibrationOverlay, calibrationParams);
+        updateSkyCalibrationOverlayState();
+
+        panel.addView(chartFrame, matchFixedHeight(skyChartHeightDp()));
+        updateManualRateControl();
+        updateManualPadVisibility();
+        updateSkyTitleTimeText();
+
+        return panel;
     }
 
-    private LinearLayout createCalibrationPage() {
-        LinearLayout page = new LinearLayout(this);
-        page.setOrientation(LinearLayout.VERTICAL);
+    private LinearLayout createSkyChartHeader() {
+        final int skyHeaderTextSp = 18;
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
 
+        TextView icon = new TextView(this);
+        icon.setText("◎");
+        icon.setTextSize(20);
+        icon.setTypeface(Typeface.DEFAULT_BOLD);
+        icon.setTextColor(selectedAccentColor());
+        icon.setGravity(Gravity.CENTER);
+        row.addView(icon, new LinearLayout.LayoutParams(dp(30), dp(30)));
+
+        TextView title = panelTitle(R.string.sky_section);
+        title.setTextSize(skyHeaderTextSp);
+        LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        titleParams.leftMargin = dp(8);
+        row.addView(title, titleParams);
+
+        skyTitleTimeText = new TextView(this);
+        skyTitleTimeText.setTextSize(skyHeaderTextSp);
+        skyTitleTimeText.setTypeface(Typeface.DEFAULT_BOLD);
+        skyTitleTimeText.setTextColor(labelTextColor());
+        skyTitleTimeText.setGravity(Gravity.CENTER_VERTICAL);
+        skyTitleTimeText.setSingleLine(true);
+        skyTitleTimeText.setEllipsize(TextUtils.TruncateAt.END);
+        skyTitleTimeText.setPadding(dp(10), 0, dp(10), 0);
+        skyTitleTimeText.setClickable(true);
+        skyTitleTimeText.setOnClickListener(v -> showSkyTimeDialog());
+        skyTitleTimeText.setContentDescription(getString(R.string.sky_time));
+        LinearLayout.LayoutParams timeParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                dp(30)
+        );
+        row.addView(skyTitleTimeText, timeParams);
+
+        manualPadToggleButton = new Button(this);
+        manualPadToggleButton.setAllCaps(false);
+        manualPadToggleButton.setText(R.string.manual_pad_toggle);
+        manualPadToggleButton.setTextSize(skyHeaderTextSp);
+        manualPadToggleButton.setTypeface(Typeface.DEFAULT_BOLD);
+        manualPadToggleButton.setGravity(Gravity.CENTER_VERTICAL);
+        manualPadToggleButton.setSingleLine(true);
+        manualPadToggleButton.setMinWidth(0);
+        manualPadToggleButton.setMinimumWidth(0);
+        manualPadToggleButton.setMinHeight(dp(30));
+        manualPadToggleButton.setMinimumHeight(dp(30));
+        manualPadToggleButton.setPadding(dp(8), 0, dp(8), 0);
+        manualPadToggleButton.setBackgroundColor(Color.TRANSPARENT);
+        manualPadToggleButton.setOnClickListener(v -> {
+            manualPadVisible = !manualPadVisible;
+            Logger.user("toggle manual pad " + (manualPadVisible ? "show" : "hide"));
+            updateManualPadVisibility();
+        });
+        row.addView(manualPadToggleButton, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                dp(30)
+        ));
+
+        manualRateButton = new Button(this);
+        manualRateButton.setAllCaps(false);
+        manualRateButton.setTextSize(skyHeaderTextSp);
+        manualRateButton.setTypeface(Typeface.DEFAULT_BOLD);
+        manualRateButton.setGravity(Gravity.CENTER_VERTICAL);
+        manualRateButton.setSingleLine(true);
+        manualRateButton.setMinWidth(0);
+        manualRateButton.setMinimumWidth(0);
+        manualRateButton.setMinHeight(dp(30));
+        manualRateButton.setMinimumHeight(dp(30));
+        manualRateButton.setPadding(dp(8), 0, dp(8), 0);
+        manualRateButton.setBackgroundColor(Color.TRANSPARENT);
+        manualRateButton.setOnClickListener(v -> showManualRateDialog());
+        manualRateButton.setContentDescription(getString(R.string.rate_label));
+        row.addView(manualRateButton, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                dp(30)
+        ));
+
+        View spacer = new View(this);
+        row.addView(spacer, weightWrap(1f));
+
+        Button help = new Button(this);
+        help.setAllCaps(false);
+        help.setText("?");
+        help.setTextSize(13);
+        help.setTypeface(Typeface.DEFAULT_BOLD);
+        help.setTextColor(labelTextColor());
+        help.setMinWidth(0);
+        help.setMinHeight(0);
+        help.setMinimumWidth(0);
+        help.setMinimumHeight(0);
+        help.setPadding(0, 0, 0, dp(1));
+        help.setGravity(Gravity.CENTER);
+        help.setBackground(createHelpButtonBackground());
+        help.setContentDescription(getString(R.string.help_button_content_description));
+        help.setOnClickListener(v -> showHelpDialog(R.string.sky_section, R.string.sky_planet_note));
+        row.addView(help, squareParams(30));
+        return row;
+    }
+
+    private int skyChartHeightDp() {
+        return isWideLayout() ? 528 : 496;
+    }
+
+    private int skyCalibrationOverlayHeightDp() {
+        return Math.round(skyChartHeightDp() * 0.50f);
+    }
+
+    private View createSkyCalibrationOverlay() {
+        FrameLayout overlay = new FrameLayout(this);
+        overlay.setBackgroundColor(Color.TRANSPARENT);
+
+        ScrollView scrollView = new ScrollView(this);
+        scrollView.setFillViewport(false);
+        scrollView.setOverScrollMode(View.OVER_SCROLL_IF_CONTENT_SCROLLS);
+        scrollView.setBackgroundColor(Color.TRANSPARENT);
+        scrollView.addView(createCalibrationPanel(), new ScrollView.LayoutParams(
+                ScrollView.LayoutParams.MATCH_PARENT,
+                ScrollView.LayoutParams.WRAP_CONTENT
+        ));
+
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM
+        );
+        overlay.addView(scrollView, params);
+        return overlay;
+    }
+
+    private LinearLayout createCalibrationPanel() {
         LinearLayout calibrationPanel = card();
-        calibrationPanel.addView(panelTitleWithHelp(R.string.calibration_section, R.string.calibration_intro), matchWrap());
+        calibrationPanel.setPadding(dp(10), dp(10), dp(10), dp(10));
 
-        calibrationPanel.addView(labelText(R.string.calibration_mode_label), matchWrap());
-        calibrationModeSpinner = new Spinner(this);
+        LinearLayout titleRow = new LinearLayout(this);
+        titleRow.setOrientation(LinearLayout.HORIZONTAL);
+        titleRow.setGravity(Gravity.CENTER_VERTICAL);
+
+        TextView title = panelTitle(R.string.calibration_section);
+        title.setTextSize(16);
+        title.setGravity(Gravity.CENTER_VERTICAL);
+        title.setIncludeFontPadding(false);
+        titleRow.addView(title, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                dp(30)
+        ));
+
+        calibrationModeText = dropdownText();
+        calibrationModeText.setTextSize(16);
+        calibrationModeText.setMinHeight(dp(30));
+        calibrationModeText.setMinimumHeight(dp(30));
+        calibrationModeText.setPadding(dp(12), 0, dp(6), 0);
+        calibrationModeText.setGravity(Gravity.CENTER_VERTICAL);
+        calibrationModeText.setIncludeFontPadding(false);
+        calibrationModeText.setOnClickListener(v -> showCalibrationModeDialog());
         refreshCalibrationModeChoices();
-        calibrationPanel.addView(calibrationModeSpinner, matchWrap());
+        LinearLayout.LayoutParams modeParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                dp(30)
+        );
+        modeParams.leftMargin = dp(10);
+        titleRow.addView(calibrationModeText, modeParams);
+
+        View spacer = new View(this);
+        titleRow.addView(spacer, weightWrap(1f));
+
+        Button help = new Button(this);
+        help.setAllCaps(false);
+        help.setText("i");
+        help.setTextSize(13);
+        help.setTypeface(Typeface.DEFAULT_BOLD);
+        help.setTextColor(labelTextColor());
+        help.setMinWidth(0);
+        help.setMinHeight(0);
+        help.setMinimumWidth(0);
+        help.setMinimumHeight(0);
+        help.setPadding(0, 0, 0, dp(1));
+        help.setGravity(Gravity.CENTER);
+        help.setBackground(createHelpButtonBackground());
+        help.setContentDescription(getString(R.string.help_button_content_description));
+        help.setOnClickListener(v -> showHelpDialog(R.string.calibration_section, R.string.calibration_intro));
+        titleRow.addView(help, squareParams(30));
+
+        calibrationPanel.addView(titleRow, matchWrap());
 
         calibrationTargetField = compactEditText();
         calibrationTargetField.setInputType(InputType.TYPE_CLASS_TEXT);
@@ -717,50 +924,20 @@ public final class MainActivity extends Activity {
         calibrationPanel.addView(calibrationStatusText, matchWrap());
 
         alignCalibrationPanel = modePanel();
-        alignCalibrationPanel.addView(panelTitleWithHelp(
-                R.string.calibration_align_section,
-                R.string.calibration_align_intro
-        ), matchWrap());
-
         LinearLayout alignStartActions = new LinearLayout(this);
         alignStartActions.setOrientation(LinearLayout.HORIZONTAL);
         alignStartActions.setGravity(Gravity.CENTER_VERTICAL);
         alignStartActions.setPadding(0, dp(4), 0, 0);
 
         alignStartButton = actionButton(R.string.calibration_align_start);
-        alignStartButton.setOnClickListener(v -> {
-            if (selectedCalibrationMode.starCount > 0) {
-                startAlignment(selectedCalibrationMode.starCount);
-            }
-        });
+        alignStartButton.setOnClickListener(v -> handleAlignmentPrimaryAction());
         alignStartActions.addView(alignStartButton, weightWrap(1f));
-
-        alignSelectButton = actionButton(R.string.calibration_align_set_target);
-        alignSelectButton.setOnClickListener(v -> handleAlignmentTargetAction());
-        alignStartActions.addView(alignSelectButton, weightWrapWithLeftMargin(1f, 8));
-
-        alignCalibrationPanel.addView(alignStartActions, matchWrap());
-
-        LinearLayout alignActionsTwo = new LinearLayout(this);
-        alignActionsTwo.setOrientation(LinearLayout.VERTICAL);
-        alignActionsTwo.setGravity(Gravity.CENTER_VERTICAL);
-        alignActionsTwo.setPadding(0, dp(6), 0, 0);
-
-        LinearLayout alignFinishActions = new LinearLayout(this);
-        alignFinishActions.setOrientation(LinearLayout.HORIZONTAL);
-        alignFinishActions.setGravity(Gravity.CENTER_VERTICAL);
-
-        alignAcceptButton = actionButton(R.string.calibration_align_accept);
-        alignAcceptButton.setOnClickListener(v -> acceptAlignmentStar());
-        alignFinishActions.addView(alignAcceptButton, weightWrap(1f));
 
         alignCancelButton = actionButton(R.string.calibration_align_cancel);
         alignCancelButton.setOnClickListener(v -> cancelAlignmentSession());
-        alignFinishActions.addView(alignCancelButton, weightWrapWithLeftMargin(1f, 8));
+        alignStartActions.addView(alignCancelButton, weightWrapWithLeftMargin(1f, 8));
 
-        alignActionsTwo.addView(alignFinishActions, matchWrap());
-
-        alignCalibrationPanel.addView(alignActionsTwo, matchWrap());
+        alignCalibrationPanel.addView(alignStartActions, matchWrap());
         calibrationPanel.addView(alignCalibrationPanel, matchWrap());
 
         refineCalibrationPanel = modePanel();
@@ -778,263 +955,293 @@ public final class MainActivity extends Activity {
         refineCalibrationPanel.addView(refinePaButton, matchWrapWithTopMargin(6));
 
         calibrationPanel.addView(refineCalibrationPanel, matchWrap());
-        page.addView(calibrationPanel, matchWrap());
+        compactCalibrationOverlay(calibrationPanel);
         updateCalibrationModeViews();
-        return page;
+        return calibrationPanel;
+    }
+
+    private void compactCalibrationOverlay(View view) {
+        if (view instanceof Button) {
+            Button button = (Button) view;
+            button.setTextSize(13);
+            button.setMinHeight(dp(36));
+            button.setMinimumHeight(dp(36));
+            button.setPadding(dp(8), 0, dp(8), 0);
+        } else if (view instanceof EditText) {
+            EditText field = (EditText) view;
+            field.setTextSize(13);
+            field.setMinHeight(dp(36));
+            field.setMinimumHeight(dp(36));
+        } else if (view instanceof TextView) {
+            TextView textView = (TextView) view;
+            float scaledDensity = getResources().getDisplayMetrics().scaledDensity;
+            float currentSp = textView.getTextSize() / scaledDensity;
+            if (currentSp > 16f) {
+                textView.setTextSize(16);
+            } else if (currentSp > 13f) {
+                textView.setTextSize(currentSp - 1f);
+            }
+            textView.setIncludeFontPadding(false);
+        }
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) {
+                compactCalibrationOverlay(group.getChildAt(i));
+            }
+        }
+    }
+
+    private void setSkyCalibrationExpanded(boolean expanded) {
+        if (skyCalibrationExpanded == expanded) {
+            updateSkyCalibrationOverlayState();
+            if (expanded) {
+                scrollSkyCalibrationIntoView();
+            }
+            return;
+        }
+        skyCalibrationExpanded = expanded;
+        Logger.info("sky calibration panel " + (expanded ? "expanded" : "collapsed"));
+        updateSkyCalibrationOverlayState();
+        if (expanded) {
+            scrollSkyCalibrationIntoView();
+        }
+    }
+
+    private void updateSkyCalibrationOverlayState() {
+        if (skyCalibrationOverlay != null) {
+            skyCalibrationOverlay.setVisibility(skyCalibrationExpanded ? View.VISIBLE : View.GONE);
+            if (skyCalibrationExpanded) {
+                skyCalibrationOverlay.bringToFront();
+            }
+        }
+        if (skyCalibrationExpanded && manualPadVisible && manualPadView != null) {
+            manualPadView.bringToFront();
+        }
+        if (skyIconRail != null) {
+            skyIconRail.bringToFront();
+        }
+        if (skyCalibrationButton != null) {
+            skyCalibrationButton.setEnabled(true);
+            skyCalibrationButton.setAlpha(1.0f);
+            skyCalibrationButton.setTextColor(skyCalibrationExpanded ? selectedAccentColor() : titleTextColor());
+            skyCalibrationButton.setBackground(skyCalibrationExpanded
+                    ? createSegmentButtonBackground(true, true)
+                    : createSecondaryButtonBackground(true));
+        }
+    }
+
+    private void updateManualPadVisibility() {
+        if (manualPadView != null) {
+            manualPadView.setVisibility(manualPadVisible ? View.VISIBLE : View.GONE);
+            if (manualPadVisible && skyCalibrationExpanded) {
+                manualPadView.bringToFront();
+            }
+        }
+        if (manualPadToggleButton != null) {
+            manualPadToggleButton.setEnabled(true);
+            manualPadToggleButton.setText(R.string.manual_pad_toggle);
+            manualPadToggleButton.setTextColor(titleTextColor());
+            manualPadToggleButton.setBackgroundColor(Color.TRANSPARENT);
+        }
+    }
+
+    private void scrollSkyCalibrationIntoView() {
+        if (skyCalibrationOverlay == null) {
+            return;
+        }
+        skyCalibrationOverlay.postDelayed(() -> {
+            if (!skyCalibrationExpanded || skyCalibrationOverlay == null) {
+                return;
+            }
+            Rect rect = new Rect(
+                    0,
+                    0,
+                    skyCalibrationOverlay.getWidth(),
+                    skyCalibrationOverlay.getHeight()
+            );
+            skyCalibrationOverlay.requestRectangleOnScreen(rect, true);
+        }, 80);
     }
 
     private LinearLayout createSettingsPage() {
         LinearLayout page = new LinearLayout(this);
         page.setOrientation(LinearLayout.VERTICAL);
-        page.addView(createDeviceStatusPanel(), matchWrap());
-        addAdvancedSettingsSections(page);
+        page.addView(createFirmwareSettingsPanel(), matchWrap());
+        page.addView(createSafetyPanel(), matchWrapWithTopMargin(12));
+        page.addView(createSmallBodiesPanel(), matchWrapWithTopMargin(12));
+        page.addView(createLanguagePanel(), matchWrapWithTopMargin(12));
+        page.addView(createCommandLogPanel(), matchWrapWithTopMargin(12));
         return page;
     }
 
     private LinearLayout createConnectionSyncPage() {
         LinearLayout page = new LinearLayout(this);
         page.setOrientation(LinearLayout.VERTICAL);
-
-        if (isWideLayout()) {
-            LinearLayout columns = new LinearLayout(this);
-            columns.setOrientation(LinearLayout.HORIZONTAL);
-            columns.setGravity(Gravity.TOP);
-
-            LinearLayout left = new LinearLayout(this);
-            left.setOrientation(LinearLayout.VERTICAL);
-            left.addView(sectionTitle(R.string.connection_section), matchWrap());
-            left.addView(createConnectionPanel(), matchWrap());
-            left.addView(sectionTitle(R.string.observer_section), matchWrapWithTopMargin(8));
-            left.addView(createObserverPanel(), matchWrap());
-            columns.addView(left, weightWrap(1f));
-
-            LinearLayout right = new LinearLayout(this);
-            right.setOrientation(LinearLayout.VERTICAL);
-            right.addView(sectionTitleWithHelp(R.string.tracking_section, R.string.tracking_intro), matchWrap());
-            right.addView(createTrackingPanel(), matchWrap());
-            columns.addView(right, weightWrapWithLeftMargin(1f, 12));
-
-            page.addView(columns, matchWrap());
-        } else {
-            page.addView(sectionTitle(R.string.connection_section), matchWrap());
-            page.addView(createConnectionPanel(), matchWrap());
-
-            page.addView(sectionTitle(R.string.observer_section), matchWrapWithTopMargin(8));
-            page.addView(createObserverPanel(), matchWrap());
-
-            page.addView(sectionTitleWithHelp(R.string.tracking_section, R.string.tracking_intro), matchWrapWithTopMargin(8));
-            page.addView(createTrackingPanel(), matchWrap());
-        }
-
+        page.addView(createConnectionPanel(), matchWrap());
+        page.addView(createObserverPanel(), matchWrapWithTopMargin(12));
         return page;
-    }
-
-    private void addAdvancedSettingsSections(LinearLayout parent) {
-        parent.addView(sectionTitleWithHelp(R.string.safety_section, R.string.safety_intro), matchWrapWithTopMargin(12));
-        parent.addView(createSafetyPanel(), matchWrap());
-        parent.addView(sectionTitleWithHelp(R.string.firmware_settings_section, R.string.firmware_settings_intro), matchWrapWithTopMargin(12));
-        parent.addView(createFirmwareSettingsPanel(), matchWrap());
-        parent.addView(sectionTitleWithHelp(R.string.small_bodies_section, R.string.small_bodies_intro), matchWrapWithTopMargin(12));
-        parent.addView(createSmallBodiesPanel(), matchWrap());
-        parent.addView(sectionTitle(R.string.command_log_section), matchWrapWithTopMargin(12));
-        parent.addView(createCommandLogPanel(), matchWrap());
-    }
-
-    private View createDeviceStatusPanel() {
-        LinearLayout panel = card();
-        panel.addView(panelTitle(R.string.device_status_section), matchWrap());
-
-        deviceConnectionStatusText = statusValueText();
-        deviceTrackingStatusText = statusValueText();
-        deviceFlowStatusText = statusValueText();
-        deviceGotoStatusText = statusValueText();
-        deviceParkStatusText = statusValueText();
-        deviceSafetyStatusText = statusValueText();
-
-        LinearLayout firstRow = metricRow();
-        firstRow.addView(statusMetric(R.string.device_status_connection_label, deviceConnectionStatusText), weightWrap(1f));
-        firstRow.addView(statusMetric(R.string.device_status_tracking_label, deviceTrackingStatusText), weightWrapWithLeftMargin(1f, 8));
-        panel.addView(firstRow, matchWrapWithTopMargin(8));
-
-        LinearLayout secondRow = metricRow();
-        secondRow.addView(statusMetric(R.string.device_status_flow_label, deviceFlowStatusText), weightWrap(1f));
-        secondRow.addView(statusMetric(R.string.device_status_goto_label, deviceGotoStatusText), weightWrapWithLeftMargin(1f, 8));
-        panel.addView(secondRow, matchWrapWithTopMargin(8));
-
-        LinearLayout thirdRow = metricRow();
-        thirdRow.addView(statusMetric(R.string.device_status_park_label, deviceParkStatusText), weightWrap(1f));
-        thirdRow.addView(statusMetric(R.string.device_status_safety_label, deviceSafetyStatusText), weightWrapWithLeftMargin(1f, 8));
-        panel.addView(thirdRow, matchWrapWithTopMargin(8));
-
-        updateDeviceStatusPanel();
-        return panel;
     }
 
     private View createFirmwareSettingsPanel() {
         LinearLayout panel = card();
+        panel.addView(settingsPanelTitleWithHelp(
+                R.string.firmware_settings_section,
+                R.string.firmware_settings_intro,
+                "▣"
+        ), matchWrap());
 
-        panel.addView(labelText(R.string.firmware_mode_label), matchWrap());
-        firmwareModeSpinner = new Spinner(this);
-        List<String> firmwareLabels = new ArrayList<>();
-        for (FirmwareMode mode : FirmwareMode.values()) {
-            firmwareLabels.add(getString(mode.labelRes));
-        }
-        ArrayAdapter<String> firmwareAdapter = new ArrayAdapter<>(
-                this,
-                android.R.layout.simple_spinner_item,
-                firmwareLabels
-        );
-        firmwareAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        firmwareModeSpinner.setAdapter(firmwareAdapter);
-        firmwareModeSpinner.setSelection(selectedFirmwareMode.ordinal());
-        firmwareModeSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
-            @Override
-            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
-                if (suppressFirmwareModeSelection) {
-                    return;
-                }
-                FirmwareMode mode = FirmwareMode.values()[position];
-                if (selectedFirmwareMode == mode) {
-                    return;
-                }
-                logUserAction("select firmware-mode " + mode.name());
-                selectedFirmwareMode = mode;
-                if (selectedFirmwareMode == FirmwareMode.ONSTEP && selectedMountMode == MountMode.ALTAZ) {
-                    selectedMountMode = MountMode.EQUATORIAL;
-                }
-                saveFirmwarePreferences();
-                updateFirmwareSettingsViews();
-                refreshCalibrationModeChoices();
-                updateCalibrationViews();
-                updateTrackingViews();
-                logStateSnapshot("firmware-mode-selected");
-            }
+        LinearLayout firmwareBox = settingsSubPanel();
+        firmwareBox.addView(labelText(R.string.firmware_mode_label), matchWrap());
 
-            @Override
-            public void onNothingSelected(AdapterView<?> parent) {
-            }
-        });
-        panel.addView(firmwareModeSpinner, matchWrap());
+        LinearLayout firmwareValueRow = new LinearLayout(this);
+        firmwareValueRow.setOrientation(LinearLayout.HORIZONTAL);
+        firmwareValueRow.setGravity(Gravity.CENTER_VERTICAL);
+
+        firmwareModeText = new TextView(this);
+        firmwareModeText.setTextSize(19);
+        firmwareModeText.setTypeface(Typeface.DEFAULT_BOLD);
+        firmwareModeText.setTextColor(titleTextColor());
+        firmwareModeText.setGravity(Gravity.CENTER_VERTICAL);
+        firmwareModeText.setSingleLine(true);
+        firmwareModeText.setPadding(0, 0, 0, 0);
+        firmwareModeText.setMinHeight(dp(42));
+        firmwareModeText.setOnClickListener(v -> showFirmwareModeDialog());
+        firmwareValueRow.addView(firmwareModeText, weightWrap(1f));
 
         mountModeContainer = new LinearLayout(this);
-        mountModeContainer.setOrientation(LinearLayout.VERTICAL);
-        mountModeContainer.setPadding(0, dp(8), 0, 0);
-        mountModeContainer.addView(labelText(R.string.mount_mode_label), matchWrap());
-        mountModeSpinner = new Spinner(this);
-        List<String> mountLabels = new ArrayList<>();
-        for (MountMode mode : MountMode.values()) {
-            mountLabels.add(getString(mode.labelRes));
-        }
-        ArrayAdapter<String> mountAdapter = new ArrayAdapter<>(
-                this,
-                android.R.layout.simple_spinner_item,
-                mountLabels
-        );
-        mountAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        mountModeSpinner.setAdapter(mountAdapter);
-        mountModeSpinner.setSelection(selectedMountMode.ordinal());
-        mountModeSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
-            @Override
-            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
-                if (suppressMountModeSelection) {
-                    return;
-                }
-                MountMode requestedMode = MountMode.values()[position];
-                if (selectedMountMode == requestedMode) {
-                    return;
-                }
-                requestMountModeChange(requestedMode);
-            }
+        mountModeContainer.setOrientation(LinearLayout.HORIZONTAL);
+        mountModeContainer.setGravity(Gravity.CENTER_VERTICAL);
 
-            @Override
-            public void onNothingSelected(AdapterView<?> parent) {
-            }
-        });
-        mountModeContainer.addView(mountModeSpinner, matchWrap());
-        panel.addView(mountModeContainer, matchWrap());
+        LinearLayout mountModeSegments = new LinearLayout(this);
+        mountModeSegments.setOrientation(LinearLayout.HORIZONTAL);
+        mountModeSegments.setGravity(Gravity.CENTER_VERTICAL);
+
+        mountModeEquatorialButton = segmentButton(R.string.mount_mode_equatorial);
+        mountModeEquatorialButton.setOnClickListener(v -> requestMountModeChange(MountMode.EQUATORIAL));
+        mountModeSegments.addView(mountModeEquatorialButton, weightWrap(1f));
+
+        mountModeAltAzButton = segmentButton(R.string.mount_mode_altaz);
+        mountModeAltAzButton.setOnClickListener(v -> requestMountModeChange(MountMode.ALTAZ));
+        mountModeSegments.addView(mountModeAltAzButton, weightWrapWithLeftMargin(1f, 6));
+        mountModeContainer.addView(mountModeSegments, matchWrap());
+        LinearLayout.LayoutParams mountModeParams = new LinearLayout.LayoutParams(dp(184), LinearLayout.LayoutParams.WRAP_CONTENT);
+        mountModeParams.leftMargin = dp(10);
+        firmwareValueRow.addView(mountModeContainer, mountModeParams);
+
+        firmwareBox.addView(firmwareValueRow, matchWrapWithTopMargin(8));
+        panel.addView(firmwareBox, matchWrapWithTopMargin(10));
 
         firmwareSettingsStatusText = bodyText(R.string.firmware_settings_status_onstep);
-        firmwareSettingsStatusText.setPadding(0, dp(8), 0, 0);
+        firmwareSettingsStatusText.setTextSize(13);
+        firmwareSettingsStatusText.setTextColor(mutedTextColor());
+        firmwareSettingsStatusText.setPadding(dp(2), dp(8), dp(2), 0);
         panel.addView(firmwareSettingsStatusText, matchWrap());
 
         updateFirmwareSettingsViews();
         return panel;
     }
 
+    private void showFirmwareModeDialog() {
+        CharSequence[] labels = new CharSequence[FirmwareMode.values().length];
+        for (FirmwareMode mode : FirmwareMode.values()) {
+            labels[mode.ordinal()] = getString(mode.labelRes);
+        }
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.firmware_mode_label)
+                .setSingleChoiceItems(labels, selectedFirmwareMode.ordinal(), (dialog, which) -> {
+                    dialog.dismiss();
+                    applyFirmwareModeSelection(FirmwareMode.values()[which]);
+                })
+                .setNegativeButton(R.string.cancel_button, null)
+                .show();
+    }
+
+    private void applyFirmwareModeSelection(FirmwareMode mode) {
+        if (selectedFirmwareMode == mode) {
+            return;
+        }
+        logUserAction("select firmware-mode " + mode.name());
+        selectedFirmwareMode = mode;
+        if (selectedFirmwareMode == FirmwareMode.ONSTEP && selectedMountMode == MountMode.ALTAZ) {
+            selectedMountMode = MountMode.EQUATORIAL;
+        }
+        saveFirmwarePreferences();
+        updateFirmwareSettingsViews();
+        refreshCalibrationModeChoices();
+        updateCalibrationViews();
+        updateTrackingViews();
+        logStateSnapshot("firmware-mode-selected");
+    }
+
     private View createSafetyPanel() {
         LinearLayout panel = card();
+        panel.addView(settingsPanelTitle(R.string.safety_section, "◇"), matchWrap());
 
-        emergencyStopButton = actionButton(R.string.emergency_stop);
-        emergencyStopButton.setTextColor(Color.WHITE);
-        emergencyStopButton.setTypeface(Typeface.DEFAULT_BOLD);
-        emergencyStopButton.setBackground(createStopButtonBackground());
-        emergencyStopButton.setOnClickListener(v -> emergencyStop());
-        panel.addView(emergencyStopButton, matchWrap());
+        LinearLayout nightModeBox = settingsSubPanel();
+        nightModeBox.setGravity(Gravity.CENTER);
+        nightModeBox.setPadding(dp(10), dp(3), dp(10), dp(3));
+        nightModeBox.setClickable(true);
+        nightModeBox.setOnClickListener(v -> toggleNightMode());
+        nightModeStateText = statusValueText();
+        nightModeStateText.setText(R.string.night_mode_label);
+        nightModeStateText.setTextSize(15);
+        nightModeStateText.setGravity(Gravity.CENTER);
+        nightModeStateText.setIncludeFontPadding(false);
+        nightModeBox.addView(nightModeStateText, matchFixedHeight(40));
 
-        TextView emergencyHint = bodyText(R.string.emergency_stop_hint);
-        emergencyHint.setTextSize(13);
-        emergencyHint.setPadding(0, dp(5), 0, dp(8));
-        panel.addView(emergencyHint, matchWrap());
-
-        LinearLayout nightModeRow = new LinearLayout(this);
-        nightModeRow.setOrientation(LinearLayout.HORIZONTAL);
-        nightModeRow.setGravity(Gravity.CENTER_VERTICAL);
-        nightModeRow.setPadding(0, dp(2), 0, dp(6));
-
-        TextView nightModeLabel = labelText(R.string.night_mode_label);
-        nightModeLabel.setTypeface(Typeface.DEFAULT_BOLD);
-        nightModeRow.addView(nightModeLabel, weightWrap(1f));
-
-        nightModeButton = actionButton(nightModeEnabled
-                ? R.string.night_mode_enabled_short
-                : R.string.night_mode_disabled_short);
-        nightModeButton.setOnClickListener(v -> toggleNightMode());
-        nightModeButton.setTextColor(Color.WHITE);
-        nightModeButton.setBackground(createNightModeButtonBackground());
-        nightModeRow.addView(nightModeButton, new LinearLayout.LayoutParams(dp(96), dp(40)));
-        panel.addView(nightModeRow, matchWrap());
-
-        TextView gotoLabel = labelText(R.string.safety_goto_label);
-        gotoLabel.setTypeface(Typeface.DEFAULT_BOLD);
-        gotoLabel.setPadding(0, dp(4), 0, 0);
-        panel.addView(gotoLabel, matchWrap());
-
-        LinearLayout gotoActions = new LinearLayout(this);
-        gotoActions.setOrientation(LinearLayout.HORIZONTAL);
-        gotoActions.setGravity(Gravity.CENTER_VERTICAL);
-        gotoActions.setPadding(0, dp(5), 0, 0);
-
-        safetyCancelGotoButton = actionButton(R.string.goto_cancel);
+        LinearLayout cancelBox = settingsSubPanel();
+        cancelBox.setGravity(Gravity.CENTER);
+        cancelBox.setPadding(dp(10), dp(3), dp(10), dp(3));
+        safetyCancelGotoButton = statusValueText();
+        safetyCancelGotoButton.setText(R.string.goto_cancel);
+        safetyCancelGotoButton.setTextSize(15);
+        safetyCancelGotoButton.setGravity(Gravity.CENTER);
+        safetyCancelGotoButton.setIncludeFontPadding(false);
+        safetyCancelGotoButton.setClickable(true);
+        safetyCancelGotoButton.setPadding(0, 0, 0, 0);
         safetyCancelGotoButton.setOnClickListener(v -> cancelGoto());
-        gotoActions.addView(safetyCancelGotoButton, weightWrap(1f));
+        cancelBox.addView(safetyCancelGotoButton, matchFixedHeight(40));
 
-        gotoStatusRefreshButton = actionButton(R.string.goto_refresh_status);
+        LinearLayout quickRow = metricRow();
+        quickRow.setGravity(Gravity.CENTER_VERTICAL);
+        quickRow.addView(nightModeBox, weightFixedHeight(1f, 46));
+        quickRow.addView(cancelBox, weightFixedHeightWithLeftMargin(1f, 46, 10));
+        panel.addView(quickRow, matchWrapWithTopMargin(8));
+
+        LinearLayout parkBox = settingsSubPanel();
+        parkBox.setGravity(Gravity.CENTER);
+        parkBox.setPadding(dp(10), dp(3), dp(10), dp(3));
+        parkButton = statusValueText();
+        parkButton.setText(R.string.park_mount);
+        parkButton.setTextSize(15);
+        parkButton.setGravity(Gravity.CENTER);
+        parkButton.setIncludeFontPadding(false);
+        parkButton.setClickable(true);
+        parkButton.setOnClickListener(v -> toggleParkState());
+        parkBox.addView(parkButton, matchFixedHeight(40));
+
+        LinearLayout gotoStatusBox = settingsSubPanel();
+        gotoStatusBox.setGravity(Gravity.CENTER);
+        gotoStatusBox.setPadding(dp(10), dp(3), dp(10), dp(3));
+        gotoStatusRefreshButton = statusValueText();
+        gotoStatusRefreshButton.setText(R.string.goto_refresh_status);
+        gotoStatusRefreshButton.setTextSize(15);
+        gotoStatusRefreshButton.setGravity(Gravity.CENTER);
+        gotoStatusRefreshButton.setIncludeFontPadding(false);
+        gotoStatusRefreshButton.setClickable(true);
         gotoStatusRefreshButton.setOnClickListener(v -> refreshGotoStatus());
-        gotoStatusRefreshButton.setBackground(createSecondaryButtonBackground(true));
-        gotoActions.addView(gotoStatusRefreshButton, weightWrapWithLeftMargin(1f, 8));
-        panel.addView(gotoActions, matchWrap());
+        gotoStatusBox.addView(gotoStatusRefreshButton, matchFixedHeight(40));
 
-        TextView parkLabel = labelText(R.string.safety_park_label);
-        parkLabel.setTypeface(Typeface.DEFAULT_BOLD);
-        parkLabel.setPadding(0, dp(10), 0, 0);
-        panel.addView(parkLabel, matchWrap());
-
-        LinearLayout parkActions = new LinearLayout(this);
-        parkActions.setOrientation(LinearLayout.HORIZONTAL);
-        parkActions.setGravity(Gravity.CENTER_VERTICAL);
-        parkActions.setPadding(0, dp(5), 0, 0);
-
-        parkButton = actionButton(R.string.park_mount);
-        parkButton.setOnClickListener(v -> parkMount());
-        parkActions.addView(parkButton, weightWrap(1f));
-
-        unparkButton = actionButton(R.string.unpark_mount);
-        unparkButton.setOnClickListener(v -> unparkMount());
-        parkActions.addView(unparkButton, weightWrap(1f));
-        panel.addView(parkActions, matchWrap());
+        LinearLayout statusRow = metricRow();
+        statusRow.setGravity(Gravity.CENTER_VERTICAL);
+        statusRow.addView(parkBox, weightFixedHeight(1f, 46));
+        statusRow.addView(gotoStatusBox, weightFixedHeightWithLeftMargin(1f, 46, 10));
+        panel.addView(statusRow, matchWrapWithTopMargin(5));
 
         safetyStatusText = bodyText(R.string.safety_status_idle);
-        safetyStatusText.setPadding(0, dp(10), 0, 0);
+        safetyStatusText.setTextSize(13);
+        safetyStatusText.setTextColor(mutedTextColor());
+        safetyStatusText.setPadding(dp(2), dp(6), dp(2), 0);
         if (safetyStatusMessage != null) {
             safetyStatusText.setText(safetyStatusMessage);
         }
@@ -1045,6 +1252,7 @@ public final class MainActivity extends Activity {
 
     private View createCommandLogPanel() {
         LinearLayout panel = card();
+        panel.addView(settingsPanelTitle(R.string.command_log_section, ">_"), matchWrap());
 
         logEnabledCheckBox = new CheckBox(this);
         logEnabledCheckBox.setText(R.string.log_enable_recording);
@@ -1052,17 +1260,19 @@ public final class MainActivity extends Activity {
         logEnabledCheckBox.setTextSize(14);
         logEnabledCheckBox.setChecked(Logger.isEnabled());
         logEnabledCheckBox.setOnCheckedChangeListener((buttonView, isChecked) -> setLogRecordingEnabled(isChecked));
-        panel.addView(logEnabledCheckBox, matchWrap());
+        panel.addView(logEnabledCheckBox, matchWrapWithTopMargin(6));
 
         logScrollView = new ScrollView(this);
         logScrollView.setFillViewport(false);
+        logScrollView.setPadding(dp(10), dp(8), dp(10), dp(8));
+        logScrollView.setBackground(createMetricBackground());
         logText = bodyText(R.string.log_empty);
         logText.setTextColor(bodyTextColor());
         logText.setMinLines(5);
         logText.setGravity(Gravity.START);
         logText.setTextIsSelectable(true);
         logScrollView.addView(logText, matchWrap());
-        panel.addView(logScrollView, matchFixedHeight(132));
+        panel.addView(logScrollView, matchFixedHeight(128));
 
         logActions = new LinearLayout(this);
         logActions.setOrientation(LinearLayout.HORIZONTAL);
@@ -1075,6 +1285,8 @@ public final class MainActivity extends Activity {
 
         Button clearButton = actionButton(R.string.log_clear);
         clearButton.setOnClickListener(v -> confirmClearLog());
+        clearButton.setTextColor(dangerTextColor(true));
+        clearButton.setBackground(createSubtleDangerButtonBackground(true));
         logActions.addView(clearButton, weightWrapWithLeftMargin(1f, 6));
 
         panel.addView(logActions, matchWrap());
@@ -1239,10 +1451,18 @@ public final class MainActivity extends Activity {
 
     private View createSmallBodiesPanel() {
         LinearLayout panel = card();
+        panel.addView(settingsPanelTitleWithHelp(
+                R.string.small_bodies_section,
+                R.string.small_bodies_intro,
+                "☄"
+        ), matchWrap());
 
         smallBodyStatusText = bodyText(R.string.app_name);
-        smallBodyStatusText.setPadding(0, 0, 0, dp(6));
-        panel.addView(smallBodyStatusText, matchWrap());
+        smallBodyStatusText.setTextSize(14);
+        smallBodyStatusText.setPadding(0, 0, 0, dp(8));
+
+        LinearLayout contentBox = settingsSubPanel();
+        contentBox.addView(smallBodyStatusText, matchWrap());
 
         LinearLayout buttonRow = new LinearLayout(this);
         buttonRow.setOrientation(LinearLayout.HORIZONTAL);
@@ -1250,13 +1470,13 @@ public final class MainActivity extends Activity {
         buttonRow.setPadding(0, dp(4), 0, 0);
 
         smallBodyDownloadAsteroidsButton = actionButton(R.string.small_bodies_download_asteroids);
-        smallBodyDownloadAsteroidsButton.setOnClickListener(v -> startAsteroidDownload());
+        smallBodyDownloadAsteroidsButton.setOnClickListener(v -> showAddAsteroidDialog());
         buttonRow.addView(smallBodyDownloadAsteroidsButton, weightWrap(1f));
 
         smallBodyDownloadCometsButton = actionButton(R.string.small_bodies_add_comet_button);
         smallBodyDownloadCometsButton.setOnClickListener(v -> showAddCometDialog());
         buttonRow.addView(smallBodyDownloadCometsButton, weightWrapWithLeftMargin(1f, 8));
-        panel.addView(buttonRow, matchWrap());
+        contentBox.addView(buttonRow, matchWrap());
 
         smallBodyClearUserButton = actionButton(R.string.small_bodies_clear_user);
         smallBodyClearUserButton.setOnClickListener(v -> clearUserSmallBodies());
@@ -1264,7 +1484,8 @@ public final class MainActivity extends Activity {
         smallBodyClearUserButton.setBackground(createSubtleDangerButtonBackground(true));
         LinearLayout.LayoutParams clearParams = matchWrap();
         clearParams.topMargin = dp(8);
-        panel.addView(smallBodyClearUserButton, clearParams);
+        contentBox.addView(smallBodyClearUserButton, clearParams);
+        panel.addView(contentBox, matchWrapWithTopMargin(10));
 
         updateSmallBodyStatusText();
         return panel;
@@ -1282,42 +1503,89 @@ public final class MainActivity extends Activity {
         ));
     }
 
-    private void startAsteroidDownload() {
-        if (smallBodyCatalog == null || smallBodyDownloadAsteroidsButton == null) {
+    private View createLanguagePanel() {
+        LinearLayout panel = card();
+        panel.addView(settingsPanelTitle(R.string.language_section, "Aa"), matchWrap());
+
+        LinearLayout box = settingsSubPanel();
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+
+        TextView label = labelText(R.string.language_label);
+        label.setTextSize(14);
+        row.addView(label, weightWrap(1f));
+
+        languageText = dropdownText();
+        languageText.setTextSize(17);
+        languageText.setText(UI_LANGUAGE_ENGLISH.equals(selectedUiLanguage)
+                ? getString(R.string.language_english) + "  ▾"
+                : getString(R.string.language_chinese) + "  ▾");
+        languageText.setOnClickListener(v -> showLanguageDialog());
+        row.addView(languageText, fixedWidthHeightWithLeftMargin(146, 42, 10));
+        box.addView(row, matchWrap());
+        panel.addView(box, matchWrapWithTopMargin(10));
+        return panel;
+    }
+
+    private void showLanguageDialog() {
+        if (connected || busy) {
             return;
         }
-        final int maxH = SMALL_BODY_ASTEROID_DOWNLOAD_MAX_H;
-        logUserAction("tap download-asteroids maxH=" + maxH);
-        smallBodyDownloadAsteroidsButton.setEnabled(false);
-        setStatus(getString(R.string.small_bodies_download_starting));
-        ioExecutor.execute(() -> {
-            try {
-                String constraint = "{\"AND\":[\"H|LE|" + maxH + "\"]}";
-                String url = "https://ssd-api.jpl.nasa.gov/sbdb_query.api"
-                        + "?fields=full_name,e,i,om,w,q,tp,H,G"
-                        + "&sb-kind=a"
-                        + "&sb-cdata=" + java.net.URLEncoder.encode(constraint, StandardCharsets.UTF_8.name())
-                        + "&full-prec=true";
-                String json = httpGet(url);
-                List<SmallBody> parsed = parseSbdbJson(json, false);
-                smallBodyCatalog.replaceUserAsteroids(parsed);
-                runOnUiThread(() -> {
-                    setStatus(getString(R.string.small_bodies_download_done, parsed.size()));
-                    Logger.info("small-body asteroid download success maxH=" + maxH + " count=" + parsed.size());
-                    smallBodyDownloadAsteroidsButton.setEnabled(true);
-                    updateSmallBodyStatusText();
-                    if (skyChartView != null) {
-                        skyChartView.invalidate();
-                    }
-                });
-            } catch (Throwable t) {
-                Logger.error("small-body asteroid download failed maxH=" + maxH, t);
-                runOnUiThread(() -> {
-                    setStatus(smallBodyDownloadFailureStatus(t));
-                    smallBodyDownloadAsteroidsButton.setEnabled(true);
-                });
-            }
+        if (isSmallBodyFetchInProgress()) {
+            setStatus(getString(R.string.language_change_blocked_fetch));
+            return;
+        }
+        String[] labels = {
+                getString(R.string.language_chinese),
+                getString(R.string.language_english)
+        };
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.language_section)
+                .setSingleChoiceItems(labels, UI_LANGUAGE_ENGLISH.equals(selectedUiLanguage) ? 1 : 0,
+                        (dialog, which) -> {
+                            dialog.dismiss();
+                            applyUiLanguageSelection(which == 1 ? UI_LANGUAGE_ENGLISH : UI_LANGUAGE_CHINESE);
+                        })
+                .setNegativeButton(R.string.cancel_button, null)
+                .show();
+    }
+
+    private void showAddAsteroidDialog() {
+        if (smallBodyCatalog == null) {
+            return;
+        }
+        logUserAction("tap add-asteroid-dialog");
+        EditText input = compactEditText();
+        input.setHint(R.string.small_bodies_add_asteroid_hint);
+        input.setInputType(InputType.TYPE_CLASS_TEXT);
+        FrameLayout wrapper = new FrameLayout(this);
+        int padding = dp(16);
+        wrapper.setPadding(padding, dp(8), padding, 0);
+        wrapper.addView(input);
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle(R.string.small_bodies_add_asteroid_title)
+                .setMessage(R.string.small_bodies_add_asteroid_message)
+                .setView(wrapper)
+                .setPositiveButton(R.string.small_bodies_add_asteroid_ok, null)
+                .setNegativeButton(R.string.cancel_button, null)
+                .create();
+        dialog.setOnShowListener(d -> {
+            // Override the positive button's click so we can validate input
+            // and only dismiss the dialog after a non-empty name is submitted.
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+                String name = input.getText() == null ? "" : input.getText().toString().trim();
+                if (name.isEmpty()) {
+                    input.setError(getString(R.string.small_bodies_add_asteroid_empty));
+                    input.requestFocus();
+                    return;
+                }
+                dialog.dismiss();
+                logUserAction("submit add-asteroid query=\"" + name + "\"");
+                fetchSingleSmallBody(name, false);
+            });
         });
+        dialog.show();
     }
 
     private void showAddCometDialog() {
@@ -1337,7 +1605,7 @@ public final class MainActivity extends Activity {
                 .setMessage(R.string.small_bodies_add_comet_message)
                 .setView(wrapper)
                 .setPositiveButton(R.string.small_bodies_add_comet_ok, null)
-                .setNegativeButton(android.R.string.cancel, null)
+                .setNegativeButton(R.string.cancel_button, null)
                 .create();
         dialog.setOnShowListener(d -> {
             // Override the positive button's click so we can validate input
@@ -1361,9 +1629,11 @@ public final class MainActivity extends Activity {
         if (smallBodyCatalog == null) {
             return;
         }
-        if (smallBodyDownloadCometsButton != null) {
-            smallBodyDownloadCometsButton.setEnabled(false);
+        if (isSmallBodyFetchInProgress()) {
+            setStatus(getString(R.string.small_bodies_download_starting));
+            return;
         }
+        beginSmallBodyFetch();
         Logger.info("small-body single fetch start query=\"" + query + "\" comet=" + isComet);
         setStatus(getString(R.string.small_bodies_download_starting));
         ioExecutor.execute(() -> {
@@ -1372,11 +1642,11 @@ public final class MainActivity extends Activity {
                 SmallBody body = parseSbdbSingleRecord(json, isComet);
                 if (body == null) {
                     runOnUiThread(() -> {
-                        setStatus(getString(R.string.small_bodies_add_not_found, query));
+                        setStatus(getString(isComet
+                                ? R.string.small_bodies_add_comet_not_found
+                                : R.string.small_bodies_add_asteroid_not_found, query));
                         Logger.warn("small-body single fetch not found query=\"" + query + "\" comet=" + isComet);
-                        if (smallBodyDownloadCometsButton != null) {
-                            smallBodyDownloadCometsButton.setEnabled(true);
-                        }
+                        finishSmallBodyFetch();
                     });
                     return;
                 }
@@ -1386,9 +1656,7 @@ public final class MainActivity extends Activity {
                     Logger.info("small-body single fetch success query=\"" + query
                             + "\" comet=" + isComet
                             + " body=\"" + body.displayLabel() + "\"");
-                    if (smallBodyDownloadCometsButton != null) {
-                        smallBodyDownloadCometsButton.setEnabled(true);
-                    }
+                    finishSmallBodyFetch();
                     updateSmallBodyStatusText();
                     if (skyChartView != null) {
                         skyChartView.invalidate();
@@ -1398,12 +1666,38 @@ public final class MainActivity extends Activity {
                 Logger.error("small-body single fetch failed query=\"" + query + "\" comet=" + isComet, t);
                 runOnUiThread(() -> {
                     setStatus(smallBodyDownloadFailureStatus(t));
-                    if (smallBodyDownloadCometsButton != null) {
-                        smallBodyDownloadCometsButton.setEnabled(true);
-                    }
+                    finishSmallBodyFetch();
                 });
             }
         });
+    }
+
+    private void beginSmallBodyFetch() {
+        smallBodyFetchInFlight.incrementAndGet();
+        setSmallBodyFetchControlsEnabled(false);
+    }
+
+    private void finishSmallBodyFetch() {
+        smallBodyFetchInFlight.updateAndGet(value -> Math.max(0, value - 1));
+        if (!isSmallBodyFetchInProgress()) {
+            setSmallBodyFetchControlsEnabled(true);
+        }
+    }
+
+    private boolean isSmallBodyFetchInProgress() {
+        return smallBodyFetchInFlight.get() > 0;
+    }
+
+    private void setSmallBodyFetchControlsEnabled(boolean enabled) {
+        if (smallBodyDownloadAsteroidsButton != null) {
+            smallBodyDownloadAsteroidsButton.setEnabled(enabled);
+        }
+        if (smallBodyDownloadCometsButton != null) {
+            smallBodyDownloadCometsButton.setEnabled(enabled);
+        }
+        if (smallBodyClearUserButton != null) {
+            smallBodyClearUserButton.setEnabled(enabled);
+        }
     }
 
     private String smallBodyDownloadFailureStatus(Throwable throwable) {
@@ -2012,99 +2306,174 @@ public final class MainActivity extends Activity {
         return trimmed;
     }
 
-    private View createTrackingPanel() {
-        LinearLayout panel = card();
+    private View createTrackingRateSelector() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        TextView label = labelText(R.string.tracking_rate_label);
+        label.setSingleLine(true);
+        box.addView(label, matchWrap());
+        trackingRateSpinner = new Spinner(this);
+        List<String> labels = new ArrayList<>();
+        for (TrackingRate rate : TrackingRate.values()) {
+            labels.add(getString(rate.labelRes));
+        }
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(
+                this,
+                android.R.layout.simple_spinner_item,
+                labels
+        );
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        trackingRateSpinner.setAdapter(adapter);
+        trackingRateSpinner.setSelection(selectedTrackingRate.ordinal());
+        trackingRateSpinner.setMinimumHeight(dp(44));
+        trackingRateSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                if (suppressTrackingRateSelection || position < 0 || position >= TrackingRate.values().length) {
+                    return;
+                }
+                setTrackingRate(TrackingRate.values()[position]);
+            }
 
-        panel.addView(labelText(R.string.tracking_rate_label), matchWrap());
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) {
+            }
+        });
+        box.addView(trackingRateSpinner, matchFixedHeightWithTopMargin(44, 4));
+        return box;
+    }
 
-        LinearLayout rateActions = new LinearLayout(this);
-        rateActions.setOrientation(LinearLayout.HORIZONTAL);
-        rateActions.setGravity(Gravity.CENTER_VERTICAL);
-        rateActions.setPadding(0, dp(6), 0, dp(8));
-
-        trackingSiderealButton = trackingRateButton(TrackingRate.SIDEREAL);
-        rateActions.addView(trackingSiderealButton, weightWrap(1f));
-
-        trackingLunarButton = trackingRateButton(TrackingRate.LUNAR);
-        rateActions.addView(trackingLunarButton, weightWrapWithLeftMargin(1f, 8));
-
-        trackingSolarButton = trackingRateButton(TrackingRate.SOLAR);
-        rateActions.addView(trackingSolarButton, weightWrapWithLeftMargin(1f, 8));
-
-        panel.addView(rateActions, matchWrap());
-
+    private Button createTrackingToggleControl() {
         trackingToggleButton = actionButton(R.string.tracking_start);
         trackingToggleButton.setOnClickListener(v -> toggleTracking());
-        panel.addView(trackingToggleButton, matchWrap());
-
-        trackingStatusText = bodyText(R.string.tracking_status_off);
-        trackingStatusText.setPadding(0, dp(8), 0, 0);
-        panel.addView(trackingStatusText, matchWrap());
-
-        updateTrackingViews();
-        return panel;
+        return trackingToggleButton;
     }
 
     private View createObserverPanel() {
         LinearLayout panel = card();
 
-        LinearLayout fields = new LinearLayout(this);
-        fields.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout titleRow = settingsPanelTitle(R.string.observer_section, "⌖");
+
+        Button gpsButton = compactHeaderIconButton("⌖", R.string.use_gps);
+        gpsButton.setOnClickListener(v -> requestGpsLocation());
+        titleRow.addView(gpsButton, squareParams(34));
+
+        syncMountButton = compactHeaderIconButton("↻", R.string.sync_observer_to_mount);
+        syncMountButton.setOnClickListener(v -> syncObserverToMount());
+        LinearLayout.LayoutParams syncParams = squareParams(34);
+        syncParams.leftMargin = dp(8);
+        titleRow.addView(syncMountButton, syncParams);
+
+        Button helpButton = compactHeaderIconButton("?", R.string.help_button_content_description);
+        helpButton.setOnClickListener(v -> showHelpDialog(R.string.observer_section, R.string.observer_sync_intro));
+        LinearLayout.LayoutParams helpParams = squareParams(30);
+        helpParams.leftMargin = dp(8);
+        titleRow.addView(helpButton, helpParams);
+
+        panel.addView(titleRow, matchWrap());
+
+        LinearLayout fieldsTop = new LinearLayout(this);
+        fieldsTop.setOrientation(LinearLayout.HORIZONTAL);
 
         LinearLayout latitudeBox = new LinearLayout(this);
         latitudeBox.setOrientation(LinearLayout.VERTICAL);
         latitudeBox.addView(labelText(R.string.latitude_label), matchWrap());
-        latitudeField = coordinateField(ObserverState.BOSTON_LATITUDE);
-        latitudeBox.addView(latitudeField, matchWrap());
-        fields.addView(latitudeBox, weightWrap(1f));
+        latitudeField = coordinateField(observerState.latitudeDegrees);
+        latitudeSyncAlertText = syncAlertText();
+        latitudeBox.addView(fieldWithAlert(latitudeField, latitudeSyncAlertText), matchWrapWithTopMargin(4));
+        fieldsTop.addView(latitudeBox, weightWrap(1f));
 
         LinearLayout longitudeBox = new LinearLayout(this);
         longitudeBox.setOrientation(LinearLayout.VERTICAL);
         longitudeBox.addView(labelText(R.string.longitude_label), matchWrap());
-        longitudeField = coordinateField(ObserverState.BOSTON_LONGITUDE);
-        longitudeBox.addView(longitudeField, matchWrap());
-        fields.addView(longitudeBox, weightWrapWithLeftMargin(1f, 8));
+        longitudeField = coordinateField(observerState.longitudeDegrees);
+        longitudeSyncAlertText = syncAlertText();
+        longitudeBox.addView(fieldWithAlert(longitudeField, longitudeSyncAlertText), matchWrapWithTopMargin(4));
+        fieldsTop.addView(longitudeBox, weightWrapWithLeftMargin(1f, 10));
 
-        panel.addView(fields, matchWrap());
+        panel.addView(fieldsTop, matchWrapWithTopMargin(10));
 
-        LinearLayout actions = new LinearLayout(this);
-        actions.setOrientation(LinearLayout.HORIZONTAL);
-        actions.setGravity(Gravity.CENTER_VERTICAL);
-        actions.setPadding(0, dp(8), 0, 0);
+        LinearLayout fieldsBottom = new LinearLayout(this);
+        fieldsBottom.setOrientation(LinearLayout.HORIZONTAL);
 
-        Button gpsButton = new Button(this);
-        gpsButton.setAllCaps(false);
-        compactButton(gpsButton);
-        gpsButton.setText(R.string.use_gps);
-        gpsButton.setOnClickListener(v -> requestGpsLocation());
-        actions.addView(gpsButton, weightWrap(1f));
+        LinearLayout dateBox = new LinearLayout(this);
+        dateBox.setOrientation(LinearLayout.VERTICAL);
+        dateBox.addView(labelText(R.string.observer_date_label), matchWrap());
+        observerDateField = compactEditText();
+        observerDateField.setInputType(InputType.TYPE_CLASS_DATETIME | InputType.TYPE_DATETIME_VARIATION_DATE);
+        dateSyncAlertText = syncAlertText();
+        dateBox.addView(fieldWithAlert(observerDateField, dateSyncAlertText), matchWrapWithTopMargin(4));
+        fieldsBottom.addView(dateBox, weightWrap(1f));
 
-        syncMountButton = new Button(this);
-        syncMountButton.setAllCaps(false);
-        compactButton(syncMountButton);
-        syncMountButton.setText(R.string.sync_observer_to_mount);
-        syncMountButton.setOnClickListener(v -> syncObserverToMount());
-        actions.addView(syncMountButton, weightWrapWithLeftMargin(1f, 8));
+        LinearLayout timeBox = new LinearLayout(this);
+        timeBox.setOrientation(LinearLayout.VERTICAL);
+        timeBox.addView(labelText(R.string.observer_time_label), matchWrap());
+        observerTimeField = compactEditText();
+        observerTimeField.setInputType(InputType.TYPE_CLASS_DATETIME | InputType.TYPE_DATETIME_VARIATION_TIME);
+        timeSyncAlertText = syncAlertText();
+        timeBox.addView(fieldWithAlert(observerTimeField, timeSyncAlertText), matchWrapWithTopMargin(4));
+        fieldsBottom.addView(timeBox, weightWrapWithLeftMargin(1f, 10));
 
-        panel.addView(actions, matchWrap());
+        panel.addView(fieldsBottom, matchWrapWithTopMargin(10));
+        attachObserverFieldWatchers();
 
-        observerStatusText = bodyText(R.string.sky_loading);
-        observerStatusText.setPadding(0, dp(8), 0, 0);
-        panel.addView(observerStatusText, matchWrap());
+        observerStatusText = null;
+        timeStatusText = null;
 
-        timeStatusText = bodyText(R.string.sky_loading);
-        timeStatusText.setPadding(0, dp(3), 0, 0);
-        panel.addView(timeStatusText, matchWrap());
+        observerSyncWarningText = bodyText(R.string.observer_sync_warning);
+        observerSyncWarningText.setTextColor(syncWarningColor());
+        observerSyncWarningText.setPadding(0, dp(6), 0, 0);
+        panel.addView(observerSyncWarningText, matchWrap());
 
+        updateObserverFieldTextFromState(false);
+        updateObserverSyncWarning();
         return panel;
     }
 
     private View createConnectionPanel() {
         LinearLayout panel = card();
-        panel.addView(createMountProfileBadge(), matchWrap());
+        panel.addView(settingsPanelTitle(R.string.connection_section, "≋"), matchWrap());
+
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.HORIZONTAL);
+        content.setGravity(Gravity.TOP);
+        content.setPadding(0, dp(6), 0, 0);
+
+        LinearLayout connectColumn = new LinearLayout(this);
+        connectColumn.setOrientation(LinearLayout.VERTICAL);
+        connectColumn.setGravity(Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+        connectColumn.setPadding(dp(6), dp(5), dp(6), dp(6));
+        connectColumn.setContentDescription(getString(R.string.connect_button));
+        connectColumn.setBackground(createConnectBadgeBackground(true));
+        connectColumn.setClickable(true);
+        connectColumn.setOnClickListener(v -> connect());
+        connectTrigger = connectColumn;
+
+        ImageView badge = new ImageView(this);
+        badge.setImageResource(R.drawable.clearsky_badge);
+        badge.setAdjustViewBounds(true);
+        badge.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        badge.setPadding(0, 0, 0, 0);
+        connectColumn.addView(badge, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                0,
+                1f
+        ));
+
+        TextView connectChip = new TextView(this);
+        connectChip.setText(R.string.connect_button);
+        connectChip.setTextSize(12);
+        connectChip.setTypeface(Typeface.DEFAULT_BOLD);
+        connectChip.setGravity(Gravity.CENTER);
+        connectChip.setTextColor(Color.WHITE);
+        connectChip.setBackground(createConnectChipBackground(true));
+        connectChip.setPadding(dp(10), dp(3), dp(10), dp(4));
+        connectColumn.addView(connectChip, matchFixedHeightWithTopMargin(32, 5));
+        content.addView(connectColumn, new LinearLayout.LayoutParams(dp(92), dp(150)));
 
         connectionForm = new LinearLayout(this);
         connectionForm.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams formParams = weightWrapWithLeftMargin(1f, 10);
 
         LinearLayout endpointRow = new LinearLayout(this);
         endpointRow.setOrientation(LinearLayout.HORIZONTAL);
@@ -2112,26 +2481,42 @@ public final class MainActivity extends Activity {
 
         LinearLayout hostBox = new LinearLayout(this);
         hostBox.setOrientation(LinearLayout.VERTICAL);
-        hostBox.addView(labelText(R.string.host_label), matchWrap());
+        TextView hostLabel = labelText(R.string.host_label);
+        hostLabel.setSingleLine(true);
+        hostLabel.setTextSize(13);
+        hostBox.addView(hostLabel, matchWrap());
         hostField = compactEditText();
         hostField.setText(R.string.default_onstep_host);
         hostField.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
-        hostBox.addView(hostField, matchWrap());
+        hostBox.addView(hostField, matchFixedHeightWithTopMargin(44, 4));
         endpointRow.addView(hostBox, weightWrap(1f));
 
         LinearLayout portBox = new LinearLayout(this);
         portBox.setOrientation(LinearLayout.VERTICAL);
-        portBox.addView(labelText(R.string.port_label), matchWrap());
+        TextView portLabel = labelText(R.string.port_label);
+        portLabel.setSingleLine(true);
+        portLabel.setTextSize(13);
+        portBox.addView(portLabel, matchWrap());
         portField = compactEditText();
         portField.setText(String.format(Locale.US, "%d", DEFAULT_PORT));
         portField.setInputType(InputType.TYPE_CLASS_NUMBER);
-        portBox.addView(portField, new LinearLayout.LayoutParams(dp(92), LinearLayout.LayoutParams.WRAP_CONTENT));
-        LinearLayout.LayoutParams portBoxParams = new LinearLayout.LayoutParams(dp(100), LinearLayout.LayoutParams.WRAP_CONTENT);
-        portBoxParams.leftMargin = dp(8);
+        portBox.addView(portField, matchFixedHeightWithTopMargin(44, 4));
+        LinearLayout.LayoutParams portBoxParams = new LinearLayout.LayoutParams(dp(74), LinearLayout.LayoutParams.WRAP_CONTENT);
+        portBoxParams.leftMargin = dp(6);
         endpointRow.addView(portBox, portBoxParams);
 
         connectionForm.addView(endpointRow, matchWrap());
-        panel.addView(connectionForm, matchWrap());
+        LinearLayout trackingRow = new LinearLayout(this);
+        trackingRow.setOrientation(LinearLayout.HORIZONTAL);
+        trackingRow.setGravity(Gravity.BOTTOM);
+        trackingRow.setPadding(0, dp(10), 0, 0);
+        trackingRow.addView(createTrackingRateSelector(), weightWrap(1f));
+        Button trackingControl = createTrackingToggleControl();
+        trackingControl.setTextSize(13);
+        trackingRow.addView(trackingControl, fixedWidthHeightWithLeftMargin(74, 44, 6));
+        connectionForm.addView(trackingRow, matchWrap());
+        content.addView(connectionForm, formParams);
+        panel.addView(content, matchWrap());
 
         LinearLayout actions = new LinearLayout(this);
         actions.setOrientation(LinearLayout.HORIZONTAL);
@@ -2148,7 +2533,7 @@ public final class MainActivity extends Activity {
         panel.addView(actions, matchWrap());
 
         statusText = bodyText(R.string.status_disconnected);
-        statusText.setPadding(0, dp(8), 0, 0);
+        statusText.setPadding(0, dp(10), 0, 0);
         if (currentStatusMessage != null) {
             statusText.setText(currentStatusMessage);
         }
@@ -2157,146 +2542,36 @@ public final class MainActivity extends Activity {
         return panel;
     }
 
-    private View createMountProfileBadge() {
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(0, 0, 0, dp(8));
-
-        LinearLayout connectColumn = new LinearLayout(this);
-        connectColumn.setOrientation(LinearLayout.VERTICAL);
-        connectColumn.setGravity(Gravity.CENTER);
-        connectColumn.setPadding(dp(4), dp(4), dp(4), dp(4));
-        connectColumn.setContentDescription(getString(R.string.connect_button));
-        connectColumn.setBackground(createConnectBadgeBackground(true));
-        connectColumn.setClickable(true);
-        connectColumn.setOnClickListener(v -> connect());
-        connectTrigger = connectColumn;
-
-        ImageView badge = new ImageView(this);
-        badge.setImageResource(R.drawable.clearsky_badge);
-        badge.setAdjustViewBounds(true);
-        badge.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        badge.setPadding(dp(1), dp(1), dp(1), dp(1));
-        badge.setContentDescription(getString(R.string.connect_button));
-        connectColumn.addView(badge, new LinearLayout.LayoutParams(dp(48), dp(48)));
-
-        TextView connectChip = new TextView(this);
-        connectChip.setText(R.string.connect_button);
-        connectChip.setTextSize(12);
-        connectChip.setTypeface(Typeface.DEFAULT_BOLD);
-        connectChip.setGravity(Gravity.CENTER);
-        connectChip.setTextColor(Color.WHITE);
-        connectChip.setBackground(createConnectChipBackground(true));
-        connectChip.setPadding(dp(8), dp(1), dp(8), dp(2));
-        connectColumn.addView(connectChip, matchWrapWithTopMargin(3));
-
-        row.addView(connectColumn, new LinearLayout.LayoutParams(dp(72), LinearLayout.LayoutParams.WRAP_CONTENT));
-
-        LinearLayout textColumn = new LinearLayout(this);
-        textColumn.setOrientation(LinearLayout.VERTICAL);
-
-        textColumn.addView(panelTitleWithHelp(R.string.mount_profile_title, R.string.mount_profile_body), matchWrap());
-
-        row.addView(textColumn, weightWrapWithLeftMargin(1f, 10));
-        return row;
-    }
-
-    private View createControlPanel() {
-        LinearLayout panel = card();
-
-        TextView rateLabel = labelText(R.string.rate_label);
-        panel.addView(rateLabel, matchWrap());
-
-        LinearLayout ratePanel = new LinearLayout(this);
-        ratePanel.setOrientation(LinearLayout.VERTICAL);
-        ratePanel.setPadding(0, dp(4), 0, dp(8));
-
-        manualRateSpinner = new Spinner(this);
+    private void showManualRateDialog() {
         List<String> rateLabels = new ArrayList<>();
         for (ManualRate rate : ManualRate.values()) {
             rateLabels.add(getString(rate.labelRes));
         }
-        ArrayAdapter<String> rateAdapter = new ArrayAdapter<>(
-                this,
-                android.R.layout.simple_spinner_item,
-                rateLabels
-        );
-        rateAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        manualRateSpinner.setAdapter(rateAdapter);
-        manualRateSpinner.setSelection(selectedManualRate.ordinal());
-        manualRateSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
-            @Override
-            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
-                ManualRate rate = ManualRate.values()[position];
-                if (selectedManualRate == rate) {
-                    return;
-                }
-                logUserAction("select manual-rate " + rate.name() + " connected=" + connected);
-                selectedManualRate = rate;
-                if (connected) {
-                    enqueueCommand(selectedManualRate.command, getString(R.string.log_rate_changed));
-                }
-                logStateSnapshot("manual-rate-selected");
-            }
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.rate_label)
+                .setSingleChoiceItems(
+                        rateLabels.toArray(new String[0]),
+                        selectedManualRate.ordinal(),
+                        (dialog, which) -> {
+                            selectManualRate(ManualRate.values()[which]);
+                            dialog.dismiss();
+                        }
+                )
+                .setNegativeButton(android.R.string.cancel, null)
+                .show();
+    }
 
-            @Override
-            public void onNothingSelected(AdapterView<?> parent) {
-                // Keep the current rate.
-            }
-        });
-        ratePanel.addView(manualRateSpinner, matchWrap());
-        panel.addView(ratePanel, matchWrap());
+    private void selectManualRate(ManualRate rate) {
+        if (selectedManualRate == rate) {
+            return;
+        }
+        logUserAction("select manual-rate " + rate.name() + " connected=" + connected);
+        selectedManualRate = rate;
+        if (connected) {
+            enqueueCommand(selectedManualRate.command, getString(R.string.log_rate_changed));
+        }
         updateManualRateControl();
-
-        LinearLayout grid = new LinearLayout(this);
-        grid.setOrientation(LinearLayout.VERTICAL);
-        grid.setGravity(Gravity.CENTER);
-
-        northButton = directionButton(R.string.direction_north, Direction.NORTH);
-        northEastButton = directionButton(R.string.direction_north_east, Direction.NORTH_EAST);
-        northWestButton = directionButton(R.string.direction_north_west, Direction.NORTH_WEST);
-        southButton = directionButton(R.string.direction_south, Direction.SOUTH);
-        southEastButton = directionButton(R.string.direction_south_east, Direction.SOUTH_EAST);
-        southWestButton = directionButton(R.string.direction_south_west, Direction.SOUTH_WEST);
-        eastButton = directionButton(R.string.direction_east, Direction.EAST);
-        westButton = directionButton(R.string.direction_west, Direction.WEST);
-
-        LinearLayout rowTop = centeredRow();
-        rowTop.addView(northWestButton, controlButtonParams());
-        rowTop.addView(northButton, controlButtonParams());
-        rowTop.addView(northEastButton, controlButtonParams());
-        grid.addView(rowTop, matchWrap());
-
-        LinearLayout rowMiddle = centeredRow();
-        rowMiddle.addView(westButton, controlButtonParams());
-        stopButton = new Button(this);
-        stopButton.setAllCaps(false);
-        stopButton.setText(R.string.stop_button);
-        stopButton.setTextColor(Color.WHITE);
-        stopButton.setTextSize(17);
-        stopButton.setTypeface(Typeface.DEFAULT_BOLD);
-        stopButton.setMinHeight(dp(54));
-        stopButton.setBackground(createStopButtonBackground());
-        stopButton.setOnClickListener(v -> {
-            logUserAction("tap manual-stop");
-            activeDirection = null;
-            manualMoveGeneration.incrementAndGet();
-            enqueueStop(getString(R.string.log_stop_sent));
-            logStateSnapshot("manual-stop");
-        });
-        rowMiddle.addView(stopButton, controlButtonParams());
-        rowMiddle.addView(eastButton, controlButtonParams());
-        grid.addView(rowMiddle, matchWrap());
-
-        LinearLayout rowBottom = centeredRow();
-        rowBottom.addView(southWestButton, controlButtonParams());
-        rowBottom.addView(southButton, controlButtonParams());
-        rowBottom.addView(southEastButton, controlButtonParams());
-        grid.addView(rowBottom, matchWrap());
-
-        panel.addView(grid, matchWrap());
-        return panel;
+        logStateSnapshot("manual-rate-selected");
     }
 
     private void connect() {
@@ -2333,6 +2608,7 @@ public final class MainActivity extends Activity {
                 runOnUiThread(() -> {
                     connected = true;
                     busy = false;
+                    observerSyncedToMount = false;
                     connectionGeneration.incrementAndGet();
                     connectedHost = host;
                     connectedPort = connection.port;
@@ -2376,6 +2652,7 @@ public final class MainActivity extends Activity {
                             + " handshake=" + (connection.handshake.isEmpty() ? "<empty>" : connection.handshake));
                     logStateSnapshot("connect-success");
                     updateCalibrationViews();
+                    updateObserverSyncWarning();
                     attemptPendingPreferredPierSideRestoreAsync("connect-success", true);
                 });
             } catch (IOException ex) {
@@ -2384,6 +2661,7 @@ public final class MainActivity extends Activity {
                 runOnUiThread(() -> {
                     connected = false;
                     busy = false;
+                    observerSyncedToMount = false;
                     connectionGeneration.incrementAndGet();
                     connectedHost = null;
                     connectedPort = DEFAULT_PORT;
@@ -2402,6 +2680,7 @@ public final class MainActivity extends Activity {
                     Logger.error("connect failed host=" + host + " port=" + port, ex);
                     appendLog("ERROR " + safeMessage(ex));
                     logStateSnapshot("connect-failed");
+                    updateObserverSyncWarning();
                     updateUiState();
                 });
             }
@@ -2464,6 +2743,7 @@ public final class MainActivity extends Activity {
             runOnUiThread(() -> {
                 connected = false;
                 busy = false;
+                observerSyncedToMount = false;
                 connectionGeneration.incrementAndGet();
                 connectedHost = null;
                 connectedPort = DEFAULT_PORT;
@@ -2490,13 +2770,14 @@ public final class MainActivity extends Activity {
                 appendLog("CLOSED");
                 clearMountPointing();
                 updateCalibrationViews();
+                updateObserverSyncWarning();
                 logStateSnapshot("disconnect-complete");
             });
         });
     }
 
     private void startMove(Direction direction) {
-        if (!connected || activeDirection == direction) {
+        if (!connected || busy || parked || activeDirection == direction) {
             return;
         }
         resetSkyTimeToNowForMountAction("manual-move");
@@ -2631,11 +2912,14 @@ public final class MainActivity extends Activity {
     private void refreshGotoStatus() {
         if (!connected || busy) {
             Logger.info("goto-status refresh skipped connected=" + connected + " busy=" + busy);
+            setSafetyStatus(getString(connected ? R.string.goto_status_blocked_busy : R.string.goto_status_not_connected));
             return;
         }
         Logger.info("goto-status refresh requested");
         busy = true;
-        setGotoStatus(getString(R.string.goto_status_refreshing));
+        String refreshingStatus = getString(R.string.goto_status_refreshing);
+        setGotoStatus(refreshingStatus);
+        setSafetyStatus(refreshingStatus);
         updateUiState();
         logStateSnapshot("goto-status-refresh-start");
         appendLog("TX " + OnStepCommand.GOTO_STATUS.command);
@@ -2695,16 +2979,22 @@ public final class MainActivity extends Activity {
                     appendLog("RX " + OnStepCommand.GOTO_STATUS.command + " -> " + localGotoState
                             + " controller=" + (controllerMoving ? "moving" : "idle"));
                     if (moving) {
-                        setGotoStatus(getString(R.string.goto_status_running));
+                        String statusMessage = getString(R.string.goto_status_running);
+                        setGotoStatus(statusMessage);
+                        setSafetyStatus(statusMessage);
                     } else if (arrived) {
                         clearGotoRecoveryRequired("goto-arrived");
-                        setGotoStatus(getString(R.string.goto_status_arrived, activeGotoTarget.label));
+                        String statusMessage = getString(R.string.goto_status_arrived, activeGotoTarget.label);
+                        setGotoStatus(statusMessage);
+                        setSafetyStatus(statusMessage);
                     } else if (stoppedStationary && activeGotoTarget != null && finalPointingVerification != null) {
-                        setGotoStatus(getString(
+                        String statusMessage = getString(
                                 R.string.goto_status_stopped_short,
                                 activeGotoTarget.label,
                                 finalPointingVerification.distanceDegrees
-                        ));
+                        );
+                        setGotoStatus(statusMessage);
+                        setSafetyStatus(statusMessage);
                         boolean recoveryRequiredNow = recordGotoStationaryStop(
                                 activeGotoTarget,
                                 finalPointingVerification,
@@ -2714,7 +3004,9 @@ public final class MainActivity extends Activity {
                                 ? gotoRecoveryRequiredStatusMessage(activeGotoTarget, finalPointingVerification)
                                 : gotoStoppedStatusMessage(activeGotoTarget, finalPointingVerification, finalIdleErrorReply));
                     } else {
-                        setGotoStatus(getString(R.string.goto_status_idle));
+                        String statusMessage = getString(R.string.goto_status_idle);
+                        setGotoStatus(statusMessage);
+                        setSafetyStatus(statusMessage);
                     }
                     if (finalPointingVerification != null) {
                         setMountPointing(finalPointingVerification.raHours, finalPointingVerification.decDegrees);
@@ -3063,6 +3355,14 @@ public final class MainActivity extends Activity {
             String temporaryPreferredPierSide
     ) {
         if (!connected || busy || target == null) {
+            return;
+        }
+        if (parked) {
+            Logger.warn("goto blocked: parked " + targetLog(target));
+            setStatus(getString(R.string.goto_reply_parked));
+            setGotoStatus(getString(R.string.goto_reply_parked));
+            logStateSnapshot("goto-blocked-parked " + targetLog(target));
+            updateUiState();
             return;
         }
         if (gotoInProgress) {
@@ -3735,6 +4035,14 @@ public final class MainActivity extends Activity {
         );
     }
 
+    private void toggleParkState() {
+        if (parked) {
+            unparkMount();
+        } else {
+            parkMount();
+        }
+    }
+
     private void unparkMount() {
         if (!connected || busy) {
             return;
@@ -3764,15 +4072,53 @@ public final class MainActivity extends Activity {
         if (!connected) {
             logUserAction("tap sync-observer-to-mount local-only " + observerLog());
             setStatus(getString(R.string.location_applied_not_connected));
+            observerSyncedToMount = false;
+            updateObserverSyncWarning();
             return;
         }
-        resetSkyTimeToNowForMountAction("observer-sync");
-        logUserAction("tap sync-observer-to-mount " + observerLog());
-        ZonedDateTime now = ZonedDateTime.now(observerState.zoneId);
-        List<String> commands = buildObserverSyncCommands(now);
+        if (observerTimeManuallyEdited) {
+            ZonedDateTime manualTime = observerDateTimeFromFields();
+            if (manualTime == null) {
+                observerSyncedToMount = false;
+                updateObserverSyncWarning();
+                return;
+            }
+            showManualObserverTimeSyncDialog(manualTime);
+            return;
+        }
+        performObserverSync(ZonedDateTime.now(observerState.zoneId), false);
+    }
 
+    private void showManualObserverTimeSyncDialog(ZonedDateTime manualTime) {
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.observer_sync_manual_time_title)
+                .setMessage(getString(
+                        R.string.observer_sync_manual_time_message,
+                        observerState.formatTime(manualTime.toInstant())
+                ))
+                .setPositiveButton(R.string.observer_sync_use_current_time,
+                        (dialog, which) -> performObserverSync(ZonedDateTime.now(observerState.zoneId), false))
+                .setNeutralButton(R.string.observer_sync_use_entered_time,
+                        (dialog, which) -> performObserverSync(manualTime, true))
+                .setNegativeButton(R.string.cancel_button, null)
+                .show();
+    }
+
+    private void performObserverSync(ZonedDateTime syncTime, boolean preserveManualTime) {
+        skyInstant = syncTime.toInstant();
+        skyTimeLocked = preserveManualTime;
+        observerTimeManuallyEdited = preserveManualTime;
+        if (!preserveManualTime) {
+            updateObserverFieldTextFromState(false);
+        }
+        logUserAction("tap sync-observer-to-mount " + observerLog()
+                + " timeMode=" + (preserveManualTime ? "manual" : "current"));
+        List<String> commands = buildObserverSyncCommands(syncTime);
+
+        observerSyncedToMount = false;
         busy = true;
         setStatus(getString(R.string.status_sync_mount_sending));
+        updateObserverSyncWarning();
         updateUiState();
         logStateSnapshot("observer-sync-start");
         for (String command : commands) {
@@ -3790,9 +4136,12 @@ public final class MainActivity extends Activity {
                 }
                 runOnUiThread(() -> {
                     busy = false;
+                    observerSyncedToMount = true;
                     setStatus(getString(R.string.status_sync_mount_sent));
-                    Logger.info("observer sync success " + observerLog() + " time=" + now);
+                    Logger.info("observer sync success " + observerLog() + " time=" + syncTime);
                     logStateSnapshot("observer-sync-success");
+                    updateObserverViews();
+                    updateObserverSyncWarning();
                     updateUiState();
                 });
             } catch (IOException ex) {
@@ -3813,10 +4162,14 @@ public final class MainActivity extends Activity {
     }
 
     private void setTrackingRate(TrackingRate rate) {
+        if (selectedTrackingRate == rate) {
+            updateTrackingViews();
+            return;
+        }
         logUserAction("select tracking-rate rate=" + rate.name());
         selectedTrackingRate = rate;
         updateTrackingViews();
-        if (!connected || busy) {
+        if (!connected || busy || parked) {
             setStatus(getString(
                     R.string.tracking_rate_selected,
                     getString(rate.labelRes),
@@ -3837,7 +4190,7 @@ public final class MainActivity extends Activity {
     }
 
     private void toggleTracking() {
-        if (!connected || busy) {
+        if (!connected || busy || parked) {
             return;
         }
 
@@ -3983,6 +4336,7 @@ public final class MainActivity extends Activity {
         logUserAction("tap select-calibration-target-in-sky mode=" + selectedCalibrationMode.name());
         selectingCalibrationTargetFromSky = true;
         setCalibrationStatus(getString(R.string.calibration_select_in_sky_prompt));
+        setSkyCalibrationExpanded(false);
         updatePageTabs(Page.SKY);
         setSideMenuExpanded(false);
     }
@@ -4051,7 +4405,8 @@ public final class MainActivity extends Activity {
         }
         updateTargetViews();
         applyCalibrationTargetFromSky(target);
-        updatePageTabs(Page.MANUAL);
+        setSkyCalibrationExpanded(true);
+        updatePageTabs(Page.SKY);
     }
 
     private void applyCalibrationTargetFromSky(SkyChartView.Target target) {
@@ -4114,6 +4469,13 @@ public final class MainActivity extends Activity {
 
     private void syncStarChartTarget(SkyChartView.Target target) {
         if (!connected || busy || target == null) {
+            return;
+        }
+        if (parked) {
+            Logger.warn("sky sync blocked: parked " + targetLog(target));
+            setStatus(getString(R.string.goto_reply_parked));
+            logStateSnapshot("sky-sync-blocked-parked " + targetLog(target));
+            updateUiState();
             return;
         }
         if (gotoInProgress) {
@@ -4389,6 +4751,23 @@ public final class MainActivity extends Activity {
                 () -> handleAlignmentStartFailed(starCount),
                 failureCleanupCommands
         );
+    }
+
+    private void handleAlignmentPrimaryAction() {
+        if (alignmentSession == null) {
+            if (selectedCalibrationMode.starCount > 0) {
+                startAlignment(selectedCalibrationMode.starCount);
+            }
+            return;
+        }
+        if (alignmentSession.isComplete()) {
+            return;
+        }
+        if (alignmentSession.currentTarget == null) {
+            handleAlignmentTargetAction();
+        } else {
+            acceptAlignmentStar();
+        }
     }
 
     private void handleAlignmentStartFailed(int starCount) {
@@ -5207,6 +5586,31 @@ public final class MainActivity extends Activity {
         return builder.toString();
     }
 
+    private void updateAlignmentActionButtons() {
+        boolean alignMode = selectedCalibrationMode.isStarAlignment();
+        boolean canStartAlignment = connected && !busy && alignmentSession == null
+                && selectedCalibrationMode.starCount > 0;
+        boolean alignmentActive = connected && !busy && !gotoInProgress
+                && alignmentSession != null
+                && !alignmentSession.isComplete();
+
+        if (alignStartButton != null) {
+            if (alignmentSession == null) {
+                alignStartButton.setText(R.string.calibration_align_start);
+                alignStartButton.setEnabled(alignMode && canStartAlignment);
+            } else if (alignmentSession.currentTarget == null) {
+                alignStartButton.setText(R.string.calibration_align_set_target);
+                alignStartButton.setEnabled(alignMode && alignmentActive);
+            } else {
+                alignStartButton.setText(R.string.calibration_align_accept);
+                alignStartButton.setEnabled(alignMode && alignmentActive);
+            }
+        }
+        if (alignCancelButton != null) {
+            alignCancelButton.setEnabled(alignMode && alignmentSession != null && !busy);
+        }
+    }
+
     private String alignmentStepStatusText() {
         if (alignmentSession == null) {
             return getString(R.string.calibration_align_idle);
@@ -5287,42 +5691,42 @@ public final class MainActivity extends Activity {
     }
 
     private void refreshCalibrationModeChoices() {
-        if (calibrationModeSpinner == null) {
+        if (calibrationModeText == null) {
             return;
         }
         List<CalibrationMode> modes = availableCalibrationModes();
         if (!modes.contains(selectedCalibrationMode)) {
             selectedCalibrationMode = DEFAULT_CALIBRATION_MODE;
         }
-        List<String> labels = new ArrayList<>();
-        for (CalibrationMode mode : modes) {
-            labels.add(getString(mode.labelRes));
-        }
-        ArrayAdapter<String> adapter = new ArrayAdapter<>(
-                this,
-                android.R.layout.simple_spinner_item,
-                labels
-        );
-        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        suppressCalibrationModeSelection = true;
-        calibrationModeSpinner.setAdapter(adapter);
-        calibrationModeSpinner.setSelection(Math.max(0, modes.indexOf(selectedCalibrationMode)));
-        suppressCalibrationModeSelection = false;
-        calibrationModeSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
-            @Override
-            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
-                if (suppressCalibrationModeSelection || position < 0 || position >= modes.size()) {
-                    return;
-                }
-                selectedCalibrationMode = modes.get(position);
-                updateCalibrationModeViews();
-            }
-
-            @Override
-            public void onNothingSelected(AdapterView<?> parent) {
-            }
-        });
+        calibrationModeText.setText(getString(selectedCalibrationMode.labelRes) + "  ▾");
         updateCalibrationModeViews();
+    }
+
+    private void showCalibrationModeDialog() {
+        if (busy || alignmentSession != null) {
+            return;
+        }
+        List<CalibrationMode> modes = availableCalibrationModes();
+        if (modes.isEmpty()) {
+            return;
+        }
+        if (!modes.contains(selectedCalibrationMode)) {
+            selectedCalibrationMode = DEFAULT_CALIBRATION_MODE;
+        }
+        String[] labels = new String[modes.size()];
+        for (int i = 0; i < modes.size(); i++) {
+            labels[i] = getString(modes.get(i).labelRes);
+        }
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.calibration_section)
+                .setSingleChoiceItems(labels, Math.max(0, modes.indexOf(selectedCalibrationMode)), (dialog, which) -> {
+                    dialog.dismiss();
+                    selectedCalibrationMode = modes.get(which);
+                    refreshCalibrationModeChoices();
+                    updateCalibrationModeViews();
+                })
+                .setNegativeButton(R.string.cancel_button, null)
+                .show();
     }
 
     private List<CalibrationMode> availableCalibrationModes() {
@@ -5340,6 +5744,9 @@ public final class MainActivity extends Activity {
         if (isAltAzMountMode() && selectedCalibrationMode == CalibrationMode.REFINE_POLAR) {
             selectedCalibrationMode = DEFAULT_CALIBRATION_MODE;
         }
+        if (calibrationModeText != null) {
+            calibrationModeText.setText(getString(selectedCalibrationMode.labelRes) + "  ▾");
+        }
         boolean alignMode = selectedCalibrationMode.isStarAlignment();
         boolean refineMode = selectedCalibrationMode == CalibrationMode.REFINE_POLAR;
 
@@ -5349,9 +5756,7 @@ public final class MainActivity extends Activity {
         if (refineCalibrationPanel != null) {
             refineCalibrationPanel.setVisibility(refineMode ? View.VISIBLE : View.GONE);
         }
-        if (alignStartButton != null && alignMode) {
-            alignStartButton.setText(R.string.calibration_align_start);
-        }
+        updateAlignmentActionButtons();
         updateCalibrationStatusText(calibrationStatusMessageOrDefault());
         updateManualStatusForCurrentMode();
         if (hostField != null) {
@@ -5872,100 +6277,55 @@ public final class MainActivity extends Activity {
         return selectedFirmwareMode == FirmwareMode.ONSTEPX && selectedMountMode == MountMode.ALTAZ;
     }
 
-    private void updateDeviceStatusPanel() {
-        if (deviceConnectionStatusText == null) {
+    private static Context localizedContext(Context context, String language) {
+        Locale locale = localeForUiLanguage(language);
+        Locale.setDefault(locale);
+        Configuration configuration = new Configuration(context.getResources().getConfiguration());
+        configuration.setLocale(locale);
+        return context.createConfigurationContext(configuration);
+    }
+
+    private static Locale localeForUiLanguage(String language) {
+        return UI_LANGUAGE_ENGLISH.equals(language) ? Locale.ENGLISH : Locale.SIMPLIFIED_CHINESE;
+    }
+
+    private static String normalizedUiLanguage(String language) {
+        return UI_LANGUAGE_ENGLISH.equals(language) ? UI_LANGUAGE_ENGLISH : UI_LANGUAGE_CHINESE;
+    }
+
+    private void applyUiLanguageSelection(String language) {
+        String normalized = normalizedUiLanguage(language);
+        if (normalized.equals(selectedUiLanguage)) {
             return;
         }
-        deviceConnectionStatusText.setText(connected
-                ? getString(R.string.device_status_connected)
-                : getString(R.string.device_status_disconnected));
-        deviceConnectionStatusText.setTextColor(connected ? statusGoodColor() : mutedTextColor());
-
-        deviceFlowStatusText.setText(deviceFlowStatusLabel());
-        deviceFlowStatusText.setTextColor(titleTextColor());
-
-        deviceTrackingStatusText.setText(deviceTrackingStatusLabel());
-        deviceTrackingStatusText.setTextColor(trackingEnabled ? selectedAccentColor() : mutedTextColor());
-
-        deviceGotoStatusText.setText(deviceGotoStatusLabel());
-        deviceGotoStatusText.setTextColor(gotoInProgress || gotoRecoveryRequired ? statusWarningColor() : titleTextColor());
-
-        deviceParkStatusText.setText(parked
-                ? getString(R.string.device_status_parked)
-                : getString(R.string.device_status_unparked));
-        deviceParkStatusText.setTextColor(parked ? statusWarningColor() : titleTextColor());
-
-        deviceSafetyStatusText.setText(deviceSafetyStatusLabel());
-        deviceSafetyStatusText.setTextColor(connected && !busy ? statusGoodColor() : mutedTextColor());
-    }
-
-    private String deviceFlowStatusLabel() {
-        if (selectedFirmwareMode == FirmwareMode.ONSTEP) {
-            return getString(R.string.device_status_flow_onstep);
-        }
-        if (selectedMountMode == MountMode.ALTAZ) {
-            return getString(R.string.device_status_flow_onstepx_altaz);
-        }
-        return getString(R.string.device_status_flow_onstepx_equatorial);
-    }
-
-    private String deviceTrackingStatusLabel() {
-        if (!trackingEnabled) {
-            return getString(R.string.device_status_tracking_off);
-        }
-        return getString(
-                R.string.device_status_tracking_on,
-                getString(selectedTrackingRate.labelRes),
-                trackingModeLabel(trackingUsingDualAxis)
-        );
-    }
-
-    private String deviceGotoStatusLabel() {
-        if (gotoRecoveryRequired) {
-            return getString(R.string.device_status_goto_recovery);
-        }
-        if (gotoInProgress) {
-            String target = activeGotoTarget == null
-                    ? getString(R.string.device_status_goto_unknown_target)
-                    : activeGotoTarget.label;
-            return getString(R.string.device_status_goto_running, target);
-        }
-        return getString(R.string.device_status_goto_idle);
-    }
-
-    private String deviceSafetyStatusLabel() {
-        if (!connected) {
-            return getString(R.string.device_status_safety_offline);
-        }
-        if (busy) {
-            return getString(R.string.device_status_safety_busy);
-        }
-        return getString(R.string.device_status_safety_ready);
-    }
-
-    private int statusGoodColor() {
-        return nightModeEnabled ? Color.rgb(255, 145, 145) : Color.rgb(34, 197, 94);
-    }
-
-    private int statusWarningColor() {
-        return nightModeEnabled ? Color.rgb(255, 120, 120) : Color.rgb(245, 158, 11);
+        selectedUiLanguage = normalized;
+        boolean saved = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .edit()
+                .putString(PREF_UI_LANGUAGE, selectedUiLanguage)
+                .commit();
+        Logger.user("select ui language " + selectedUiLanguage + " saved=" + saved);
+        recreate();
     }
 
     private void updateFirmwareSettingsViews() {
         if (mountModeContainer != null) {
             mountModeContainer.setVisibility(selectedFirmwareMode == FirmwareMode.ONSTEPX ? View.VISIBLE : View.GONE);
         }
-        if (mountModeSpinner != null) {
-            suppressMountModeSelection = true;
-            mountModeSpinner.setSelection(selectedMountMode.ordinal());
-            suppressMountModeSelection = false;
-            mountModeSpinner.setEnabled(!busy);
-        }
-        if (firmwareModeSpinner != null) {
-            suppressFirmwareModeSelection = true;
-            firmwareModeSpinner.setSelection(selectedFirmwareMode.ordinal());
-            suppressFirmwareModeSelection = false;
-            firmwareModeSpinner.setEnabled(!busy);
+        setSegmentButtonState(
+                mountModeEquatorialButton,
+                selectedMountMode == MountMode.EQUATORIAL,
+                !busy && selectedFirmwareMode == FirmwareMode.ONSTEPX
+        );
+        setSegmentButtonState(
+                mountModeAltAzButton,
+                selectedMountMode == MountMode.ALTAZ,
+                !busy && selectedFirmwareMode == FirmwareMode.ONSTEPX
+        );
+        if (firmwareModeText != null) {
+            firmwareModeText.setText(getString(selectedFirmwareMode.labelRes) + "  ▾");
+            firmwareModeText.setEnabled(!busy);
+            firmwareModeText.setAlpha(busy ? 0.55f : 1.0f);
+            firmwareModeText.setTextColor(busy ? mutedTextColor() : titleTextColor());
         }
         if (firmwareSettingsStatusText != null) {
             if (selectedFirmwareMode == FirmwareMode.ONSTEP) {
@@ -5976,7 +6336,6 @@ public final class MainActivity extends Activity {
                 firmwareSettingsStatusText.setText(R.string.firmware_settings_status_onstepx_equatorial);
             }
         }
-        updateDeviceStatusPanel();
     }
 
     private void requestMountModeChange(MountMode requestedMode) {
@@ -6147,16 +6506,35 @@ public final class MainActivity extends Activity {
     private void updateTargetViews() {
         if (targetStatusText != null) {
             if (selectedSkyTarget == null) {
-                targetStatusText.setText(R.string.sky_target_none);
+                targetStatusText.setVisibility(View.GONE);
             } else {
-                targetStatusText.setText(getString(
-                        R.string.sky_target_status,
-                        selectedSkyTarget.label
-                ));
+                targetStatusText.setVisibility(View.VISIBLE);
+                targetStatusText.setText(skyTargetOverlayText(selectedSkyTarget));
             }
         }
         updateObservingAlert();
         updateUiState();
+    }
+
+    private String skyTargetOverlayText(SkyChartView.Target target) {
+        return getString(
+                R.string.sky_target_overlay,
+                formatRightAscensionDisplay(target.raHours),
+                formatDeclinationDisplay(target.decDegrees),
+                skyTargetTransitTime(target)
+        );
+    }
+
+    private String skyTargetTransitTime(SkyChartView.Target target) {
+        Instant now = currentSkyInstant();
+        double hourAngleHours = signedHourAngleHours(target.raHours, now);
+        double siderealHoursUntilTransit = hourAngleHours <= 0.0
+                ? -hourAngleHours
+                : 24.0 - hourAngleHours;
+        double solarHoursUntilTransit = siderealHoursUntilTransit * 0.9972695663;
+        ZonedDateTime transit = now.plusMillis(Math.round(solarHoursUntilTransit * 3_600_000.0))
+                .atZone(observerState.zoneId);
+        return String.format(Locale.US, "%02d:%02d", transit.getHour(), transit.getMinute());
     }
 
     private void updateObservingAlert() {
@@ -6475,47 +6853,12 @@ public final class MainActivity extends Activity {
         return Math.max(min, Math.min(max, value));
     }
 
+    private static float clampFloat(float value, float min, float max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
     private String getRateCommand() {
         return selectedManualRate.command;
-    }
-
-    private Button directionButton(int labelRes, Direction direction) {
-        Button button = new Button(this);
-        button.setAllCaps(false);
-        button.setText(labelRes);
-        button.setTextSize(24);
-        button.setTextColor(Color.rgb(17, 24, 39));
-        button.setTypeface(Typeface.DEFAULT_BOLD);
-        button.setMinHeight(dp(58));
-        button.setMinWidth(dp(58));
-        button.setBackground(createDirectionButtonBackground(true));
-        button.setOnTouchListener((view, event) -> {
-            if (!connected || busy) {
-                return true;
-            }
-            switch (event.getActionMasked()) {
-                case MotionEvent.ACTION_DOWN:
-                    view.setPressed(true);
-                    startMove(direction);
-                    return true;
-                case MotionEvent.ACTION_UP:
-                case MotionEvent.ACTION_CANCEL:
-                    view.setPressed(false);
-                    stopMove(direction);
-                    view.performClick();
-                    return true;
-                default:
-                    return true;
-            }
-        });
-        return button;
-    }
-
-    private Button trackingRateButton(TrackingRate rate) {
-        Button button = actionButton(rate.labelRes);
-        button.setTextSize(14);
-        button.setOnClickListener(v -> setTrackingRate(rate));
-        return button;
     }
 
     private void configureTabButton(Button button) {
@@ -6540,10 +6883,164 @@ public final class MainActivity extends Activity {
         return field;
     }
 
-    private void applyBostonLocation() {
-        observerState = ObserverState.boston();
+    private TextView syncAlertText() {
+        TextView textView = new TextView(this);
+        textView.setText("!");
+        textView.setTextSize(20);
+        textView.setTypeface(Typeface.DEFAULT_BOLD);
+        textView.setTextColor(syncWarningColor());
+        textView.setGravity(Gravity.CENTER);
+        textView.setVisibility(View.GONE);
+        return textView;
+    }
+
+    private View fieldWithAlert(EditText field, TextView alertText) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.addView(field, weightWrap(1f));
+        LinearLayout.LayoutParams alertParams = new LinearLayout.LayoutParams(dp(24), LinearLayout.LayoutParams.MATCH_PARENT);
+        alertParams.leftMargin = dp(4);
+        row.addView(alertText, alertParams);
+        return row;
+    }
+
+    private void attachObserverFieldWatchers() {
+        TextWatcher locationWatcher = observerFieldWatcher(false);
+        TextWatcher timeWatcher = observerFieldWatcher(true);
+        latitudeField.addTextChangedListener(locationWatcher);
+        longitudeField.addTextChangedListener(locationWatcher);
+        observerDateField.addTextChangedListener(timeWatcher);
+        observerTimeField.addTextChangedListener(timeWatcher);
+    }
+
+    private TextWatcher observerFieldWatcher(boolean timeField) {
+        return new TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+            }
+
+            @Override
+            public void onTextChanged(CharSequence s, int start, int before, int count) {
+                if (suppressObserverFieldChanges) {
+                    return;
+                }
+                observerSyncedToMount = false;
+                if (timeField) {
+                    observerTimeManuallyEdited = true;
+                }
+                updateObserverSyncWarning();
+            }
+
+            @Override
+            public void afterTextChanged(Editable s) {
+            }
+        };
+    }
+
+    private void updateObserverFieldTextFromState(boolean preserveManualTime) {
+        if (latitudeField == null || longitudeField == null) {
+            return;
+        }
+        suppressObserverFieldChanges = true;
         latitudeField.setText(String.format(Locale.US, "%.5f", observerState.latitudeDegrees));
         longitudeField.setText(String.format(Locale.US, "%.5f", observerState.longitudeDegrees));
+        if (observerDateField != null && observerTimeField != null
+                && (!preserveManualTime || !observerTimeManuallyEdited)) {
+            ZonedDateTime time = (skyTimeLocked ? skyInstant : Instant.now()).atZone(observerState.zoneId);
+            observerDateField.setText(String.format(
+                    Locale.US,
+                    "%04d-%02d-%02d",
+                    time.getYear(),
+                    time.getMonthValue(),
+                    time.getDayOfMonth()
+            ));
+            observerTimeField.setText(String.format(
+                    Locale.US,
+                    "%02d:%02d:%02d",
+                    time.getHour(),
+                    time.getMinute(),
+                    time.getSecond()
+            ));
+        }
+        suppressObserverFieldChanges = false;
+    }
+
+    private ZonedDateTime observerDateTimeFromFields() {
+        if (observerDateField == null || observerTimeField == null) {
+            return ZonedDateTime.now(observerState.zoneId);
+        }
+        LocalDate date = parseObserverDateInput(observerDateField.getText().toString());
+        if (date == null) {
+            observerDateField.setError(getString(R.string.sky_time_bad_input));
+            return null;
+        }
+        LocalTime time = parseSkyTimeInput(observerTimeField.getText().toString());
+        if (time == null) {
+            observerTimeField.setError(getString(R.string.sky_time_bad_input));
+            return null;
+        }
+        return ZonedDateTime.of(date, time, observerState.zoneId);
+    }
+
+    private LocalDate parseObserverDateInput(String value) {
+        if (value == null) {
+            return null;
+        }
+        String normalized = value.trim().replace('/', '-').replace('.', '-');
+        if (normalized.isEmpty()) {
+            return null;
+        }
+        try {
+            return LocalDate.parse(normalized);
+        } catch (DateTimeParseException ignored) {
+            // Fall through to compact forms below.
+        }
+        try {
+            return LocalDate.parse(normalized, DateTimeFormatter.ofPattern("yyyy-M-d", Locale.US));
+        } catch (DateTimeParseException ignored) {
+            // Fall through to current-year M-d.
+        }
+        Matcher monthDay = Pattern.compile("^(\\d{1,2})-(\\d{1,2})$").matcher(normalized);
+        if (!monthDay.matches()) {
+            return null;
+        }
+        try {
+            int year = ZonedDateTime.now(observerState.zoneId).getYear();
+            int month = Integer.parseInt(monthDay.group(1));
+            int day = Integer.parseInt(monthDay.group(2));
+            return LocalDate.of(year, month, day);
+        } catch (RuntimeException ex) {
+            return null;
+        }
+    }
+
+    private void updateObserverSyncWarning() {
+        boolean warning = connected && !observerSyncedToMount;
+        int textColor = warning ? syncWarningColor() : titleTextColor();
+        setFieldWarning(latitudeField, latitudeSyncAlertText, warning, textColor);
+        setFieldWarning(longitudeField, longitudeSyncAlertText, warning, textColor);
+        setFieldWarning(observerDateField, dateSyncAlertText, warning, textColor);
+        setFieldWarning(observerTimeField, timeSyncAlertText, warning, textColor);
+        if (observerSyncWarningText != null) {
+            observerSyncWarningText.setVisibility(warning ? View.VISIBLE : View.GONE);
+        }
+    }
+
+    private void setFieldWarning(EditText field, TextView alert, boolean warning, int textColor) {
+        if (field != null) {
+            field.setTextColor(textColor);
+            field.setBackground(createFieldBackground(true, warning));
+        }
+        if (alert != null) {
+            alert.setVisibility(warning ? View.VISIBLE : View.GONE);
+        }
+    }
+
+    private void applyBostonLocation() {
+        observerState = ObserverState.boston();
+        observerSyncedToMount = false;
+        updateObserverFieldTextFromState(true);
         updateObserverViews();
     }
 
@@ -6569,13 +7066,22 @@ public final class MainActivity extends Activity {
                 ? observerState.locationName
                 : getString(R.string.manual_location_name);
         observerState = new ObserverState(latitude, longitude, ZoneId.systemDefault(), locationName);
+        observerSyncedToMount = false;
         updateObserverViews();
         Logger.info("manual location applied " + observerLog());
         return true;
     }
 
     private void requestGpsLocation() {
-        logUserAction("tap use-gps-location");
+        requestGpsLocation(true);
+    }
+
+    private void requestGpsLocation(boolean userInitiated) {
+        if (userInitiated) {
+            logUserAction("tap use-gps-location");
+        } else {
+            Logger.info("default gps location requested");
+        }
         if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED
                 && checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
             Logger.info("gps location permission requested");
@@ -6586,6 +7092,19 @@ public final class MainActivity extends Activity {
             return;
         }
         useGpsLocation();
+    }
+
+    private void requestDefaultGpsLocation() {
+        if (defaultGpsRequested) {
+            return;
+        }
+        defaultGpsRequested = true;
+        if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED
+                && checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            Logger.info("default gps skipped until user grants location permission");
+            return;
+        }
+        requestGpsLocation(false);
     }
 
     private void useGpsLocation() {
@@ -6673,8 +7192,8 @@ public final class MainActivity extends Activity {
                 ZoneId.systemDefault(),
                 getString(R.string.gps_location_name)
         );
-        latitudeField.setText(String.format(Locale.US, "%.5f", observerState.latitudeDegrees));
-        longitudeField.setText(String.format(Locale.US, "%.5f", observerState.longitudeDegrees));
+        observerSyncedToMount = false;
+        updateObserverFieldTextFromState(true);
         updateObserverViews();
         Logger.info("gps location applied " + observerLog()
                 + " accuracy=" + (location.hasAccuracy() ? location.getAccuracy() : -1.0f));
@@ -6810,6 +7329,74 @@ public final class MainActivity extends Activity {
         return box;
     }
 
+    private LinearLayout settingsPanelTitle(int titleRes, String iconText) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+
+        TextView icon = new TextView(this);
+        icon.setText(iconText);
+        icon.setTextSize(20);
+        icon.setTypeface(Typeface.DEFAULT_BOLD);
+        icon.setTextColor(selectedAccentColor());
+        icon.setGravity(Gravity.CENTER);
+        row.addView(icon, new LinearLayout.LayoutParams(dp(30), dp(30)));
+
+        TextView title = panelTitle(titleRes);
+        title.setTextSize(19);
+        LinearLayout.LayoutParams titleParams = weightWrap(1f);
+        titleParams.leftMargin = dp(8);
+        row.addView(title, titleParams);
+        return row;
+    }
+
+    private LinearLayout settingsPanelTitleWithHelp(int titleRes, int helpRes, String iconText) {
+        LinearLayout row = settingsPanelTitle(titleRes, iconText);
+        Button help = new Button(this);
+        help.setAllCaps(false);
+        help.setText("?");
+        help.setTextSize(13);
+        help.setTypeface(Typeface.DEFAULT_BOLD);
+        help.setTextColor(labelTextColor());
+        help.setMinWidth(0);
+        help.setMinHeight(0);
+        help.setMinimumWidth(0);
+        help.setMinimumHeight(0);
+        help.setPadding(0, 0, 0, dp(1));
+        help.setGravity(Gravity.CENTER);
+        help.setBackground(createHelpButtonBackground());
+        help.setContentDescription(getString(R.string.help_button_content_description));
+        help.setOnClickListener(v -> showHelpDialog(titleRes, helpRes));
+        row.addView(help, squareParams(30));
+        return row;
+    }
+
+    private Button compactHeaderIconButton(String text, int descriptionRes) {
+        Button button = new Button(this);
+        button.setAllCaps(false);
+        button.setText(text);
+        button.setTextSize(16);
+        button.setTypeface(Typeface.DEFAULT_BOLD);
+        button.setTextColor(titleTextColor());
+        button.setGravity(Gravity.CENTER);
+        button.setMinWidth(0);
+        button.setMinHeight(0);
+        button.setMinimumWidth(0);
+        button.setMinimumHeight(0);
+        button.setPadding(0, 0, 0, dp(1));
+        button.setBackground(createSecondaryButtonBackground(true));
+        button.setContentDescription(getString(descriptionRes));
+        return button;
+    }
+
+    private LinearLayout settingsSubPanel() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(12), dp(11), dp(12), dp(11));
+        box.setBackground(createMetricBackground());
+        return box;
+    }
+
     private LinearLayout sectionTitleWithHelp(int titleRes, int helpRes) {
         LinearLayout row = titleWithHelp(titleRes, helpRes, 16);
         row.setPadding(0, 0, 0, dp(4));
@@ -6841,11 +7428,12 @@ public final class MainActivity extends Activity {
         help.setMinHeight(0);
         help.setMinimumWidth(0);
         help.setMinimumHeight(0);
-        help.setPadding(0, 0, 0, 0);
+        help.setPadding(0, 0, 0, dp(1));
+        help.setGravity(Gravity.CENTER);
         help.setContentDescription(getString(R.string.help_button_content_description));
         help.setBackground(createHelpButtonBackground());
         help.setOnClickListener(v -> showHelpDialog(titleRes, helpRes));
-        row.addView(help, squareParams(24));
+        row.addView(help, squareParams(22));
         return row;
     }
 
@@ -6855,6 +7443,15 @@ public final class MainActivity extends Activity {
                 .setMessage(helpRes)
                 .setPositiveButton(android.R.string.ok, null)
                 .show();
+    }
+
+    private ImageView createHeaderWatermark() {
+        ImageView image = new ImageView(this);
+        image.setImageResource(R.drawable.clearsky_watermark);
+        image.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        image.setAlpha(nightModeEnabled ? 0.16f : 0.20f);
+        image.setAdjustViewBounds(false);
+        return image;
     }
 
     private TextView labelText(int textRes) {
@@ -6873,6 +7470,20 @@ public final class MainActivity extends Activity {
         return textView;
     }
 
+    private TextView dropdownText() {
+        TextView textView = new TextView(this);
+        textView.setTextSize(19);
+        textView.setTypeface(Typeface.DEFAULT_BOLD);
+        textView.setTextColor(titleTextColor());
+        textView.setGravity(Gravity.CENTER_VERTICAL);
+        textView.setSingleLine(true);
+        textView.setEllipsize(TextUtils.TruncateAt.END);
+        textView.setMinHeight(dp(42));
+        textView.setPadding(0, 0, 0, 0);
+        textView.setClickable(true);
+        return textView;
+    }
+
     private void compactSkyText(TextView textView) {
         textView.setTextSize(12);
         textView.setIncludeFontPadding(false);
@@ -6884,6 +7495,62 @@ public final class MainActivity extends Activity {
         button.setText(textRes);
         compactButton(button);
         return button;
+    }
+
+    private Button skyOverlayIconButton(String text, int descriptionRes) {
+        Button button = new Button(this);
+        button.setAllCaps(false);
+        button.setText(text);
+        button.setContentDescription(getString(descriptionRes));
+        button.setTextSize(18);
+        button.setTypeface(Typeface.DEFAULT_BOLD);
+        button.setMinWidth(0);
+        button.setMinimumWidth(0);
+        button.setMinHeight(dp(42));
+        button.setMinimumHeight(dp(42));
+        button.setPadding(0, 0, 0, dp(2));
+        button.setTextColor(titleTextColor());
+        button.setBackground(createSecondaryButtonBackground(true));
+        return button;
+    }
+
+    private Button skyTelescopeIconButton(int descriptionRes) {
+        Button button = new TelescopeIconButton(this);
+        button.setAllCaps(false);
+        button.setText("");
+        button.setContentDescription(getString(descriptionRes));
+        button.setMinWidth(0);
+        button.setMinimumWidth(0);
+        button.setMinHeight(dp(42));
+        button.setMinimumHeight(dp(42));
+        button.setPadding(0, 0, 0, 0);
+        button.setTextColor(titleTextColor());
+        button.setBackground(createSecondaryButtonBackground(true));
+        return button;
+    }
+
+    private Button segmentButton(int textRes) {
+        Button button = actionButton(textRes);
+        button.setTextSize(14);
+        button.setMinHeight(dp(42));
+        button.setMinimumHeight(dp(42));
+        button.setSingleLine(true);
+        button.setEllipsize(TextUtils.TruncateAt.END);
+        button.setPadding(dp(6), 0, dp(6), 0);
+        button.setBackground(createSegmentButtonBackground(false, true));
+        return button;
+    }
+
+    private void setSegmentButtonState(Button button, boolean selected, boolean enabled) {
+        if (button == null) {
+            return;
+        }
+        button.setEnabled(enabled);
+        button.setAlpha(enabled ? 1.0f : 0.62f);
+        button.setTextColor(enabled
+                ? (selected ? Color.WHITE : titleTextColor())
+                : mutedTextColor());
+        button.setBackground(createSegmentButtonBackground(selected, enabled));
     }
 
     private EditText compactEditText() {
@@ -6910,13 +7577,6 @@ public final class MainActivity extends Activity {
         button.setBackground(createActionButtonBackground(true));
     }
 
-    private LinearLayout centeredRow() {
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setGravity(Gravity.CENTER);
-        return row;
-    }
-
     private boolean isWideLayout() {
         Configuration config = getResources().getConfiguration();
         return config.screenWidthDp >= 840
@@ -6928,6 +7588,16 @@ public final class MainActivity extends Activity {
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT
         );
+    }
+
+    private FrameLayout.LayoutParams headerWatermarkParams() {
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+                dp(isWideLayout() ? 240 : 155),
+                dp(isWideLayout() ? 108 : 70),
+                Gravity.TOP | Gravity.END
+        );
+        params.setMargins(0, dp(28), dp(8), 0);
+        return params;
     }
 
     private LinearLayout.LayoutParams matchWrap() {
@@ -7012,6 +7682,22 @@ public final class MainActivity extends Activity {
         );
     }
 
+    private LinearLayout.LayoutParams matchFixedHeightWithTopMargin(int heightDp, int topDp) {
+        LinearLayout.LayoutParams params = matchFixedHeight(heightDp);
+        params.topMargin = dp(topDp);
+        return params;
+    }
+
+    private LinearLayout.LayoutParams fixedWidthHeight(int widthDp, int heightDp) {
+        return new LinearLayout.LayoutParams(dp(widthDp), dp(heightDp));
+    }
+
+    private LinearLayout.LayoutParams fixedWidthHeightWithLeftMargin(int widthDp, int heightDp, int leftDp) {
+        LinearLayout.LayoutParams params = fixedWidthHeight(widthDp, heightDp);
+        params.leftMargin = dp(leftDp);
+        return params;
+    }
+
     private LinearLayout.LayoutParams weightWrap(float weight) {
         return new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, weight);
     }
@@ -7022,44 +7708,58 @@ public final class MainActivity extends Activity {
         return params;
     }
 
+    private LinearLayout.LayoutParams weightFixedHeight(float weight, int heightDp) {
+        return new LinearLayout.LayoutParams(0, dp(heightDp), weight);
+    }
+
+    private LinearLayout.LayoutParams weightFixedHeightWithLeftMargin(float weight, int heightDp, int leftDp) {
+        LinearLayout.LayoutParams params = weightFixedHeight(weight, heightDp);
+        params.leftMargin = dp(leftDp);
+        return params;
+    }
+
     private LinearLayout.LayoutParams squareParams(int sizeDp) {
         return new LinearLayout.LayoutParams(dp(sizeDp), dp(sizeDp));
     }
 
-    private LinearLayout.LayoutParams controlButtonParams() {
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(64), dp(64));
-        params.setMargins(dp(3), dp(3), dp(3), dp(3));
+    private LinearLayout.LayoutParams squareParamsWithTopMargin(int sizeDp, int topDp) {
+        LinearLayout.LayoutParams params = squareParams(sizeDp);
+        params.topMargin = dp(topDp);
         return params;
     }
 
     private GradientDrawable createCardBackground() {
         GradientDrawable drawable = new GradientDrawable();
         drawable.setShape(GradientDrawable.RECTANGLE);
-        drawable.setColor(cardBackgroundColor());
-        drawable.setStroke(dp(1), nightModeEnabled ? Color.rgb(70, 18, 18) : Color.rgb(37, 48, 68));
-        drawable.setCornerRadius(dp(8));
+        drawable.setColor(nightModeEnabled ? Color.argb(236, 24, 6, 6) : Color.argb(236, 15, 23, 42));
+        drawable.setStroke(dp(1), nightModeEnabled ? Color.rgb(92, 30, 30) : Color.rgb(51, 65, 85));
+        drawable.setCornerRadius(dp(14));
         return drawable;
     }
 
     private GradientDrawable createMetricBackground() {
         GradientDrawable drawable = new GradientDrawable();
         drawable.setShape(GradientDrawable.RECTANGLE);
-        drawable.setColor(nightModeEnabled ? Color.rgb(30, 6, 6) : Color.rgb(15, 23, 42));
-        drawable.setCornerRadius(dp(8));
+        drawable.setColor(nightModeEnabled ? Color.argb(210, 30, 6, 6) : Color.argb(210, 17, 24, 39));
+        drawable.setStroke(dp(1), nightModeEnabled ? Color.rgb(70, 18, 18) : Color.rgb(30, 41, 59));
+        drawable.setCornerRadius(dp(10));
         return drawable;
     }
 
-    private GradientDrawable createDirectionButtonBackground(boolean enabled) {
+    private GradientDrawable createSegmentButtonBackground(boolean selected, boolean enabled) {
         GradientDrawable drawable = new GradientDrawable();
         drawable.setShape(GradientDrawable.RECTANGLE);
-        if (nightModeEnabled) {
-            drawable.setColor(enabled ? Color.rgb(48, 10, 10) : Color.rgb(32, 7, 7));
-            drawable.setStroke(dp(1), enabled ? Color.rgb(170, 58, 58) : Color.rgb(85, 30, 30));
+        if (!enabled) {
+            drawable.setColor(nightModeEnabled ? Color.rgb(24, 6, 6) : Color.rgb(17, 24, 39));
+            drawable.setStroke(dp(1), nightModeEnabled ? Color.rgb(70, 18, 18) : Color.rgb(30, 41, 59));
+        } else if (selected) {
+            drawable.setColor(nightModeEnabled ? Color.rgb(74, 13, 13) : Color.rgb(12, 88, 105));
+            drawable.setStroke(dp(1), selectedAccentColor());
         } else {
-            drawable.setColor(enabled ? Color.rgb(30, 41, 59) : Color.rgb(15, 23, 42));
-            drawable.setStroke(dp(1), enabled ? Color.rgb(71, 85, 105) : Color.rgb(30, 41, 59));
+            drawable.setColor(nightModeEnabled ? Color.rgb(36, 8, 8) : Color.rgb(30, 41, 59));
+            drawable.setStroke(dp(1), nightModeEnabled ? Color.rgb(92, 30, 30) : Color.rgb(51, 65, 85));
         }
-        drawable.setCornerRadius(0);
+        drawable.setCornerRadius(dp(8));
         return drawable;
     }
 
@@ -7071,9 +7771,9 @@ public final class MainActivity extends Activity {
         GradientDrawable drawable = new GradientDrawable();
         drawable.setShape(GradientDrawable.RECTANGLE);
         if (enabled) {
-            drawable.setColor(nightModeEnabled ? Color.rgb(127, 29, 29) : Color.rgb(220, 38, 38));
+            drawable.setColor(nightModeEnabled ? Color.rgb(190, 24, 24) : Color.rgb(255, 45, 45));
         } else {
-            drawable.setColor(nightModeEnabled ? Color.rgb(85, 30, 30) : Color.rgb(127, 73, 73));
+            drawable.setColor(nightModeEnabled ? Color.rgb(122, 28, 28) : Color.rgb(178, 58, 58));
         }
         drawable.setCornerRadius(dp(12));
         return drawable;
@@ -7111,29 +7811,19 @@ public final class MainActivity extends Activity {
         return drawable;
     }
 
-    private GradientDrawable createNightModeButtonBackground() {
-        GradientDrawable drawable = new GradientDrawable();
-        drawable.setShape(GradientDrawable.RECTANGLE);
-        if (nightModeEnabled) {
-            drawable.setColor(Color.rgb(127, 29, 29));
-            drawable.setStroke(dp(1), Color.rgb(220, 38, 38));
-        } else {
-            drawable.setColor(Color.rgb(22, 78, 99));
-            drawable.setStroke(dp(1), Color.rgb(56, 189, 248));
-        }
-        drawable.setCornerRadius(dp(18));
-        return drawable;
+    private GradientDrawable createFieldBackground(boolean enabled) {
+        return createFieldBackground(enabled, false);
     }
 
-    private GradientDrawable createFieldBackground(boolean enabled) {
+    private GradientDrawable createFieldBackground(boolean enabled, boolean warning) {
         GradientDrawable drawable = new GradientDrawable();
         drawable.setShape(GradientDrawable.RECTANGLE);
         if (nightModeEnabled) {
             drawable.setColor(enabled ? Color.rgb(24, 6, 6) : Color.rgb(18, 4, 4));
-            drawable.setStroke(dp(1), enabled ? Color.rgb(120, 45, 45) : Color.rgb(85, 30, 30));
+            drawable.setStroke(dp(1), warning ? syncWarningColor() : (enabled ? Color.rgb(120, 45, 45) : Color.rgb(85, 30, 30)));
         } else {
             drawable.setColor(enabled ? Color.rgb(15, 23, 42) : Color.rgb(11, 18, 32));
-            drawable.setStroke(dp(1), enabled ? Color.rgb(51, 65, 85) : Color.rgb(30, 41, 59));
+            drawable.setStroke(dp(1), warning ? syncWarningColor() : (enabled ? Color.rgb(51, 65, 85) : Color.rgb(30, 41, 59)));
         }
         drawable.setCornerRadius(dp(8));
         return drawable;
@@ -7181,21 +7871,15 @@ public final class MainActivity extends Activity {
         return drawable;
     }
 
-    private GradientDrawable createRateButtonBackground(boolean selected, boolean enabled) {
-        GradientDrawable drawable = new GradientDrawable();
-        drawable.setShape(GradientDrawable.RECTANGLE);
+    private int dangerTextColor(boolean enabled) {
         if (!enabled) {
-            drawable.setColor(nightModeEnabled ? Color.rgb(32, 7, 7) : Color.rgb(15, 23, 42));
-            drawable.setStroke(dp(1), nightModeEnabled ? Color.rgb(85, 30, 30) : Color.rgb(30, 41, 59));
-        } else if (selected) {
-            drawable.setColor(nightModeEnabled ? Color.rgb(74, 13, 13) : Color.rgb(8, 47, 73));
-            drawable.setStroke(dp(2), selectedAccentColor());
-        } else {
-            drawable.setColor(cardBackgroundColor());
-            drawable.setStroke(dp(1), nightModeEnabled ? Color.rgb(120, 45, 45) : Color.rgb(71, 85, 105));
+            return mutedTextColor();
         }
-        drawable.setCornerRadius(dp(4));
-        return drawable;
+        return nightModeEnabled ? Color.rgb(255, 145, 145) : Color.rgb(248, 113, 113);
+    }
+
+    private int syncWarningColor() {
+        return nightModeEnabled ? Color.rgb(255, 120, 120) : Color.rgb(248, 113, 113);
     }
 
     private GradientDrawable createTabBackground(boolean selected) {
@@ -7204,6 +7888,9 @@ public final class MainActivity extends Activity {
         if (selected) {
             drawable.setColor(nightModeEnabled ? Color.rgb(95, 16, 16) : Color.rgb(14, 116, 144));
             drawable.setStroke(dp(1), selectedAccentColor());
+        } else if (nightModeEnabled) {
+            drawable.setColor(Color.rgb(30, 6, 6));
+            drawable.setStroke(dp(1), Color.rgb(70, 18, 18));
         } else {
             drawable.setColor(Color.rgb(15, 23, 42));
             drawable.setStroke(dp(1), Color.rgb(51, 65, 85));
@@ -7215,8 +7902,13 @@ public final class MainActivity extends Activity {
     private GradientDrawable createMenuToggleBackground() {
         GradientDrawable drawable = new GradientDrawable();
         drawable.setShape(GradientDrawable.RECTANGLE);
-        drawable.setColor(Color.rgb(30, 41, 59));
-        drawable.setStroke(dp(1), Color.rgb(71, 85, 105));
+        if (nightModeEnabled) {
+            drawable.setColor(Color.rgb(30, 6, 6));
+            drawable.setStroke(dp(1), Color.rgb(90, 35, 35));
+        } else {
+            drawable.setColor(Color.rgb(30, 41, 59));
+            drawable.setStroke(dp(1), Color.rgb(71, 85, 105));
+        }
         drawable.setCornerRadius(dp(8));
         return drawable;
     }
@@ -7224,10 +7916,320 @@ public final class MainActivity extends Activity {
     private GradientDrawable createFloatingMenuBackground() {
         GradientDrawable drawable = new GradientDrawable();
         drawable.setShape(GradientDrawable.RECTANGLE);
-        drawable.setColor(Color.rgb(15, 23, 42));
-        drawable.setStroke(dp(1), Color.rgb(30, 41, 59));
+        if (nightModeEnabled) {
+            drawable.setColor(Color.rgb(24, 6, 6));
+            drawable.setStroke(dp(1), Color.rgb(70, 18, 18));
+        } else {
+            drawable.setColor(Color.rgb(15, 23, 42));
+            drawable.setStroke(dp(1), Color.rgb(30, 41, 59));
+        }
         drawable.setCornerRadius(dp(8));
         return drawable;
+    }
+
+    private final class StarFieldBackgroundView extends View {
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+
+        StarFieldBackgroundView(Context context) {
+            super(context);
+            setWillNotDraw(false);
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            super.onDraw(canvas);
+            int width = getWidth();
+            int height = getHeight();
+            canvas.drawColor(pageBackgroundColor());
+
+            paint.setStyle(Paint.Style.FILL);
+            int starRed = nightModeEnabled ? 180 : 210;
+            int starGreen = nightModeEnabled ? 80 : 225;
+            int starBlue = nightModeEnabled ? 80 : 255;
+            for (int i = 0; i < 150; i++) {
+                float x = ((i * 73) % 1000) / 1000f * width;
+                float y = ((i * 191) % 1000) / 1000f * height;
+                int alpha = 28 + (i * 37) % 80;
+                float radius = dp((i % 9 == 0) ? 2 : 1) * (0.45f + (i % 5) * 0.12f);
+                paint.setColor(Color.argb(alpha, starRed, starGreen, starBlue));
+                canvas.drawCircle(x, y, radius, paint);
+            }
+
+        }
+    }
+
+    private final class TelescopeIconButton extends Button {
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+
+        TelescopeIconButton(Context context) {
+            super(context);
+            setWillNotDraw(false);
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            super.onDraw(canvas);
+            float width = getWidth();
+            float height = getHeight();
+            float accent = getCurrentTextColor();
+
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeCap(Paint.Cap.ROUND);
+            paint.setStrokeJoin(Paint.Join.ROUND);
+            paint.setStrokeWidth(dp(2));
+            paint.setColor((int) accent);
+
+            float tubeStartX = width * 0.24f;
+            float tubeStartY = height * 0.43f;
+            float tubeEndX = width * 0.70f;
+            float tubeEndY = height * 0.28f;
+            float offsetX = width * 0.05f;
+            float offsetY = height * 0.12f;
+            canvas.drawLine(tubeStartX, tubeStartY, tubeEndX, tubeEndY, paint);
+            canvas.drawLine(tubeStartX + offsetX, tubeStartY + offsetY, tubeEndX + offsetX, tubeEndY + offsetY, paint);
+            canvas.drawLine(tubeStartX, tubeStartY, tubeStartX + offsetX, tubeStartY + offsetY, paint);
+            canvas.drawLine(tubeEndX, tubeEndY, tubeEndX + offsetX, tubeEndY + offsetY, paint);
+
+            paint.setStrokeWidth(dp(1));
+            canvas.drawLine(width * 0.18f, height * 0.48f, tubeStartX, tubeStartY, paint);
+            canvas.drawLine(width * 0.52f, height * 0.55f, width * 0.34f, height * 0.80f, paint);
+            canvas.drawLine(width * 0.52f, height * 0.55f, width * 0.70f, height * 0.80f, paint);
+            canvas.drawLine(width * 0.52f, height * 0.55f, width * 0.52f, height * 0.84f, paint);
+            canvas.drawCircle(width * 0.52f, height * 0.55f, dp(2), paint);
+        }
+    }
+
+    private final class ManualPadView extends View {
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private boolean controlsEnabled;
+        private Direction activePadDirection;
+        private boolean centerTouch;
+        private boolean draggingPad;
+        private float dragStartRawX;
+        private float dragStartRawY;
+        private float dragStartTranslationX;
+        private float dragStartTranslationY;
+
+        ManualPadView(Context context) {
+            super(context);
+            setWillNotDraw(false);
+            setClickable(true);
+        }
+
+        void setControlsEnabled(boolean enabled) {
+            if (controlsEnabled == enabled) {
+                return;
+            }
+            controlsEnabled = enabled;
+            if (!controlsEnabled) {
+                cancelActiveDirection();
+            }
+            invalidate();
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            super.onDraw(canvas);
+            float width = getWidth();
+            float height = getHeight();
+            float centerX = width / 2f;
+            float centerY = height / 2f;
+            float radius = Math.min(width, height) / 2f - dp(3);
+            float centerRadius = radius * 0.32f;
+            int alpha = controlsEnabled ? 152 : 92;
+            int accent = selectedAccentColor();
+
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(nightModeEnabled
+                    ? Color.argb(alpha, 45, 8, 8)
+                    : Color.argb(alpha, 9, 31, 52));
+            canvas.drawCircle(centerX, centerY, radius, paint);
+
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(dp(2));
+            paint.setColor(controlsEnabled
+                    ? Color.argb(205, Color.red(accent), Color.green(accent), Color.blue(accent))
+                    : Color.argb(110, 100, 116, 139));
+            canvas.drawCircle(centerX, centerY, radius, paint);
+
+            paint.setStrokeWidth(dp(1));
+            paint.setColor(controlsEnabled
+                    ? Color.argb(115, Color.red(accent), Color.green(accent), Color.blue(accent))
+                    : Color.argb(70, 100, 116, 139));
+            float diagonal = (float) (radius / Math.sqrt(2));
+            canvas.drawLine(centerX, centerY, centerX + diagonal, centerY + diagonal, paint);
+            canvas.drawLine(centerX, centerY, centerX - diagonal, centerY + diagonal, paint);
+            canvas.drawLine(centerX, centerY, centerX - diagonal, centerY - diagonal, paint);
+            canvas.drawLine(centerX, centerY, centerX + diagonal, centerY - diagonal, paint);
+            canvas.drawCircle(centerX, centerY, centerRadius, paint);
+
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(nightModeEnabled
+                    ? Color.argb(210, 24, 6, 6)
+                    : Color.argb(215, 15, 23, 42));
+            canvas.drawCircle(centerX, centerY, centerRadius, paint);
+
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(dp(1));
+            paint.setColor(controlsEnabled ? Color.argb(205, 226, 232, 240) : Color.argb(120, 148, 163, 184));
+            canvas.drawCircle(centerX, centerY, centerRadius, paint);
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(controlsEnabled ? Color.argb(220, 226, 232, 240) : Color.argb(150, 148, 163, 184));
+            float dotSpacing = dp(6);
+            float dotRadius = dp(1);
+            for (int row = -1; row <= 1; row++) {
+                for (int column = -1; column <= 1; column++) {
+                    canvas.drawCircle(
+                            centerX + column * dotSpacing,
+                            centerY + row * dotSpacing,
+                            dotRadius,
+                            paint
+                    );
+                }
+            }
+
+            paint.setStyle(Paint.Style.FILL);
+            paint.setTextAlign(Paint.Align.CENTER);
+            paint.setTypeface(Typeface.DEFAULT_BOLD);
+            paint.setTextSize(dp(30));
+            paint.setColor(controlsEnabled
+                    ? Color.argb(235, Color.red(accent), Color.green(accent), Color.blue(accent))
+                    : Color.argb(140, 148, 163, 184));
+            drawCenteredText(canvas, "↑", centerX, centerY - radius * 0.57f);
+            drawCenteredText(canvas, "→", centerX + radius * 0.57f, centerY);
+            drawCenteredText(canvas, "↓", centerX, centerY + radius * 0.57f);
+            drawCenteredText(canvas, "←", centerX - radius * 0.57f, centerY);
+        }
+
+        private void drawCenteredText(Canvas canvas, String label, float x, float y) {
+            Paint.FontMetrics metrics = paint.getFontMetrics();
+            canvas.drawText(label, x, y - (metrics.ascent + metrics.descent) / 2f, paint);
+        }
+
+        @Override
+        public boolean onTouchEvent(MotionEvent event) {
+            float centerX = getWidth() / 2f;
+            float centerY = getHeight() / 2f;
+            float radius = Math.min(getWidth(), getHeight()) / 2f - dp(3);
+            float centerRadius = radius * 0.32f;
+            float dx = event.getX() - centerX;
+            float dy = event.getY() - centerY;
+            float distance = (float) Math.hypot(dx, dy);
+
+            switch (event.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    if (distance > radius) {
+                        return false;
+                    }
+                    requestTouchParents(true);
+                    if (distance <= centerRadius) {
+                        centerTouch = true;
+                        draggingPad = false;
+                        dragStartRawX = event.getRawX();
+                        dragStartRawY = event.getRawY();
+                        dragStartTranslationX = getTranslationX();
+                        dragStartTranslationY = getTranslationY();
+                    } else {
+                        centerTouch = false;
+                        draggingPad = false;
+                        if (controlsEnabled) {
+                            startPadDirection(directionFor(dx, dy));
+                        }
+                    }
+                    return true;
+                case MotionEvent.ACTION_MOVE:
+                    if (centerTouch) {
+                        float deltaX = event.getRawX() - dragStartRawX;
+                        float deltaY = event.getRawY() - dragStartRawY;
+                        if (draggingPad || Math.hypot(deltaX, deltaY) > dp(8)) {
+                            draggingPad = true;
+                            movePad(deltaX, deltaY);
+                        }
+                        return true;
+                    }
+                    if (!controlsEnabled) {
+                        return true;
+                    }
+                    if (distance > radius || distance <= centerRadius) {
+                        cancelActiveDirection();
+                    } else {
+                        Direction direction = directionFor(dx, dy);
+                        if (direction != activePadDirection) {
+                            cancelActiveDirection();
+                            startPadDirection(direction);
+                        }
+                    }
+                    return true;
+                case MotionEvent.ACTION_UP:
+                    performClick();
+                    centerTouch = false;
+                    draggingPad = false;
+                    cancelActiveDirection();
+                    requestTouchParents(false);
+                    return true;
+                case MotionEvent.ACTION_CANCEL:
+                    centerTouch = false;
+                    draggingPad = false;
+                    cancelActiveDirection();
+                    requestTouchParents(false);
+                    return true;
+                default:
+                    return true;
+            }
+        }
+
+        @Override
+        public boolean performClick() {
+            super.performClick();
+            return true;
+        }
+
+        private Direction directionFor(float dx, float dy) {
+            if (Math.abs(dx) > Math.abs(dy)) {
+                return dx > 0 ? Direction.EAST : Direction.WEST;
+            }
+            return dy > 0 ? Direction.SOUTH : Direction.NORTH;
+        }
+
+        private void movePad(float deltaX, float deltaY) {
+            View parentView = getParent() instanceof View ? (View) getParent() : null;
+            if (parentView == null) {
+                setTranslationX(dragStartTranslationX + deltaX);
+                setTranslationY(dragStartTranslationY + deltaY);
+                return;
+            }
+            float targetX = dragStartTranslationX + deltaX;
+            float targetY = dragStartTranslationY + deltaY;
+            float minX = -getLeft();
+            float maxX = parentView.getWidth() - getWidth() - getLeft();
+            float minY = -getTop();
+            float maxY = parentView.getHeight() - getHeight() - getTop();
+            setTranslationX(clampFloat(targetX, minX, maxX));
+            setTranslationY(clampFloat(targetY, minY, maxY));
+        }
+
+        private void requestTouchParents(boolean disallow) {
+            ViewParent parent = getParent();
+            while (parent != null) {
+                parent.requestDisallowInterceptTouchEvent(disallow);
+                parent = parent.getParent();
+            }
+        }
+
+        private void startPadDirection(Direction direction) {
+            activePadDirection = direction;
+            startMove(direction);
+        }
+
+        private void cancelActiveDirection() {
+            if (activePadDirection == null) {
+                return;
+            }
+            Direction direction = activePadDirection;
+            activePadDirection = null;
+            stopMove(direction);
+        }
+
     }
 
     private int dp(int value) {
@@ -7242,13 +8244,11 @@ public final class MainActivity extends Activity {
         if (manualStatusText != null) {
             manualStatusText.setText(text);
         }
-        updateDeviceStatusPanel();
     }
 
     private void setGotoStatus(String text) {
         gotoStatusMessage = text;
         updateGotoStatusViews();
-        updateDeviceStatusPanel();
     }
 
     private void updateGotoStatusViews() {
@@ -7260,7 +8260,6 @@ public final class MainActivity extends Activity {
     private void setSafetyStatus(String text) {
         safetyStatusMessage = text;
         updateSafetyStatusViews();
-        updateDeviceStatusPanel();
     }
 
     private void updateSafetyStatusViews() {
@@ -7343,73 +8342,76 @@ public final class MainActivity extends Activity {
         connectTrigger.setEnabled(!connected && !busy);
         connectTrigger.setBackground(createConnectBadgeBackground(!connected && !busy));
         disconnectButton.setEnabled(connected && !busy);
-        connectionForm.setVisibility(connected ? View.GONE : View.VISIBLE);
+        connectionForm.setVisibility(View.VISIBLE);
         connectTrigger.setVisibility(connected ? View.GONE : View.VISIBLE);
         disconnectButton.setVisibility(connected ? View.VISIBLE : View.GONE);
         updateManualRateControl();
         if (gotoButton != null) {
-            gotoButton.setEnabled(!busy);
+            boolean enabled = !busy && (!connected || !parked || gotoInProgress);
+            styleSkyOverlayIconButton(gotoButton, enabled);
             if (connected && gotoInProgress) {
-                gotoButton.setText(R.string.cancel_button);
+                gotoButton.setText("×");
+                gotoButton.setContentDescription(getString(R.string.cancel_button));
             } else {
-                gotoButton.setText(connected ? R.string.sky_goto_target : R.string.sky_find_target);
+                gotoButton.setText("⌕");
+                gotoButton.setContentDescription(getString(connected ? R.string.sky_goto_target : R.string.sky_find_target));
             }
         }
         if (skySyncButton != null) {
-            skySyncButton.setEnabled(connected && !busy && !gotoInProgress && selectedSkyTarget != null);
+            styleSkyOverlayIconButton(
+                    skySyncButton,
+                    connected && !busy && !parked && !gotoInProgress && selectedSkyTarget != null
+            );
         }
+        updateSkyCalibrationOverlayState();
         if (safetyCancelGotoButton != null) {
             boolean enabled = connected && !busy && gotoInProgress;
             safetyCancelGotoButton.setEnabled(enabled);
             safetyCancelGotoButton.setAlpha(enabled ? 1.0f : 0.55f);
-            safetyCancelGotoButton.setBackground(createActionButtonBackground(enabled));
+            safetyCancelGotoButton.setTextColor(dangerTextColor(enabled));
         }
         if (gotoStatusRefreshButton != null) {
             boolean enabled = connected && !busy;
             gotoStatusRefreshButton.setEnabled(enabled);
             gotoStatusRefreshButton.setAlpha(enabled ? 1.0f : 0.55f);
-            gotoStatusRefreshButton.setBackground(createSecondaryButtonBackground(enabled));
+            gotoStatusRefreshButton.setTextColor(enabled ? titleTextColor() : mutedTextColor());
         }
         if (floatingStopButton != null) {
             floatingStopButton.setEnabled(connected);
-            floatingStopButton.setVisibility(connected ? View.VISIBLE : View.GONE);
-            floatingStopButton.setAlpha(1.0f);
-        }
-        if (emergencyStopButton != null) {
-            emergencyStopButton.setEnabled(connected);
-            emergencyStopButton.setBackground(createStopButtonBackground(connected));
-            emergencyStopButton.setTextColor(Color.WHITE);
+            floatingStopButton.setVisibility(View.VISIBLE);
+            floatingStopButton.setAlpha(connected ? 1.0f : 0.62f);
+            floatingStopButton.setBackground(createStopButtonBackground(connected));
+            floatingStopButton.setTextColor(Color.WHITE);
         }
         if (parkButton != null) {
             boolean enabled = connected && !busy;
             parkButton.setEnabled(enabled);
             parkButton.setAlpha(enabled ? 1.0f : 0.55f);
-            parkButton.setBackground(createActionButtonBackground(enabled));
-            parkButton.setVisibility(parked ? View.GONE : View.VISIBLE);
+            parkButton.setText(parked ? R.string.unpark_mount : R.string.park_mount);
+            parkButton.setTextColor(enabled ? titleTextColor() : mutedTextColor());
         }
-        if (unparkButton != null) {
-            boolean enabled = connected && !busy;
-            unparkButton.setEnabled(enabled);
-            unparkButton.setAlpha(enabled ? 1.0f : 0.55f);
-            unparkButton.setBackground(createActionButtonBackground(enabled));
-            unparkButton.setVisibility(parked ? View.VISIBLE : View.GONE);
-        }
-        if (nightModeButton != null) {
-            nightModeButton.setText(nightModeEnabled
-                    ? R.string.night_mode_enabled_short
-                    : R.string.night_mode_disabled_short);
-            nightModeButton.setTextColor(Color.WHITE);
-            nightModeButton.setBackground(createNightModeButtonBackground());
+        if (nightModeStateText != null) {
+            nightModeStateText.setText(R.string.night_mode_label);
+            nightModeStateText.setTextColor(nightModeEnabled ? selectedAccentColor() : titleTextColor());
         }
         if (syncMountButton != null) {
             syncMountButton.setEnabled(!busy);
         }
-        if (trackingToggleButton != null) {
-            trackingToggleButton.setEnabled(connected && !busy);
+        updateObserverSyncWarning();
+        if (trackingRateSpinner != null) {
+            boolean enabled = !busy && !parked;
+            trackingRateSpinner.setEnabled(enabled);
+            trackingRateSpinner.setAlpha(enabled ? 1.0f : 0.55f);
         }
-        setTrackingRateButtonEnabled(trackingSiderealButton, !busy);
-        setTrackingRateButtonEnabled(trackingLunarButton, !busy);
-        setTrackingRateButtonEnabled(trackingSolarButton, !busy);
+        if (languageText != null) {
+            boolean enabled = !busy && !connected;
+            languageText.setEnabled(enabled);
+            languageText.setAlpha(enabled ? 1.0f : 0.55f);
+            languageText.setTextColor(enabled ? titleTextColor() : mutedTextColor());
+        }
+        if (trackingToggleButton != null) {
+            trackingToggleButton.setEnabled(connected && !busy && !parked);
+        }
         if (calibrationSuggestButton != null) {
             calibrationSuggestButton.setEnabled(skyChartView != null);
         }
@@ -7417,26 +8419,13 @@ public final class MainActivity extends Activity {
             calibrationShowButton.setEnabled(skyChartView != null && !busy);
             updateCalibrationTargetActionButton();
         }
-        boolean canStartAlignment = connected && !busy && alignmentSession == null;
-        if (calibrationModeSpinner != null) {
-            calibrationModeSpinner.setEnabled(!busy && alignmentSession == null);
+        if (calibrationModeText != null) {
+            boolean enabled = !busy && alignmentSession == null;
+            calibrationModeText.setEnabled(enabled);
+            calibrationModeText.setAlpha(enabled ? 1.0f : 0.55f);
+            calibrationModeText.setTextColor(enabled ? titleTextColor() : mutedTextColor());
         }
-        if (alignStartButton != null) {
-            alignStartButton.setEnabled(canStartAlignment && selectedCalibrationMode.starCount > 0);
-        }
-        boolean alignmentActive = connected && !busy && !gotoInProgress
-                && alignmentSession != null
-                && !alignmentSession.isComplete();
-        if (alignSelectButton != null) {
-            alignSelectButton.setEnabled(alignmentActive);
-            alignSelectButton.setText(R.string.calibration_align_set_target);
-        }
-        if (alignAcceptButton != null) {
-            alignAcceptButton.setEnabled(alignmentActive);
-        }
-        if (alignCancelButton != null) {
-            alignCancelButton.setEnabled(alignmentSession != null && !busy);
-        }
+        updateAlignmentActionButtons();
         if (refineGotoButton != null) {
             refineGotoButton.setEnabled(!isAltAzMountMode() && connected && !busy && hasPolarRefineAlignmentModel());
         }
@@ -7445,27 +8434,19 @@ public final class MainActivity extends Activity {
                     && connected && !busy && hasPolarRefineAlignmentModel() && polarRefineSyncedTarget != null);
         }
 
-        boolean controlsEnabled = connected && !busy;
-        setDirectionButtonEnabled(northButton, controlsEnabled);
-        setDirectionButtonEnabled(northEastButton, controlsEnabled);
-        setDirectionButtonEnabled(northWestButton, controlsEnabled);
-        setDirectionButtonEnabled(southButton, controlsEnabled);
-        setDirectionButtonEnabled(southEastButton, controlsEnabled);
-        setDirectionButtonEnabled(southWestButton, controlsEnabled);
-        setDirectionButtonEnabled(eastButton, controlsEnabled);
-        setDirectionButtonEnabled(westButton, controlsEnabled);
-        if (stopButton != null) {
-            stopButton.setEnabled(controlsEnabled);
-            stopButton.setBackground(createStopButtonBackground(controlsEnabled));
-            stopButton.setTextColor(Color.WHITE);
+        boolean controlsEnabled = connected && !busy && !parked;
+        if (manualPadView != null) {
+            manualPadView.setControlsEnabled(controlsEnabled);
         }
+        updateManualPadVisibility();
         updateTrackingViews();
         updateFirmwareSettingsViews();
-        updateDeviceStatusPanel();
     }
 
     private void updateObserverViews() {
         updateSkyTime();
+        updateObserverFieldTextFromState(true);
+        updateObserverSyncWarning();
         if (observerStatusText != null) {
             observerStatusText.setText(getString(
                     R.string.observer_status,
@@ -7483,13 +8464,35 @@ public final class MainActivity extends Activity {
         if (timeStatusText != null) {
             timeStatusText.setText(getString(R.string.time_status, observerState.formatTime(now)));
         }
+        if (observerDateField != null && observerTimeField != null && !observerTimeManuallyEdited) {
+            updateObserverFieldTextFromState(false);
+        }
         if (!skyTimeLocked) {
             skyInstant = now;
         }
         if (skyChartView != null) {
             skyChartView.setObserver(observerState, skyInstant);
         }
+        if (targetStatusText != null && selectedSkyTarget != null) {
+            targetStatusText.setText(skyTargetOverlayText(selectedSkyTarget));
+        }
+        updateSkyTitleTimeText();
         updateObservingAlert();
+    }
+
+    private void updateSkyTitleTimeText() {
+        if (skyTitleTimeText == null) {
+            return;
+        }
+        Instant displayInstant = skyTimeLocked ? skyInstant : Instant.now();
+        ZonedDateTime displayTime = displayInstant.atZone(observerState.zoneId);
+        skyTitleTimeText.setText(String.format(
+                Locale.US,
+                "%02d:%02d",
+                displayTime.getHour(),
+                displayTime.getMinute()
+        ));
+        skyTitleTimeText.setTextColor(skyTimeLocked ? selectedAccentColor() : labelTextColor());
     }
 
     private Instant currentSkyInstant() {
@@ -7510,6 +8513,7 @@ public final class MainActivity extends Activity {
                 skySummaryText.setText(skyChartView.summary());
             }
         }
+        updateSkyTitleTimeText();
         updateObservingAlert();
         if (wasLocked) {
             Logger.info("sky time reset to now for mount action reason=" + reason
@@ -7525,7 +8529,8 @@ public final class MainActivity extends Activity {
                 skyChartView.setSelectedTarget(refreshed, false);
             }
             if (targetStatusText != null && refreshed != null) {
-                targetStatusText.setText(getString(R.string.sky_target_status, refreshed.label));
+                targetStatusText.setVisibility(View.VISIBLE);
+                targetStatusText.setText(skyTargetOverlayText(refreshed));
             }
         }
     }
@@ -7749,9 +8754,6 @@ public final class MainActivity extends Activity {
 
     private void updatePageTabs(Page selectedPage) {
         currentPage = selectedPage;
-        if (manualPage != null) {
-            manualPage.setVisibility(selectedPage == Page.MANUAL ? View.VISIBLE : View.GONE);
-        }
         if (skyPage != null) {
             skyPage.setVisibility(selectedPage == Page.SKY ? View.VISIBLE : View.GONE);
         }
@@ -7761,7 +8763,9 @@ public final class MainActivity extends Activity {
         if (connectionSyncPage != null) {
             connectionSyncPage.setVisibility(selectedPage == Page.CONNECTION_SYNC ? View.VISIBLE : View.GONE);
         }
-        styleTabButton(manualTabButton, selectedPage == Page.MANUAL);
+        if (appHeaderView != null) {
+            appHeaderView.setVisibility(selectedPage == Page.SKY ? View.GONE : View.VISIBLE);
+        }
         styleTabButton(skyTabButton, selectedPage == Page.SKY);
         styleTabButton(settingsTabButton, selectedPage == Page.SETTINGS);
         styleTabButton(connectionSyncTabButton, selectedPage == Page.CONNECTION_SYNC);
@@ -7777,6 +8781,9 @@ public final class MainActivity extends Activity {
         }
         updatePageTabs(selectedPage);
         setSideMenuExpanded(false);
+        if (mainScrollView != null) {
+            mainScrollView.post(() -> mainScrollView.scrollTo(0, 0));
+        }
     }
 
     private void setSideMenuExpanded(boolean expanded) {
@@ -7797,9 +8804,6 @@ public final class MainActivity extends Activity {
         if (connectionSyncTabButton != null) {
             connectionSyncTabButton.setVisibility(menuItemVisibility);
         }
-        if (manualTabButton != null) {
-            manualTabButton.setVisibility(menuItemVisibility);
-        }
         if (skyTabButton != null) {
             skyTabButton.setVisibility(menuItemVisibility);
         }
@@ -7808,7 +8812,7 @@ public final class MainActivity extends Activity {
         }
         if (sideMenuToggleButton != null) {
             sideMenuToggleButton.setText(expanded ? "\u00d7" : "\u2630");
-            sideMenuToggleButton.setTextColor(Color.rgb(226, 232, 240));
+            sideMenuToggleButton.setTextColor(nightModeEnabled ? titleTextColor() : Color.rgb(226, 232, 240));
             sideMenuToggleButton.setBackground(createMenuToggleBackground());
         }
         if (floatingStopButton != null) {
@@ -7820,21 +8824,53 @@ public final class MainActivity extends Activity {
         if (button == null) {
             return;
         }
-        button.setTextColor(selected ? Color.WHITE : Color.rgb(226, 232, 240));
+        int textColor = selected
+                ? (nightModeEnabled ? titleTextColor() : Color.WHITE)
+                : (nightModeEnabled ? labelTextColor() : Color.rgb(226, 232, 240));
+        button.setTextColor(textColor);
         button.setTypeface(selected ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
         button.setBackground(createTabBackground(selected));
     }
 
     private void updateManualRateControl() {
-        if (manualRateSpinner != null) {
-            manualRateSpinner.setEnabled(!busy);
+        if (manualRateButton != null) {
+            boolean enabled = !busy;
+            manualRateButton.setEnabled(enabled);
+            manualRateButton.setText(manualRateCompactLabel(selectedManualRate));
+            manualRateButton.setTextColor(enabled ? titleTextColor() : mutedTextColor());
+            manualRateButton.setBackgroundColor(Color.TRANSPARENT);
         }
     }
 
+    private String manualRateCompactLabel(ManualRate rate) {
+        if (rate == ManualRate.HALF_MAX) {
+            return getString(R.string.rate_half_max_compact);
+        }
+        if (rate == ManualRate.MAX) {
+            return getString(R.string.rate_max_compact);
+        }
+        String label = getString(rate.labelRes);
+        int firstSpace = label.indexOf(' ');
+        return firstSpace > 0 ? label.substring(0, firstSpace) : label;
+    }
+
+    private void styleSkyOverlayIconButton(Button button, boolean enabled) {
+        if (button == null) {
+            return;
+        }
+        button.setEnabled(enabled);
+        button.setAlpha(enabled ? 1.0f : 0.58f);
+        button.setTextColor(enabled ? titleTextColor() : mutedTextColor());
+        button.setBackground(createSecondaryButtonBackground(enabled));
+    }
+
     private void updateTrackingViews() {
-        styleTrackingRateButton(trackingSiderealButton, TrackingRate.SIDEREAL);
-        styleTrackingRateButton(trackingLunarButton, TrackingRate.LUNAR);
-        styleTrackingRateButton(trackingSolarButton, TrackingRate.SOLAR);
+        if (trackingRateSpinner != null
+                && trackingRateSpinner.getSelectedItemPosition() != selectedTrackingRate.ordinal()) {
+            suppressTrackingRateSelection = true;
+            trackingRateSpinner.setSelection(selectedTrackingRate.ordinal());
+            suppressTrackingRateSelection = false;
+        }
 
         if (trackingToggleButton != null) {
             trackingToggleButton.setText(trackingEnabled ? R.string.tracking_stop : R.string.tracking_start);
@@ -7853,33 +8889,6 @@ public final class MainActivity extends Activity {
                         trackingModeLabel(shouldStartDualAxisTracking())
                 ));
             }
-        }
-        updateDeviceStatusPanel();
-    }
-
-    private void styleTrackingRateButton(Button button, TrackingRate rate) {
-        if (button == null) {
-            return;
-        }
-        boolean enabled = !busy;
-        boolean selected = selectedTrackingRate == rate;
-        button.setTextColor(selected ? selectedAccentColor() : labelTextColor());
-        button.setTypeface(selected ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
-        button.setBackground(createRateButtonBackground(selected, enabled));
-    }
-
-    private void setDirectionButtonEnabled(Button button, boolean enabled) {
-        if (button == null) {
-            return;
-        }
-        button.setEnabled(enabled);
-        button.setTextColor(enabled ? titleTextColor() : mutedTextColor());
-        button.setBackground(createDirectionButtonBackground(enabled));
-    }
-
-    private void setTrackingRateButtonEnabled(Button button, boolean enabled) {
-        if (button != null) {
-            button.setEnabled(enabled);
         }
     }
 
@@ -8163,7 +9172,6 @@ public final class MainActivity extends Activity {
     private enum Page {
         SETTINGS,
         CONNECTION_SYNC,
-        MANUAL,
         SKY
     }
 

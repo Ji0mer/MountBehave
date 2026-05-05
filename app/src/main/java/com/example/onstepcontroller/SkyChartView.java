@@ -65,6 +65,7 @@ public final class SkyChartView extends View {
 
     private ObserverState observer = ObserverState.boston();
     private Instant currentInstant = Instant.now();
+    private List<SolarSystemEphemeris.Body> frameSolarSystemBodies;
     private double viewAzimuthDegrees = DEFAULT_VIEW_AZIMUTH_DEGREES;
     private double viewAltitudeDegrees = DEFAULT_VIEW_ALTITUDE_DEGREES;
     private double fieldOfViewDegrees = DEFAULT_FIELD_OF_VIEW_DEGREES;
@@ -162,7 +163,7 @@ public final class SkyChartView extends View {
 
     Target findTarget(String query) {
         String normalized = normalizeTargetName(query);
-        SolarSystemEphemeris.Body body = SolarSystemEphemeris.findBody(currentInstant, query);
+        SolarSystemEphemeris.Body body = SolarSystemEphemeris.findBody(currentInstant, query, observer);
         if (body != null) {
             return Target.solarSystemObject(body.id, body.label, body.raHours, body.decDegrees);
         }
@@ -245,6 +246,7 @@ public final class SkyChartView extends View {
         setClickable(true);
         setContentDescription(context.getString(R.string.sky_section));
         setMinimumHeight(dp(460));
+        SolarSystemEphemeris.init(context);
         milkyWayPaint.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.SCREEN));
         milkyWayBitmap = BitmapFactory.decodeResource(context.getResources(), R.drawable.milkyway);
         try {
@@ -263,27 +265,32 @@ public final class SkyChartView extends View {
             return;
         }
 
-        CameraBasis basis = cameraBasis();
-        drawGround(canvas, basis);
-        drawSkyGrid(canvas, basis);
-        // Stars and the Milky Way are always drawn; only constellation lines,
-        // DSO categories, and solar-system / small-body layers are toggleable.
-        drawMilkyWay(canvas, basis);
-        if (showConstellationLines) {
-            drawConstellationLines(canvas, basis);
+        frameSolarSystemBodies = SolarSystemEphemeris.bodies(currentInstant, observer);
+        try {
+            CameraBasis basis = cameraBasis();
+            drawGround(canvas, basis);
+            drawSkyGrid(canvas, basis);
+            // Stars and the Milky Way are always drawn; only constellation lines,
+            // DSO categories, and solar-system / small-body layers are toggleable.
+            drawMilkyWay(canvas, basis);
+            if (showConstellationLines) {
+                drawConstellationLines(canvas, basis);
+            }
+            drawStars(canvas, basis);
+            if (showClusters || showNebulae || showGalaxies) {
+                drawDeepSkyObjects(canvas, basis);
+            }
+            if (showSolarSystem) {
+                drawSolarSystemObjects(canvas, basis);
+            }
+            if (showAsteroids || showComets) {
+                drawSmallBodiesLayer(canvas, basis);
+            }
+            drawSelectedTarget(canvas, basis);
+            drawViewReadout(canvas);
+        } finally {
+            frameSolarSystemBodies = null;
         }
-        drawStars(canvas, basis);
-        if (showClusters || showNebulae || showGalaxies) {
-            drawDeepSkyObjects(canvas, basis);
-        }
-        if (showSolarSystem) {
-            drawSolarSystemObjects(canvas, basis);
-        }
-        if (showAsteroids || showComets) {
-            drawSmallBodiesLayer(canvas, basis);
-        }
-        drawSelectedTarget(canvas, basis);
-        drawViewReadout(canvas);
     }
 
     @Override
@@ -730,9 +737,16 @@ public final class SkyChartView extends View {
         }
     }
 
+    private List<SolarSystemEphemeris.Body> solarSystemBodies() {
+        if (frameSolarSystemBodies != null) {
+            return frameSolarSystemBodies;
+        }
+        return SolarSystemEphemeris.bodies(currentInstant, observer);
+    }
+
     private void drawSolarSystemObjects(Canvas canvas, CameraBasis basis) {
         double localSiderealDegrees = localSiderealDegrees();
-        for (SolarSystemEphemeris.Body body : SolarSystemEphemeris.bodies(currentInstant)) {
+        for (SolarSystemEphemeris.Body body : solarSystemBodies()) {
             HorizontalPosition position = toHorizontal(body.raHours, body.decDegrees, localSiderealDegrees);
             if (position.altitudeDegrees < -1.0) {
                 continue;
@@ -762,7 +776,7 @@ public final class SkyChartView extends View {
         // project() may return null if the Sun is outside the view frustum; the
         // tail then falls back to the chart-centre direction.
         ScreenPoint sunScreen = null;
-        for (SolarSystemEphemeris.Body body : SolarSystemEphemeris.bodies(currentInstant)) {
+        for (SolarSystemEphemeris.Body body : solarSystemBodies()) {
             if ("sun".equals(body.id)) {
                 HorizontalPosition position = toHorizontal(body.raHours, body.decDegrees, localSiderealDegrees);
                 sunScreen = project(position, basis);
@@ -1028,7 +1042,7 @@ public final class SkyChartView extends View {
         if ((id.startsWith("asteroid:") || id.startsWith("comet:")) && smallBodyCatalog != null) {
             return smallBodyCatalog.findByName(currentInstant, id.substring(id.indexOf(':') + 1));
         }
-        for (SolarSystemEphemeris.Body body : SolarSystemEphemeris.bodies(currentInstant)) {
+        for (SolarSystemEphemeris.Body body : solarSystemBodies()) {
             if (id.equals(body.id)) {
                 return body;
             }
@@ -1045,7 +1059,7 @@ public final class SkyChartView extends View {
         Target nearest = null;
         double nearestDistance = dp(34);
 
-        for (SolarSystemEphemeris.Body body : SolarSystemEphemeris.bodies(currentInstant)) {
+        for (SolarSystemEphemeris.Body body : solarSystemBodies()) {
             HorizontalPosition position = toHorizontal(body.raHours, body.decDegrees, localSiderealDegrees);
             if (position.altitudeDegrees < -1.0) {
                 continue;
