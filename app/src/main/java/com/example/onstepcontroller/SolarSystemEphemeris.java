@@ -1,5 +1,7 @@
 package com.example.onstepcontroller;
 
+import android.content.Context;
+
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -14,11 +16,39 @@ final class SolarSystemEphemeris {
     // Annual aberration constant κ in degrees (20.49552″).
     private static final double ABERRATION_DEG = 20.49552 / 3600.0;
     private static final double DAYS_PER_MILLENNIUM = 365250.0;
+    private static final double EARTH_EQUATORIAL_RADIUS_AU = 6_378.137 / 149_597_870.7;
+    private static final double WGS84_FLATTENING = 1.0 / 298.257_223_563;
+    private static final String[] BODY_LABELS = {
+            "\u592a\u9633", "\u6708\u7403", "\u6c34\u661f", "\u91d1\u661f", "\u706b\u661f",
+            "\u6728\u661f", "\u571f\u661f", "\u5929\u738b\u661f", "\u6d77\u738b\u661f"
+    };
+    private static final String[] BODY_ENGLISH = {
+            "Sun", "Moon", "Mercury", "Venus", "Mars", "Jupiter", "Saturn", "Uranus", "Neptune"
+    };
 
     private SolarSystemEphemeris() {
     }
 
+    static void init(Context context) {
+        MajorSolarSystemEphemeris.init(context);
+    }
+
     static List<Body> bodies(Instant instant) {
+        return bodies(instant, null);
+    }
+
+    static List<Body> bodies(Instant instant, ObserverState observer) {
+        if (instant == null) {
+            return Collections.emptyList();
+        }
+        List<Body> tableBodies = MajorSolarSystemEphemeris.bodies(instant, observer);
+        if (tableBodies != null) {
+            return tableBodies;
+        }
+        return fallbackBodies(instant, observer);
+    }
+
+    private static List<Body> fallbackBodies(Instant instant, ObserverState observer) {
         double jd = julianDay(instant);
         double centuries = (jd - J2000_JULIAN_DAY) / 36525.0;
         double millennia = (jd - J2000_JULIAN_DAY) / DAYS_PER_MILLENNIUM;
@@ -45,31 +75,46 @@ final class SolarSystemEphemeris {
 
         MoonPosition moon = moonPosition(days, sunGeometricLongitude, sunMeanAnomalyDeg, nutation);
         EquatorialPoint moonEquatorial = eclipticToEquatorial(moon.apparentLongitudeDeg, moon.latitudeDeg, trueObliquity);
+        if (observer != null) {
+            moonEquatorial = applyTopocentricParallax(
+                    moonEquatorial,
+                    moon.distanceEarthRadii * EARTH_EQUATORIAL_RADIUS_AU,
+                    jd,
+                    observer
+            );
+        }
 
+        boolean english = isEnglishUi();
         List<Body> result = new ArrayList<>();
-        result.add(new Body("sun", "太阳", "Sun", sunEquatorial.raHours, sunEquatorial.decDegrees, -26.7, 1.0));
-        result.add(new Body("moon", "月球", "Moon", moonEquatorial.raHours, moonEquatorial.decDegrees, -12.0,
+        result.add(new Body("sun", localizedBodyLabel(0, english), BODY_ENGLISH[0],
+                sunEquatorial.raHours, sunEquatorial.decDegrees, -26.7, 1.0));
+        result.add(new Body("moon", localizedBodyLabel(1, english), BODY_ENGLISH[1],
+                moonEquatorial.raHours, moonEquatorial.decDegrees, -12.0,
                 phaseFraction(sunGeometricLongitude, moon.longitudeDeg)));
 
         double j2000Days = jd - J2000_JULIAN_DAY;
-        addPlanet(result, "mercury", "水星", "Mercury", Planet.MERCURY, millennia, j2000Days, earthHelio, sunGeometricLongitude, nutation, trueObliquity);
-        addPlanet(result, "venus", "金星", "Venus", Planet.VENUS, millennia, j2000Days, earthHelio, sunGeometricLongitude, nutation, trueObliquity);
-        addPlanet(result, "mars", "火星", "Mars", Planet.MARS, millennia, j2000Days, earthHelio, sunGeometricLongitude, nutation, trueObliquity);
-        addPlanet(result, "jupiter", "木星", "Jupiter", Planet.JUPITER, millennia, j2000Days, earthHelio, sunGeometricLongitude, nutation, trueObliquity);
-        addPlanet(result, "saturn", "土星", "Saturn", Planet.SATURN, millennia, j2000Days, earthHelio, sunGeometricLongitude, nutation, trueObliquity);
-        addPlanet(result, "uranus", "天王星", "Uranus", Planet.URANUS, millennia, j2000Days, earthHelio, sunGeometricLongitude, nutation, trueObliquity);
-        addPlanet(result, "neptune", "海王星", "Neptune", Planet.NEPTUNE, millennia, j2000Days, earthHelio, sunGeometricLongitude, nutation, trueObliquity);
+        addPlanet(result, "mercury", localizedBodyLabel(2, english), BODY_ENGLISH[2], Planet.MERCURY, millennia, j2000Days, earthHelio, sunGeometricLongitude, nutation, trueObliquity);
+        addPlanet(result, "venus", localizedBodyLabel(3, english), BODY_ENGLISH[3], Planet.VENUS, millennia, j2000Days, earthHelio, sunGeometricLongitude, nutation, trueObliquity);
+        addPlanet(result, "mars", localizedBodyLabel(4, english), BODY_ENGLISH[4], Planet.MARS, millennia, j2000Days, earthHelio, sunGeometricLongitude, nutation, trueObliquity);
+        addPlanet(result, "jupiter", localizedBodyLabel(5, english), BODY_ENGLISH[5], Planet.JUPITER, millennia, j2000Days, earthHelio, sunGeometricLongitude, nutation, trueObliquity);
+        addPlanet(result, "saturn", localizedBodyLabel(6, english), BODY_ENGLISH[6], Planet.SATURN, millennia, j2000Days, earthHelio, sunGeometricLongitude, nutation, trueObliquity);
+        addPlanet(result, "uranus", localizedBodyLabel(7, english), BODY_ENGLISH[7], Planet.URANUS, millennia, j2000Days, earthHelio, sunGeometricLongitude, nutation, trueObliquity);
+        addPlanet(result, "neptune", localizedBodyLabel(8, english), BODY_ENGLISH[8], Planet.NEPTUNE, millennia, j2000Days, earthHelio, sunGeometricLongitude, nutation, trueObliquity);
         return Collections.unmodifiableList(result);
     }
 
     static Body findBody(Instant instant, String query) {
+        return findBody(instant, query, null);
+    }
+
+    static Body findBody(Instant instant, String query, ObserverState observer) {
         if (query == null || query.trim().isEmpty()) {
             return null;
         }
         String trimmed = query.trim();
         String normalized = normalizeName(trimmed);
         boolean hasNormalizedQuery = !normalized.isEmpty();
-        for (Body body : bodies(instant)) {
+        for (Body body : bodies(instant, observer)) {
             if (body.label.equals(trimmed)
                     || body.englishName.equalsIgnoreCase(trimmed)
                     || body.id.equalsIgnoreCase(trimmed)
@@ -96,6 +141,14 @@ final class SolarSystemEphemeris {
                 && (normalizeName(body.label).equals(normalized)
                         || normalizeName(body.englishName).equals(normalized)
                         || normalizeName(body.id).equals(normalized));
+    }
+
+    private static boolean isEnglishUi() {
+        return Locale.getDefault().getLanguage().equals(Locale.ENGLISH.getLanguage());
+    }
+
+    private static String localizedBodyLabel(int index, boolean english) {
+        return english ? BODY_ENGLISH[index] : BODY_LABELS[index];
     }
 
     private static MoonPosition moonPosition(double days, double sunGeometricLongitude, double sunMeanAnomaly, Nutation nutation) {
@@ -320,6 +373,39 @@ final class SolarSystemEphemeris {
         return instant.toEpochMilli() / 86_400_000.0 + 2_440_587.5;
     }
 
+    private static EquatorialPoint applyTopocentricParallax(
+            EquatorialPoint geocentric,
+            double distanceAu,
+            double jd,
+            ObserverState observer
+    ) {
+        EquatorialVector body = EquatorialVector.fromEquatorial(geocentric.raHours, geocentric.decDegrees, distanceAu);
+        EquatorialVector topocentric = body.minus(observerVectorAu(jd, observer));
+        return topocentric.toEquatorial();
+    }
+
+    private static EquatorialVector observerVectorAu(double jd, ObserverState observer) {
+        double latitude = radians(observer.latitudeDegrees);
+        double localSidereal = radians(localSiderealDegrees(jd, observer.longitudeDegrees));
+        double flatteningFactor = 1.0 - WGS84_FLATTENING;
+        double u = Math.atan(flatteningFactor * Math.tan(latitude));
+        double rhoCosPhi = Math.cos(u);
+        double rhoSinPhi = flatteningFactor * Math.sin(u);
+        return new EquatorialVector(
+                EARTH_EQUATORIAL_RADIUS_AU * rhoCosPhi * Math.cos(localSidereal),
+                EARTH_EQUATORIAL_RADIUS_AU * rhoCosPhi * Math.sin(localSidereal),
+                EARTH_EQUATORIAL_RADIUS_AU * rhoSinPhi
+        );
+    }
+
+    private static double localSiderealDegrees(double jd, double longitudeDegrees) {
+        double d = jd - J2000_JULIAN_DAY;
+        double t = d / 36_525.0;
+        double gmst = 280.46061837 + 360.98564736629 * d + 0.000387933 * t * t
+                - t * t * t / 38_710_000.0;
+        return normalizeDegrees(gmst + longitudeDegrees);
+    }
+
     private static double sinDegrees(double degrees) {
         return Math.sin(radians(degrees));
     }
@@ -436,6 +522,43 @@ final class SolarSystemEphemeris {
         EquatorialPoint(double raHours, double decDegrees) {
             this.raHours = raHours;
             this.decDegrees = decDegrees;
+        }
+    }
+
+    private static final class EquatorialVector {
+        final double x;
+        final double y;
+        final double z;
+
+        EquatorialVector(double x, double y, double z) {
+            this.x = x;
+            this.y = y;
+            this.z = z;
+        }
+
+        static EquatorialVector fromEquatorial(double raHours, double decDegrees, double radiusAu) {
+            double ra = radians(raHours * 15.0);
+            double dec = radians(decDegrees);
+            double cosDec = Math.cos(dec);
+            return new EquatorialVector(
+                    radiusAu * cosDec * Math.cos(ra),
+                    radiusAu * cosDec * Math.sin(ra),
+                    radiusAu * Math.sin(dec)
+            );
+        }
+
+        EquatorialVector minus(EquatorialVector other) {
+            return new EquatorialVector(x - other.x, y - other.y, z - other.z);
+        }
+
+        EquatorialPoint toEquatorial() {
+            double radius = Math.sqrt(x * x + y * y + z * z);
+            if (radius < 1.0e-15) {
+                return new EquatorialPoint(0.0, 0.0);
+            }
+            double raHours = normalizeDegrees(degrees(Math.atan2(y, x))) / 15.0;
+            double decDegrees = degrees(Math.asin(clamp(z / radius, -1.0, 1.0)));
+            return new EquatorialPoint(raHours, decDegrees);
         }
     }
 
