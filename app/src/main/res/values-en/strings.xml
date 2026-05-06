@@ -101,6 +101,9 @@
     <string name="device_status_safety_ready">Ready</string>
     <string name="sky_status_section">Status</string>
     <string name="sky_section">Sky Map</string>
+    <string name="sky_data_sources_button">Sources</string>
+    <string name="sky_data_sources_title">Sky Map Data Sources</string>
+    <string name="sky_data_sources_message">Stars: HYG Database v4.2, bundled as a local star catalog.\nDeep-sky objects: OpenNGC NGC.csv and addendum.csv.\nConstellation lines: bundled constellation line JSON converted for the app.\nSun, Moon, and major planets: JPL DE440s ephemeris, sampled with Skyfield into a local table covering 2025-01-01 through 2050-01-01.\nAsteroids and comets: orbital elements from the JPL SSD Small-Body Database/SBDB API, including a small bundled set and user-downloaded objects.\nWhen redistributing or exporting catalog data, follow the licenses and terms of the corresponding data sources.</string>
     <string name="calibration_section">Mount Calibration</string>
     <string name="calibration_intro">Mount calibration workflow: choose two-star or three-star calibration, then choose a target. After starting, each star follows: Set Target, manually center the mount, then Sync After Centering. The button returns to Set Target until the selected star count is complete. Saved models can be used for GOTO and tracking compensation. Refine PA requires a 3-star or larger equatorial model; alt-az mode does not need polar refinement.</string>
     <string name="calibration_mode_label">Mode</string>
@@ -252,6 +255,7 @@
     <string name="observer_status">Site: %1$s, %2$s</string>
     <string name="time_status">Current time: %1$s</string>
     <string name="gps_waiting">Getting GPS/network location...</string>
+    <string name="gps_applied">Updated to GPS location.</string>
     <string name="gps_unavailable">No location available. Enter coordinates manually.</string>
     <string name="gps_permission_denied">Location permission denied. Enter coordinates manually.</string>
     <string name="location_bad_input">Latitude must be -90 to 90, longitude -180 to 180.</string>

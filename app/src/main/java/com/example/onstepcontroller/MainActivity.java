@@ -187,7 +187,7 @@ public final class MainActivity extends Activity {
     private EditText portField;
     private LinearLayout connectionForm;
     private View connectTrigger;
-    private Button disconnectButton;
+    private TextView connectionActionText;
     private TextView firmwareModeText;
     private Button mountModeEquatorialButton;
     private Button mountModeAltAzButton;
@@ -273,6 +273,12 @@ public final class MainActivity extends Activity {
     private boolean hasAlignmentTrackingModel;
     private int savedAlignmentStarCount;
     private boolean trackingUsingDualAxis;
+    private boolean trackingStoppedByEmergencyStop;
+    private long lastEmergencyStopAtMillis;
+    private boolean pendingGotoTrackingResume;
+    private TrackingRate pendingGotoTrackingRate = TrackingRate.SIDEREAL;
+    private boolean pendingGotoTrackingDualAxis;
+    private long pendingGotoTrackingStopAgeMs = -1L;
     private TrackingRate selectedTrackingRate = TrackingRate.SIDEREAL;
     private volatile Direction activeDirection;
     private Instant skyInstant = Instant.now();
@@ -554,15 +560,12 @@ public final class MainActivity extends Activity {
         LinearLayout page = new LinearLayout(this);
         page.setOrientation(LinearLayout.VERTICAL);
 
-        page.addView(createSkyStatusPanel(), matchWrap());
-        page.addView(createSkyChartPanel(), matchWrapWithTopMargin(12));
+        page.addView(createSkyChartPanel(), matchWrap());
+        page.addView(createSkyStatusPanel(), matchWrapWithTopMargin(8));
         return page;
     }
 
     private View createSkyStatusPanel() {
-        LinearLayout panel = card();
-        panel.addView(settingsPanelTitle(R.string.sky_status_section, "▱"), matchWrap());
-
         LinearLayout statusBox = settingsSubPanel();
         manualStatusText = bodyText(R.string.status_disconnected);
         if (currentStatusMessage != null) {
@@ -585,9 +588,8 @@ public final class MainActivity extends Activity {
         skySummaryText = null;
         observingAlertText = null;
 
-        panel.addView(statusBox, matchWrapWithTopMargin(10));
         updateManualStatusForCurrentMode();
-        return panel;
+        return statusBox;
     }
 
     private View createSkyChartPanel() {
@@ -693,26 +695,34 @@ public final class MainActivity extends Activity {
     }
 
     private LinearLayout createSkyChartHeader() {
-        final int skyHeaderTextSp = 18;
+        final boolean compactHeader = UI_LANGUAGE_ENGLISH.equals(selectedUiLanguage);
+        final int skyHeaderTextSp = compactHeader ? 15 : 17;
+        final int headerItemHeightDp = compactHeader ? 28 : 30;
+        final int headerHorizontalPaddingDp = compactHeader ? 4 : 6;
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
 
+        View stopClearance = new View(this);
+        row.addView(stopClearance, new LinearLayout.LayoutParams(dp(18), dp(1)));
+
         TextView icon = new TextView(this);
         icon.setText("◎");
-        icon.setTextSize(20);
+        icon.setTextSize(compactHeader ? 18 : 20);
         icon.setTypeface(Typeface.DEFAULT_BOLD);
         icon.setTextColor(selectedAccentColor());
         icon.setGravity(Gravity.CENTER);
-        row.addView(icon, new LinearLayout.LayoutParams(dp(30), dp(30)));
+        row.addView(icon, new LinearLayout.LayoutParams(dp(headerItemHeightDp), dp(headerItemHeightDp)));
 
         TextView title = panelTitle(R.string.sky_section);
         title.setTextSize(skyHeaderTextSp);
+        title.setSingleLine(true);
+        title.setEllipsize(TextUtils.TruncateAt.END);
         LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
         );
-        titleParams.leftMargin = dp(8);
+        titleParams.leftMargin = dp(compactHeader ? 5 : 8);
         row.addView(title, titleParams);
 
         skyTitleTimeText = new TextView(this);
@@ -722,13 +732,13 @@ public final class MainActivity extends Activity {
         skyTitleTimeText.setGravity(Gravity.CENTER_VERTICAL);
         skyTitleTimeText.setSingleLine(true);
         skyTitleTimeText.setEllipsize(TextUtils.TruncateAt.END);
-        skyTitleTimeText.setPadding(dp(10), 0, dp(10), 0);
+        skyTitleTimeText.setPadding(dp(headerHorizontalPaddingDp), 0, dp(headerHorizontalPaddingDp), 0);
         skyTitleTimeText.setClickable(true);
         skyTitleTimeText.setOnClickListener(v -> showSkyTimeDialog());
         skyTitleTimeText.setContentDescription(getString(R.string.sky_time));
         LinearLayout.LayoutParams timeParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
-                dp(30)
+                dp(headerItemHeightDp)
         );
         row.addView(skyTitleTimeText, timeParams);
 
@@ -741,9 +751,9 @@ public final class MainActivity extends Activity {
         manualPadToggleButton.setSingleLine(true);
         manualPadToggleButton.setMinWidth(0);
         manualPadToggleButton.setMinimumWidth(0);
-        manualPadToggleButton.setMinHeight(dp(30));
-        manualPadToggleButton.setMinimumHeight(dp(30));
-        manualPadToggleButton.setPadding(dp(8), 0, dp(8), 0);
+        manualPadToggleButton.setMinHeight(dp(headerItemHeightDp));
+        manualPadToggleButton.setMinimumHeight(dp(headerItemHeightDp));
+        manualPadToggleButton.setPadding(dp(headerHorizontalPaddingDp), 0, dp(headerHorizontalPaddingDp), 0);
         manualPadToggleButton.setBackgroundColor(Color.TRANSPARENT);
         manualPadToggleButton.setOnClickListener(v -> {
             manualPadVisible = !manualPadVisible;
@@ -752,7 +762,7 @@ public final class MainActivity extends Activity {
         });
         row.addView(manualPadToggleButton, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
-                dp(30)
+                dp(headerItemHeightDp)
         ));
 
         manualRateButton = new Button(this);
@@ -763,15 +773,15 @@ public final class MainActivity extends Activity {
         manualRateButton.setSingleLine(true);
         manualRateButton.setMinWidth(0);
         manualRateButton.setMinimumWidth(0);
-        manualRateButton.setMinHeight(dp(30));
-        manualRateButton.setMinimumHeight(dp(30));
-        manualRateButton.setPadding(dp(8), 0, dp(8), 0);
+        manualRateButton.setMinHeight(dp(headerItemHeightDp));
+        manualRateButton.setMinimumHeight(dp(headerItemHeightDp));
+        manualRateButton.setPadding(dp(headerHorizontalPaddingDp), 0, dp(headerHorizontalPaddingDp), 0);
         manualRateButton.setBackgroundColor(Color.TRANSPARENT);
         manualRateButton.setOnClickListener(v -> showManualRateDialog());
         manualRateButton.setContentDescription(getString(R.string.rate_label));
         row.addView(manualRateButton, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
-                dp(30)
+                dp(headerItemHeightDp)
         ));
 
         View spacer = new View(this);
@@ -780,7 +790,7 @@ public final class MainActivity extends Activity {
         Button help = new Button(this);
         help.setAllCaps(false);
         help.setText("?");
-        help.setTextSize(13);
+        help.setTextSize(12);
         help.setTypeface(Typeface.DEFAULT_BOLD);
         help.setTextColor(labelTextColor());
         help.setMinWidth(0);
@@ -791,8 +801,8 @@ public final class MainActivity extends Activity {
         help.setGravity(Gravity.CENTER);
         help.setBackground(createHelpButtonBackground());
         help.setContentDescription(getString(R.string.help_button_content_description));
-        help.setOnClickListener(v -> showHelpDialog(R.string.sky_section, R.string.sky_planet_note));
-        row.addView(help, squareParams(30));
+        help.setOnClickListener(v -> showSkyHelpDialog());
+        row.addView(help, squareParams(compactHeader ? 28 : 30));
         return row;
     }
 
@@ -2446,7 +2456,16 @@ public final class MainActivity extends Activity {
         connectColumn.setContentDescription(getString(R.string.connect_button));
         connectColumn.setBackground(createConnectBadgeBackground(true));
         connectColumn.setClickable(true);
-        connectColumn.setOnClickListener(v -> connect());
+        connectColumn.setOnClickListener(v -> {
+            if (busy) {
+                return;
+            }
+            if (connected) {
+                disconnect();
+            } else {
+                connect();
+            }
+        });
         connectTrigger = connectColumn;
 
         ImageView badge = new ImageView(this);
@@ -2460,15 +2479,15 @@ public final class MainActivity extends Activity {
                 1f
         ));
 
-        TextView connectChip = new TextView(this);
-        connectChip.setText(R.string.connect_button);
-        connectChip.setTextSize(12);
-        connectChip.setTypeface(Typeface.DEFAULT_BOLD);
-        connectChip.setGravity(Gravity.CENTER);
-        connectChip.setTextColor(Color.WHITE);
-        connectChip.setBackground(createConnectChipBackground(true));
-        connectChip.setPadding(dp(10), dp(3), dp(10), dp(4));
-        connectColumn.addView(connectChip, matchFixedHeightWithTopMargin(32, 5));
+        connectionActionText = new TextView(this);
+        connectionActionText.setText(R.string.connect_button);
+        connectionActionText.setTextSize(12);
+        connectionActionText.setTypeface(Typeface.DEFAULT_BOLD);
+        connectionActionText.setGravity(Gravity.CENTER);
+        connectionActionText.setTextColor(Color.WHITE);
+        connectionActionText.setBackground(createConnectChipBackground(true));
+        connectionActionText.setPadding(dp(10), dp(3), dp(10), dp(4));
+        connectColumn.addView(connectionActionText, matchFixedHeightWithTopMargin(32, 5));
         content.addView(connectColumn, new LinearLayout.LayoutParams(dp(92), dp(150)));
 
         connectionForm = new LinearLayout(this);
@@ -2517,20 +2536,6 @@ public final class MainActivity extends Activity {
         connectionForm.addView(trackingRow, matchWrap());
         content.addView(connectionForm, formParams);
         panel.addView(content, matchWrap());
-
-        LinearLayout actions = new LinearLayout(this);
-        actions.setOrientation(LinearLayout.HORIZONTAL);
-        actions.setGravity(Gravity.CENTER_VERTICAL);
-        actions.setPadding(0, dp(6), 0, 0);
-
-        disconnectButton = new Button(this);
-        disconnectButton.setAllCaps(false);
-        compactButton(disconnectButton);
-        disconnectButton.setText(R.string.disconnect_button);
-        disconnectButton.setOnClickListener(v -> disconnect());
-        actions.addView(disconnectButton, matchWrap());
-
-        panel.addView(actions, matchWrap());
 
         statusText = bodyText(R.string.status_disconnected);
         statusText.setPadding(0, dp(10), 0, 0);
@@ -2620,8 +2625,11 @@ public final class MainActivity extends Activity {
                     savedAlignmentStarCount = 0;
                     trackingEnabled = false;
                     trackingUsingDualAxis = false;
+                    trackingStoppedByEmergencyStop = false;
+                    lastEmergencyStopAtMillis = 0L;
                     gotoInProgress = false;
                     activeGotoTarget = null;
+                    clearPendingGotoTrackingResume("connect-success");
                     cancelGotoStatusPoll();
                     clearGotoRecoveryRequired("connect-success");
                     preferredPierSideCommandsSupported = null;
@@ -2671,6 +2679,7 @@ public final class MainActivity extends Activity {
                     manualMoveGeneration.incrementAndGet();
                     gotoInProgress = false;
                     activeGotoTarget = null;
+                    clearPendingGotoTrackingResume("disconnect");
                     cancelGotoStatusPoll();
                     clearGotoRecoveryRequired("connect-failed");
                     preferredPierSideCommandsSupported = null;
@@ -2763,6 +2772,8 @@ public final class MainActivity extends Activity {
                 parked = false;
                 trackingEnabled = false;
                 trackingUsingDualAxis = false;
+                trackingStoppedByEmergencyStop = false;
+                lastEmergencyStopAtMillis = 0L;
                 polarRefineSyncedTarget = null;
                 setStatus(getString(R.string.status_disconnected));
                 setGotoStatus(getString(R.string.goto_status_idle));
@@ -2863,6 +2874,32 @@ public final class MainActivity extends Activity {
         });
     }
 
+    private void enqueueImmediateFullStop(String logMessage) {
+        if (!connected) {
+            return;
+        }
+        String[] commands = fullStopCommands();
+        for (String command : commands) {
+            appendLog("TX " + command);
+        }
+        ioExecutor.execute(() -> {
+            try {
+                sendMotionStopCommandsWithRetry(commands);
+                runOnUiThread(() -> setStatus(logMessage));
+            } catch (IOException ex) {
+                markTransportFault();
+                runOnUiThread(() -> handleMotionCommandFailure(ex));
+            }
+        });
+    }
+
+    private String[] fullStopCommands() {
+        return new String[]{
+                OnStepCommand.STOP_ALL.command,
+                OnStepCommand.TRACK_DISABLE.command
+        };
+    }
+
     private void emergencyStop() {
         logUserAction("tap emergency-stop");
         clearSyncedCurrentTarget();
@@ -2870,10 +2907,15 @@ public final class MainActivity extends Activity {
         manualMoveGeneration.incrementAndGet();
         gotoInProgress = false;
         activeGotoTarget = null;
+        clearPendingGotoTrackingResume("emergency-stop");
         cancelGotoStatusPoll();
+        trackingEnabled = false;
+        trackingUsingDualAxis = false;
+        trackingStoppedByEmergencyStop = connected;
+        lastEmergencyStopAtMillis = System.currentTimeMillis();
         setGotoStatus(getString(R.string.goto_status_cancelled));
         setSafetyStatus(getString(R.string.safety_status_emergency_stop));
-        enqueueImmediateStop(getString(R.string.status_emergency_stop_sent));
+        enqueueImmediateFullStop(getString(R.string.status_emergency_stop_sent));
         logStateSnapshot("emergency-stop");
         updateUiState();
     }
@@ -2890,6 +2932,7 @@ public final class MainActivity extends Activity {
         manualMoveGeneration.incrementAndGet();
         gotoInProgress = false;
         activeGotoTarget = null;
+        clearPendingGotoTrackingResume("cancel-goto");
         cancelGotoStatusPoll();
         setGotoStatus(getString(R.string.goto_status_cancelled));
         setSafetyStatus(getString(R.string.safety_status_goto_cancelled));
@@ -2904,6 +2947,7 @@ public final class MainActivity extends Activity {
         }
         gotoInProgress = false;
         activeGotoTarget = null;
+        clearPendingGotoTrackingResume("manual-motion");
         cancelGotoStatusPoll();
         setGotoStatus(getString(R.string.goto_status_cancelled));
         Logger.info("manual motion cleared local goto progress");
@@ -2987,6 +3031,7 @@ public final class MainActivity extends Activity {
                         String statusMessage = getString(R.string.goto_status_arrived, activeGotoTarget.label);
                         setGotoStatus(statusMessage);
                         setSafetyStatus(statusMessage);
+                        resumeTrackingAfterGotoArrival(activeGotoTarget);
                     } else if (stoppedStationary && activeGotoTarget != null && finalPointingVerification != null) {
                         String statusMessage = getString(
                                 R.string.goto_status_stopped_short,
@@ -3026,6 +3071,7 @@ public final class MainActivity extends Activity {
                                     + " thresholdDeg="
                                     + String.format(Locale.US, "%.3f", finalPointingVerification.arrivalThresholdDegrees)
                                     + " " + targetLog(activeGotoTarget));
+                            clearPendingGotoTrackingResume("goto-stopped");
                         }
                         activeGotoTarget = null;
                         cancelGotoStatusPoll();
@@ -3115,6 +3161,72 @@ public final class MainActivity extends Activity {
         clearGotoIdleStationaryState();
     }
 
+    private void deferTrackingResumeUntilGotoArrival(
+            SkyChartView.Target target,
+            TrackingRate rate,
+            boolean dualAxis,
+            long stopAgeMs
+    ) {
+        pendingGotoTrackingResume = true;
+        pendingGotoTrackingRate = rate;
+        pendingGotoTrackingDualAxis = dualAxis;
+        pendingGotoTrackingStopAgeMs = stopAgeMs;
+        Logger.info("tracking resume deferred until goto arrival "
+                + targetLog(target)
+                + " rate=" + rate.name()
+                + " mode=" + (dualAxis ? "dual-axis" : "single-axis")
+                + (stopAgeMs >= 0L ? " stopAgeMs=" + stopAgeMs : ""));
+    }
+
+    private void clearPendingGotoTrackingResume(String reason) {
+        if (pendingGotoTrackingResume) {
+            Logger.info("tracking resume after goto cleared reason=" + reason);
+        }
+        pendingGotoTrackingResume = false;
+        pendingGotoTrackingRate = selectedTrackingRate;
+        pendingGotoTrackingDualAxis = false;
+        pendingGotoTrackingStopAgeMs = -1L;
+    }
+
+    private void resumeTrackingAfterGotoArrival(SkyChartView.Target target) {
+        if (!pendingGotoTrackingResume || !connected) {
+            return;
+        }
+        final TrackingRate rate = pendingGotoTrackingRate;
+        final boolean dualAxis = pendingGotoTrackingDualAxis;
+        final long stopAgeMs = pendingGotoTrackingStopAgeMs;
+        clearPendingGotoTrackingResume("goto-arrived");
+        appendLog("TX " + trackingStartCommandLog(rate, dualAxis));
+        int generation = connectionGeneration.get();
+        ioExecutor.execute(() -> {
+            if (!isConnectionGenerationCurrent(generation)) {
+                return;
+            }
+            try {
+                sendTrackingStartCommandsNoReply(rate, dualAxis);
+                Logger.info("tracking resumed after goto arrival "
+                        + targetLog(target)
+                        + " rate=" + rate.name()
+                        + " mode=" + (dualAxis ? "dual-axis" : "single-axis")
+                        + (stopAgeMs >= 0L ? " stopAgeMs=" + stopAgeMs : ""));
+                runOnUiThread(() -> {
+                    if (!isConnectionGenerationCurrent(generation)) {
+                        return;
+                    }
+                    trackingEnabled = true;
+                    trackingUsingDualAxis = dualAxis;
+                    trackingStoppedByEmergencyStop = false;
+                    lastEmergencyStopAtMillis = 0L;
+                    updateTrackingViews();
+                    updateUiState();
+                });
+            } catch (IOException ex) {
+                markTransportFault();
+                runOnUiThread(() -> handleCommandFailure(ex));
+            }
+        });
+    }
+
     private void stopGotoStatusPollAfterMaxAttempts() {
         int attempts = gotoStatusPollAttempts;
         SkyChartView.Target timeoutTarget = activeGotoTarget;
@@ -3123,6 +3235,7 @@ public final class MainActivity extends Activity {
         appendLog("DIAG GOTO_TIMEOUT attempts=" + attempts + " " + targetDetail);
         gotoInProgress = false;
         activeGotoTarget = null;
+        clearPendingGotoTrackingResume("goto-status-timeout");
         cancelGotoStatusPoll();
         setGotoStatus(getString(R.string.goto_status_timeout));
         logStateSnapshot("goto-status-timeout");
@@ -3405,10 +3518,17 @@ public final class MainActivity extends Activity {
         }
         clearSyncedCurrentTarget();
         activeGotoTarget = null;
+        clearPendingGotoTrackingResume("goto-start");
         cancelGotoStatusPoll();
         EquatorialPoint commandPoint = gotoCommandPoint(commandTarget);
         String raCommand = ":Sr" + formatRightAscensionCommand(commandPoint.raHours) + "#";
         String decCommand = ":Sd" + formatDeclinationCommand(commandPoint.decDegrees) + "#";
+        final boolean resumeTrackingAfterGoto = trackingStoppedByEmergencyStop;
+        final boolean resumeDualAxisAfterGoto = shouldStartDualAxisTracking();
+        final TrackingRate resumeTrackingRate = selectedTrackingRate;
+        final long stopAgeMs = lastEmergencyStopAtMillis == 0L
+                ? -1L
+                : Math.max(0L, System.currentTimeMillis() - lastEmergencyStopAtMillis);
         busy = true;
         setStatus(sendingStatus);
         updateUiState();
@@ -3419,6 +3539,8 @@ public final class MainActivity extends Activity {
                 + " commandRA=" + formatRightAscensionDisplay(commandPoint.raHours)
                 + " commandDec=" + formatDeclinationDisplay(commandPoint.decDegrees)
                 + " pointingModelPoints=" + pointingModel.size()
+                + " resumeTrackingAfterStop=" + resumeTrackingAfterGoto
+                + (stopAgeMs >= 0L ? " stopAgeMs=" + stopAgeMs : "")
                 + temporaryPierSideLog);
         logStateSnapshot("goto-start");
         appendLog("TX " + OnStepCommand.STOP_ALL.command);
@@ -3491,6 +3613,14 @@ public final class MainActivity extends Activity {
                     activeGotoTarget = commandTarget;
                     gotoStatusPollAttempts = 0;
                     parked = false;
+                    if (resumeTrackingAfterGoto) {
+                        deferTrackingResumeUntilGotoArrival(
+                                commandTarget,
+                                resumeTrackingRate,
+                                resumeDualAxisAfterGoto,
+                                stopAgeMs
+                        );
+                    }
                     setStatus(sentStatus);
                     setGotoStatus(getString(R.string.goto_status_sent, commandTarget.label));
                     scheduleGotoStatusPoll(GOTO_STATUS_POLL_INITIAL_DELAY_MS);
@@ -3510,6 +3640,7 @@ public final class MainActivity extends Activity {
                         scheduleGotoStatusPoll(GOTO_STATUS_POLL_INITIAL_DELAY_MS);
                     } else {
                         activeGotoTarget = null;
+                        clearPendingGotoTrackingResume("goto-rejected");
                         cancelGotoStatusPoll();
                     }
                     Logger.warn("goto rejected command=" + ex.command + " reply=" + ex.reply + " " + targetLog(commandTarget));
@@ -4024,9 +4155,12 @@ public final class MainActivity extends Activity {
                     parked = true;
                     gotoInProgress = false;
                     activeGotoTarget = null;
+                    clearPendingGotoTrackingResume("park-success");
                     cancelGotoStatusPoll();
                     trackingEnabled = false;
                     trackingUsingDualAxis = false;
+                    trackingStoppedByEmergencyStop = false;
+                    lastEmergencyStopAtMillis = 0L;
                     setGotoStatus(getString(R.string.goto_status_idle));
                     setSafetyStatus(getString(R.string.safety_status_parked));
                     updateTrackingViews();
@@ -4225,12 +4359,16 @@ public final class MainActivity extends Activity {
                 sendingStatus,
                 successStatus,
                 () -> {
+                    clearPendingGotoTrackingResume("manual-tracking-toggle");
                     if (trackingEnabled) {
                         trackingEnabled = false;
                         trackingUsingDualAxis = false;
+                        trackingStoppedByEmergencyStop = false;
                     } else {
                         trackingEnabled = true;
                         trackingUsingDualAxis = startingDualAxis;
+                        trackingStoppedByEmergencyStop = false;
+                        lastEmergencyStopAtMillis = 0L;
                     }
                     updateTrackingViews();
                     logStateSnapshot("tracking-toggle-success");
@@ -4248,6 +4386,15 @@ public final class MainActivity extends Activity {
             commands.add(MountCommand.noReply(OnStepCommand.TRACK_FULL_COMPENSATION.command));
             commands.add(MountCommand.noReply(OnStepCommand.TRACK_DUAL_AXIS.command));
         }
+    }
+
+    private void sendTrackingStartCommandsNoReply(TrackingRate rate, boolean dualAxis) throws IOException {
+        client.sendNoReply(rate.command);
+        if (dualAxis) {
+            client.sendNoReply(OnStepCommand.TRACK_FULL_COMPENSATION.command);
+            client.sendNoReply(OnStepCommand.TRACK_DUAL_AXIS.command);
+        }
+        client.sendNoReply(OnStepCommand.TRACK_ENABLE.command);
     }
 
     private String trackingStartCommandLog(TrackingRate rate, boolean dualAxis) {
@@ -4584,6 +4731,8 @@ public final class MainActivity extends Activity {
                     selectedTrackingRate = TrackingRate.SIDEREAL;
                     trackingEnabled = true;
                     trackingUsingDualAxis = shouldStartDualAxisTracking();
+                    trackingStoppedByEmergencyStop = false;
+                    lastEmergencyStopAtMillis = 0L;
                     gotoInProgress = false;
                     activeGotoTarget = null;
                     cancelGotoStatusPoll();
@@ -4738,6 +4887,8 @@ public final class MainActivity extends Activity {
                     selectedTrackingRate = TrackingRate.SIDEREAL;
                     trackingEnabled = true;
                     trackingUsingDualAxis = shouldStartDualAxisTracking();
+                    trackingStoppedByEmergencyStop = false;
+                    lastEmergencyStopAtMillis = 0L;
                     calibrationTarget = null;
                     calibrationTargetField.setText("");
                     clearSyncedCurrentTarget();
@@ -5366,6 +5517,8 @@ public final class MainActivity extends Activity {
                         savedAlignmentStarCount = savedStarCount;
                         trackingEnabled = true;
                         trackingUsingDualAxis = true;
+                        trackingStoppedByEmergencyStop = false;
+                        lastEmergencyStopAtMillis = 0L;
                     }
                     alignmentSession = null;
                     calibrationTarget = null;
@@ -7085,6 +7238,7 @@ public final class MainActivity extends Activity {
         if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED
                 && checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
             Logger.info("gps location permission requested");
+            setObserverMessage(getString(R.string.gps_waiting));
             requestPermissions(
                     new String[]{Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION},
                     LOCATION_PERMISSION_REQUEST
@@ -7195,6 +7349,7 @@ public final class MainActivity extends Activity {
         observerSyncedToMount = false;
         updateObserverFieldTextFromState(true);
         updateObserverViews();
+        setObserverMessage(getString(R.string.gps_applied));
         Logger.info("gps location applied " + observerLog()
                 + " accuracy=" + (location.hasAccuracy() ? location.getAccuracy() : -1.0f));
     }
@@ -7441,6 +7596,24 @@ public final class MainActivity extends Activity {
         new AlertDialog.Builder(this)
                 .setTitle(titleRes)
                 .setMessage(helpRes)
+                .setPositiveButton(android.R.string.ok, null)
+                .show();
+    }
+
+    private void showSkyHelpDialog() {
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.sky_section)
+                .setMessage(R.string.sky_planet_note)
+                .setNeutralButton(R.string.sky_data_sources_button,
+                        (dialog, which) -> showSkyDataSourcesDialog())
+                .setPositiveButton(android.R.string.ok, null)
+                .show();
+    }
+
+    private void showSkyDataSourcesDialog() {
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.sky_data_sources_title)
+                .setMessage(R.string.sky_data_sources_message)
                 .setPositiveButton(android.R.string.ok, null)
                 .show();
     }
@@ -8339,12 +8512,19 @@ public final class MainActivity extends Activity {
     private void updateUiState() {
         hostField.setEnabled(!connected && !busy);
         portField.setEnabled(!connected && !busy);
-        connectTrigger.setEnabled(!connected && !busy);
-        connectTrigger.setBackground(createConnectBadgeBackground(!connected && !busy));
-        disconnectButton.setEnabled(connected && !busy);
+        connectTrigger.setEnabled(!busy);
+        connectTrigger.setContentDescription(getString(connected
+                ? R.string.disconnect_button
+                : R.string.connect_button));
+        connectTrigger.setBackground(createConnectBadgeBackground(!busy));
+        if (connectionActionText != null) {
+            connectionActionText.setText(connected
+                    ? R.string.disconnect_button
+                    : R.string.connect_button);
+            connectionActionText.setBackground(createConnectChipBackground(!busy));
+        }
         connectionForm.setVisibility(View.VISIBLE);
-        connectTrigger.setVisibility(connected ? View.GONE : View.VISIBLE);
-        disconnectButton.setVisibility(connected ? View.VISIBLE : View.GONE);
+        connectTrigger.setVisibility(View.VISIBLE);
         updateManualRateControl();
         if (gotoButton != null) {
             boolean enabled = !busy && (!connected || !parked || gotoInProgress);
@@ -8546,6 +8726,9 @@ public final class MainActivity extends Activity {
         if (observerStatusText != null) {
             observerStatusText.setText(message);
         }
+        if (statusText != null) {
+            statusText.setText(message);
+        }
     }
 
     private void acquireWifiLock() {
@@ -8640,12 +8823,15 @@ public final class MainActivity extends Activity {
         syncedCurrentTarget = null;
         gotoInProgress = false;
         activeGotoTarget = null;
+        clearPendingGotoTrackingResume("connection-lost");
         cancelGotoStatusPoll();
         clearGotoRecoveryRequired("connection-lost");
         preferredPierSideCommandsSupported = null;
         parked = false;
         trackingEnabled = false;
         trackingUsingDualAxis = false;
+        trackingStoppedByEmergencyStop = false;
+        lastEmergencyStopAtMillis = 0L;
         dismissAlignmentPierSideGotoDialog();
         polarRefineSyncedTarget = null;
         if (!preserveAlignment && calibrationTargetField != null) {

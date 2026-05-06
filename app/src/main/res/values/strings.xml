@@ -101,6 +101,9 @@
     <string name="device_status_safety_ready">就绪</string>
     <string name="sky_status_section">状态信息</string>
     <string name="sky_section">星图</string>
+    <string name="sky_data_sources_button">数据来源</string>
+    <string name="sky_data_sources_title">星图数据来源</string>
+    <string name="sky_data_sources_message">恒星：HYG Database v4.2，经 App 打包为本地星表。\n深空天体：OpenNGC NGC.csv 与 addendum.csv。\n星座线：随 App 打包的 constellation line JSON 生成。\n太阳、月亮与主要行星：JPL DE440s 星历，通过 Skyfield 生成 2025-01-01 至 2050-01-01 的本地采样表。\n小行星与彗星：JPL SSD Small-Body Database/SBDB API 的轨道根数，包含少量内置目标和用户下载目标。\n请在再分发或导出相关目录数据时遵守对应数据源的许可和使用条款。</string>
     <string name="calibration_section">支架校准</string>
     <string name="calibration_intro">支架校准流程：先选择两星或三星校准，再选择目标。点击“开始校准”后，每颗星依次执行“设置目标 → 手控支架居中 → 居中后同步”；同步后按钮会回到“设置目标”，直到完成所选星数。保存模型后可用于 GOTO 与跟踪补偿；Refine PA 需要三星或更多赤道仪模型，经纬仪模式不需要极轴精调。</string>
     <string name="calibration_mode_label">模式选择</string>
@@ -252,6 +255,7 @@
     <string name="observer_status">观测地：%1$s，%2$s</string>
     <string name="time_status">当前时间：%1$s</string>
     <string name="gps_waiting">正在获取 GPS/网络位置...</string>
+    <string name="gps_applied">已更新为 GPS 位置。</string>
     <string name="gps_unavailable">暂时没有可用位置，请手动输入。</string>
     <string name="gps_permission_denied">没有定位权限，请手动输入坐标。</string>
     <string name="location_bad_input">纬度范围 -90 到 90，经度范围 -180 到 180。</string>

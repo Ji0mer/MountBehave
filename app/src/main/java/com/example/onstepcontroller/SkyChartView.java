@@ -39,6 +39,7 @@ public final class SkyChartView extends View {
     private SmallBodyCatalog smallBodyCatalog;
     private Bitmap milkyWayBitmap;
     private String loadError;
+    private boolean drawErrorLogged;
 
     /**
      * Layers the user can toggle from the chart layer dialog. Stars and the
@@ -246,6 +247,9 @@ public final class SkyChartView extends View {
         setClickable(true);
         setContentDescription(context.getString(R.string.sky_section));
         setMinimumHeight(dp(460));
+        // Keep this view on software Canvas: phone builds showed header-only/blank sky maps
+        // when HWUI combined drawBitmapMesh with SCREEN blending on some GPU stacks.
+        setLayerType(View.LAYER_TYPE_SOFTWARE, null);
         SolarSystemEphemeris.init(context);
         milkyWayPaint.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.SCREEN));
         milkyWayBitmap = BitmapFactory.decodeResource(context.getResources(), R.drawable.milkyway);
@@ -259,6 +263,23 @@ public final class SkyChartView extends View {
     @Override
     protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
+        try {
+            drawChart(canvas);
+            drawErrorLogged = false;
+        } catch (Throwable throwable) {
+            if (throwable instanceof ThreadDeath) {
+                throw (ThreadDeath) throwable;
+            }
+            frameSolarSystemBodies = null;
+            if (!drawErrorLogged) {
+                Logger.error("sky chart draw failed", throwable);
+                drawErrorLogged = true;
+            }
+            drawFailureMessage(canvas, throwable);
+        }
+    }
+
+    private void drawChart(Canvas canvas) {
         drawBackground(canvas);
         if (catalog == null) {
             drawCenteredMessage(canvas, summary());
@@ -291,6 +312,23 @@ public final class SkyChartView extends View {
         } finally {
             frameSolarSystemBodies = null;
         }
+    }
+
+    private void drawFailureMessage(Canvas canvas, Throwable throwable) {
+        try {
+            drawBackground(canvas);
+            drawCenteredMessage(canvas, localizedDrawError(throwable));
+        } catch (Throwable ignored) {
+            // Nothing safer to do inside Android's drawing pass.
+        }
+    }
+
+    private String localizedDrawError(Throwable throwable) {
+        String type = throwable == null ? "unknown" : throwable.getClass().getSimpleName();
+        if (Locale.ENGLISH.getLanguage().equals(Locale.getDefault().getLanguage())) {
+            return "Sky map drawing failed: " + type;
+        }
+        return "星图绘制失败：" + type;
     }
 
     @Override
