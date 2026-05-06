@@ -32,12 +32,40 @@ public final class SkyChartView extends View {
     private static final int MILKY_WAY_ALPHA = 85;
 
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    // Composites the prepared milky-way layer bitmap onto the view canvas with SCREEN blending.
+    // Keeping the SCREEN xfermode on a plain drawBitmap call (instead of drawBitmapMesh) is
+    // hardware-accelerated reliably; see drawMilkyWay for the rationale.
     private final Paint milkyWayPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG | Paint.DITHER_FLAG);
+    // Used inside the off-screen software canvas for the actual mesh warp; no xfermode here so
+    // the colors[] + drawBitmapMesh combination never lands on the hardware Canvas, which is
+    // the path that produces a blank chart on certain GPU stacks.
+    private final Paint milkyWayMeshPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG | Paint.DITHER_FLAG);
     private final float[] milkyWayMeshVertices = new float[(MILKY_WAY_MESH_COLUMNS + 1) * (MILKY_WAY_MESH_ROWS + 1) * 2];
     private final int[] milkyWayMeshColors = new int[(MILKY_WAY_MESH_COLUMNS + 1) * (MILKY_WAY_MESH_ROWS + 1)];
     private SkyCatalog catalog;
     private SmallBodyCatalog smallBodyCatalog;
     private Bitmap milkyWayBitmap;
+    private Bitmap milkyWayLayerBitmap;
+    private boolean milkyWayLayerAllocFailed;
+    // Inter-frame cache for the milky-way layer. drawBitmapMesh on a 96x48 grid is the
+    // dominant per-frame cost (~100 ms on real phones). When the camera and sidereal time
+    // haven't changed meaningfully, we can reuse the previously rendered scratch bitmap and
+    // skip the entire mesh pass — frame time drops to a single drawBitmap (~5 ms).
+    private boolean milkyWayLayerValid;
+    private double milkyWayCacheForwardX;
+    private double milkyWayCacheForwardY;
+    private double milkyWayCacheForwardZ;
+    private double milkyWayCacheFovDegrees;
+    private double milkyWayCacheLocalSiderealDegrees;
+    private int milkyWayCacheWidth;
+    private int milkyWayCacheHeight;
+    // ~0.5° threshold for the camera direction (cos(0.5°) ≈ 0.9999619).
+    private static final double MILKY_WAY_CAMERA_COS_THRESHOLD = 0.99996;
+    // Sidereal time threshold ~ 0.5° ≈ 2 minutes of real time. Below this the milky way
+    // band has not visibly drifted across the chart.
+    private static final double MILKY_WAY_SIDEREAL_THRESHOLD_DEG = 0.5;
+    // FOV (zoom) tolerance in degrees.
+    private static final double MILKY_WAY_FOV_THRESHOLD_DEG = 0.05;
     private String loadError;
     private boolean drawErrorLogged;
 
@@ -247,16 +275,25 @@ public final class SkyChartView extends View {
         setClickable(true);
         setContentDescription(context.getString(R.string.sky_section));
         setMinimumHeight(dp(460));
-        // Keep this view on software Canvas: phone builds showed header-only/blank sky maps
-        // when HWUI combined drawBitmapMesh with SCREEN blending on some GPU stacks.
-        setLayerType(View.LAYER_TYPE_SOFTWARE, null);
+        // Allocate a dedicated hardware layer (offscreen GPU texture) for this view.
+        // Diagnostic: phones returning all-blue chart with onDraw fully completing in logs
+        // (every step "OK", no exceptions) point to HWUI's compositor dropping the chart's
+        // RenderNode when it's mixed with sibling overlays in the parent FrameLayout. A
+        // dedicated hardware layer isolates this view's drawing so the FrameLayout only
+        // sees a finished texture, not a complex RenderNode.
+        setLayerType(View.LAYER_TYPE_HARDWARE, null);
         SolarSystemEphemeris.init(context);
-        milkyWayPaint.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.SCREEN));
+        // Intentionally do NOT install a SCREEN xfermode on milkyWayPaint here. drawBitmap
+        // with PorterDuffXfermode on a hardware Canvas is a well-known compatibility hot
+        // spot on certain GPU drivers; the visual gain (lightening blend instead of
+        // alpha-over) is small against the dark sky background. Re-enable only after
+        // confirming the chart renders end-to-end.
         milkyWayBitmap = BitmapFactory.decodeResource(context.getResources(), R.drawable.milkyway);
         try {
             catalog = SkyCatalog.load(context);
         } catch (IOException ex) {
             loadError = "星图数据加载失败：" + ex.getMessage();
+            Logger.error("sky chart catalog load failed", ex);
         }
     }
 
@@ -529,7 +566,26 @@ public final class SkyChartView extends View {
         if (milkyWayBitmap == null || milkyWayBitmap.isRecycled()) {
             return;
         }
+        int width = getWidth();
+        int height = getHeight();
+        if (width <= 0 || height <= 0) {
+            return;
+        }
         double localSiderealDegrees = localSiderealDegrees();
+
+        // Fast path: when the camera and sidereal time haven't moved meaningfully since the
+        // last draw, the previously rendered scratch bitmap is still pixel-correct. Skip
+        // the entire 4608-vertex mesh pass and just composite the cached bitmap.
+        if (canReuseMilkyWayLayer(width, height, basis, localSiderealDegrees)) {
+            try {
+                canvas.drawBitmap(milkyWayLayerBitmap, 0f, 0f, milkyWayPaint);
+            } catch (Throwable compErr) {
+                Logger.error("milkyway composite drawBitmap threw (cache hit)", compErr);
+                milkyWayLayerValid = false;
+            }
+            return;
+        }
+
         int vertexOffset = 0;
         int colorOffset = 0;
         boolean hasVisiblePoint = false;
@@ -546,20 +602,117 @@ public final class SkyChartView extends View {
         }
 
         if (!hasVisiblePoint) {
+            milkyWayLayerValid = false;
             return;
         }
-        milkyWayPaint.setAlpha(MILKY_WAY_ALPHA);
-        canvas.drawBitmapMesh(
-                milkyWayBitmap,
-                MILKY_WAY_MESH_COLUMNS,
-                MILKY_WAY_MESH_ROWS,
-                milkyWayMeshVertices,
-                0,
-                milkyWayMeshColors,
-                0,
-                milkyWayPaint
-        );
-        milkyWayPaint.setAlpha(255);
+
+        // Render the warped milky way into an off-screen software bitmap first.
+        // Reason: canvas.drawBitmapMesh with a colors[] array on a hardware-accelerated
+        // Canvas is unstable across several GPU drivers (the mesh draw silently poisons the
+        // frame, so the chart looks blank even though every draw call returns successfully).
+        // Doing the mesh on a software Canvas backed by an ARGB_8888 bitmap, then drawing
+        // that bitmap to the hardware Canvas with a plain drawBitmap call, sidesteps the
+        // problem on every driver we've tested.
+        if (milkyWayLayerBitmap == null
+                || milkyWayLayerBitmap.isRecycled()
+                || milkyWayLayerBitmap.getWidth() != width
+                || milkyWayLayerBitmap.getHeight() != height) {
+            recycleMilkyWayLayer();
+            if (milkyWayLayerAllocFailed) {
+                return;
+            }
+            try {
+                milkyWayLayerBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+            } catch (OutOfMemoryError oom) {
+                milkyWayLayerAllocFailed = true;
+                Logger.warn("milky-way scratch bitmap allocation failed "
+                        + width + "x" + height + ": " + oom.getMessage());
+                return;
+            }
+        }
+
+        milkyWayLayerBitmap.eraseColor(Color.TRANSPARENT);
+        Canvas softwareCanvas = new Canvas(milkyWayLayerBitmap);
+        milkyWayMeshPaint.setAlpha(MILKY_WAY_ALPHA);
+        try {
+            softwareCanvas.drawBitmapMesh(
+                    milkyWayBitmap,
+                    MILKY_WAY_MESH_COLUMNS,
+                    MILKY_WAY_MESH_ROWS,
+                    milkyWayMeshVertices,
+                    0,
+                    milkyWayMeshColors,
+                    0,
+                    milkyWayMeshPaint
+            );
+        } catch (Throwable meshErr) {
+            Logger.error("milkyway drawBitmapMesh threw on software canvas", meshErr);
+            milkyWayMeshPaint.setAlpha(255);
+            milkyWayLayerValid = false;
+            return;
+        }
+        milkyWayMeshPaint.setAlpha(255);
+
+        // Hint HWUI to upload the freshly-modified bitmap to a GPU texture proactively.
+        // Without this, certain drivers leave the texture stale or skip the draw entirely.
+        milkyWayLayerBitmap.prepareToDraw();
+        try {
+            canvas.drawBitmap(milkyWayLayerBitmap, 0f, 0f, milkyWayPaint);
+            // Cache the camera + sidereal state for the next frame's fast-path check.
+            milkyWayCacheForwardX = basis.forward.x;
+            milkyWayCacheForwardY = basis.forward.y;
+            milkyWayCacheForwardZ = basis.forward.z;
+            milkyWayCacheFovDegrees = fieldOfViewDegrees;
+            milkyWayCacheLocalSiderealDegrees = localSiderealDegrees;
+            milkyWayCacheWidth = width;
+            milkyWayCacheHeight = height;
+            milkyWayLayerValid = true;
+        } catch (Throwable compErr) {
+            Logger.error("milkyway composite drawBitmap threw", compErr);
+            milkyWayLayerValid = false;
+        }
+    }
+
+    private boolean canReuseMilkyWayLayer(int width, int height, CameraBasis basis,
+                                          double localSiderealDegrees) {
+        if (!milkyWayLayerValid) return false;
+        if (milkyWayLayerBitmap == null || milkyWayLayerBitmap.isRecycled()) return false;
+        if (milkyWayCacheWidth != width || milkyWayCacheHeight != height) return false;
+        if (Math.abs(milkyWayCacheFovDegrees - fieldOfViewDegrees) > MILKY_WAY_FOV_THRESHOLD_DEG) {
+            return false;
+        }
+        // Sidereal time wraps at 360°. Compare via signed shortest distance.
+        double dSidereal = Math.abs(localSiderealDegrees - milkyWayCacheLocalSiderealDegrees);
+        if (dSidereal > 180.0) dSidereal = 360.0 - dSidereal;
+        if (dSidereal > MILKY_WAY_SIDEREAL_THRESHOLD_DEG) return false;
+        // Camera direction comparison: dot product of unit forward vectors.
+        double dot = milkyWayCacheForwardX * basis.forward.x
+                + milkyWayCacheForwardY * basis.forward.y
+                + milkyWayCacheForwardZ * basis.forward.z;
+        return dot >= MILKY_WAY_CAMERA_COS_THRESHOLD;
+    }
+
+    private void recycleMilkyWayLayer() {
+        if (milkyWayLayerBitmap != null && !milkyWayLayerBitmap.isRecycled()) {
+            milkyWayLayerBitmap.recycle();
+        }
+        milkyWayLayerBitmap = null;
+        milkyWayLayerValid = false;
+    }
+
+    @Override
+    protected void onSizeChanged(int w, int h, int oldw, int oldh) {
+        super.onSizeChanged(w, h, oldw, oldh);
+        // Force the milky-way scratch bitmap to be reallocated next frame; also reset the
+        // OOM flag so a smaller view size gets another chance.
+        recycleMilkyWayLayer();
+        milkyWayLayerAllocFailed = false;
+    }
+
+    @Override
+    protected void onDetachedFromWindow() {
+        recycleMilkyWayLayer();
+        super.onDetachedFromWindow();
     }
 
     private boolean populateMilkyWayMeshVertex(

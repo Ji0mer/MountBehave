@@ -10,8 +10,8 @@ android {
         applicationId = "com.example.onstepcontroller"
         minSdk = 26
         targetSdk = 36
-        versionCode = 7
-        versionName = "0.2.5"
+        versionCode = 1
+        versionName = "0.0.1"
     }
 
     compileOptions {

@@ -1,8 +1,8 @@
 # ClearskyGoto 测试人员指南
 
-适用版本：`0.2.5` 及当前 `ClearskyGoto` 分支开发版。
+适用版本：`0.0.1` 及之后的 `main` 分支开发版。
 
-ClearskyGoto 是针对晴空谐波赤道仪现场使用开发的 Android 控制 App，代码基础来自 MountBehave `v0.2.5`。本文帮助测试人员完成安装、连接、星图 GOTO、支架校准、日志导出和问题反馈。
+ClearskyGoto 是针对晴空谐波赤道仪现场使用开发的 Android 控制 App，代码基础来自 MountBehave。本文帮助测试人员完成安装、连接、星图 GOTO、支架校准、日志导出和问题反馈。
 
 ## 1. 测试前安全检查
 

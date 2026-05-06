@@ -1,6 +1,6 @@
 # ClearskyGoto 开发计划
 
-ClearskyGoto 是针对晴空谐波赤道仪系列开发的 Android 控制 App。本项目在 MountBehave `v0.2.5` 的代码基础上继续开发，后续规划以晴空设备的实机流程、界面一致性和现场可诊断性为核心。
+ClearskyGoto 是针对晴空谐波赤道仪系列开发的 Android 控制 App。本项目在 MountBehave 代码基础上继续开发（当前版本 `0.0.1`），后续规划以晴空设备的实机流程、界面一致性和现场可诊断性为核心。
 
 ## 目标
 

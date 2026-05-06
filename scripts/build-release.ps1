@@ -54,7 +54,7 @@ if (-not (Test-Path $ApkSigner)) {
 $DistDir = Join-Path $ProjectRoot "dist"
 New-Item -ItemType Directory -Force -Path $DistDir | Out-Null
 
-$SignedApk = Join-Path $DistDir ("MountBehave-v{0}.apk" -f $Element.versionName)
+$SignedApk = Join-Path $DistDir ("ClearskyGoto-v{0}.apk" -f $Element.versionName)
 & $ZipAlign -p -f 4 $UnsignedApk $SignedApk
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE

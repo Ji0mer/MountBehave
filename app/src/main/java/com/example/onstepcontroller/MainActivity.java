@@ -485,6 +485,11 @@ public final class MainActivity extends Activity {
         root.addView(header, matchWrap());
 
         settingsPage = createSettingsPage();
+        // Pages start hidden; updatePageTabs() at the end of this method picks the right one.
+        // Previously settingsPage skipped this, relying on currentPage defaulting to SETTINGS.
+        // Make the initial visibility explicit so a stale layout state can never push the
+        // sky-page chart panel down by hundreds of pixels behind a "ghost" settings page.
+        settingsPage.setVisibility(View.GONE);
         root.addView(settingsPage, matchWrap());
 
         connectionSyncPage = createConnectionSyncPage();
@@ -785,7 +790,15 @@ public final class MainActivity extends Activity {
         ));
 
         View spacer = new View(this);
-        row.addView(spacer, weightWrap(1f));
+        // CRITICAL: never use weightWrap(1f) (= height=WRAP_CONTENT) for an empty spacer in
+        // a horizontal LinearLayout. On some real-device LinearLayout implementations (Xiaomi
+        // / Honor / certain Android 13+ variants) the weight-pass measurement for an empty
+        // View with WRAP_CONTENT in the perpendicular axis ends up adopting the LinearLayout's
+        // own measured height before the row settles, which then feeds back into the row
+        // height — producing a multi-thousand-pixel "ghost" spacer that pushes everything
+        // beneath it off-screen. (Confirmed in field logs: child[6]=View size=138x1996.)
+        // A fixed dp(1) height on weight==1 sidesteps the perpendicular-axis ambiguity.
+        row.addView(spacer, new LinearLayout.LayoutParams(0, dp(1), 1f));
 
         Button help = new Button(this);
         help.setAllCaps(false);
@@ -807,7 +820,9 @@ public final class MainActivity extends Activity {
     }
 
     private int skyChartHeightDp() {
-        return isWideLayout() ? 528 : 496;
+        // Taller chart so the sky panel feels less cramped — manual pad, icon rail and
+        // calibration overlay all sit comfortably without overlapping the constellations.
+        return isWideLayout() ? 680 : 640;
     }
 
     private int skyCalibrationOverlayHeightDp() {
@@ -870,7 +885,10 @@ public final class MainActivity extends Activity {
         titleRow.addView(calibrationModeText, modeParams);
 
         View spacer = new View(this);
-        titleRow.addView(spacer, weightWrap(1f));
+        // Same horizontal-row spacer fix as createSkyChartHeader: explicit dp(1) height
+        // instead of WRAP_CONTENT to defend against the LinearLayout weight-pass measurement
+        // bug that inflates the row to thousands of pixels on certain Android builds.
+        titleRow.addView(spacer, new LinearLayout.LayoutParams(0, dp(1), 1f));
 
         Button help = new Button(this);
         help.setAllCaps(false);
@@ -7871,6 +7889,20 @@ public final class MainActivity extends Activity {
         return params;
     }
 
+    /**
+     * Width=0 + weight + WRAP_CONTENT height for use inside a horizontal LinearLayout where
+     * the child has its own measurable content (a Button with text, a TextView with text, a
+     * filled LinearLayout, etc.). The WRAP_CONTENT height resolves to the child's natural
+     * size which is bounded.
+     *
+     * <p><b>WARNING — DO NOT use this for an empty {@link View} spacer.</b> On some real-
+     * device LinearLayout implementations (Xiaomi / Honor / certain Android 13+ variants)
+     * the weight-pass measurement of an empty View with WRAP_CONTENT in the perpendicular
+     * axis adopts the LinearLayout's own measured height before the row settles, which feeds
+     * back into the row height — producing a multi-thousand-pixel "ghost" spacer that pushes
+     * everything beneath it off-screen. For empty spacers always use
+     * {@code new LinearLayout.LayoutParams(0, dp(1), weight)} so the height can never grow.
+     */
     private LinearLayout.LayoutParams weightWrap(float weight) {
         return new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, weight);
     }
