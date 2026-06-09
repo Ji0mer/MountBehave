@@ -112,9 +112,10 @@ public final class MainActivity extends Activity {
     private static final int SIDE_MENU_VERSION_HEIGHT_DP = 28;
     private static final int SIDE_MENU_FLOATING_STOP_GAP_DP = 8;
     private static final int FLOATING_STOP_COLLAPSED_TOP_MARGIN_DP = 86;
-    private static final int SIDE_MENU_ITEM_COUNT = 3;
+    private static final int SIDE_MENU_ITEM_COUNT = 4;
     private static final int LOCATION_PERMISSION_REQUEST = 24;
     private static final int LOG_EXPORT_CREATE_DOCUMENT_REQUEST = 25;
+    private static final int CAMERA_PERMISSION_REQUEST = 26;
     private static final long CONNECTION_POLL_INTERVAL_MS = 5_000L;
     private static final long GOTO_STATUS_POLL_INITIAL_DELAY_MS = 2_500L;
     private static final long GOTO_STATUS_POLL_INTERVAL_MS = 3_000L;
@@ -174,6 +175,7 @@ public final class MainActivity extends Activity {
     private Button skyTabButton;
     private Button settingsTabButton;
     private Button connectionSyncTabButton;
+    private Button cameraSolveButton;
     private Button sideMenuToggleButton;
     private Button floatingStopButton;
     private TextView sideMenuVersionText;
@@ -183,6 +185,8 @@ public final class MainActivity extends Activity {
     private LinearLayout skyPage;
     private LinearLayout settingsPage;
     private LinearLayout connectionSyncPage;
+    private View cameraPage;
+    private CameraPanel cameraPanel;
     private EditText hostField;
     private EditText portField;
     private LinearLayout connectionForm;
@@ -361,12 +365,18 @@ public final class MainActivity extends Activity {
             refreshGotoStatus();
             refreshMountPointing();
         }
+        if (cameraPanel != null) {
+            cameraPanel.onResume(); // reopens the camera only if the camera page is showing
+        }
     }
 
     @Override
     protected void onPause() {
         super.onPause();
         Logger.info("lifecycle onPause");
+        if (cameraPanel != null) {
+            cameraPanel.onPause(); // release the camera while backgrounded
+        }
         dismissAlignmentPierSideGotoDialog();
         uiHandler.removeCallbacks(skyClockRunnable);
         uiHandler.removeCallbacks(gotoStatusPollRunnable);
@@ -401,6 +411,9 @@ public final class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         Logger.info("lifecycle onDestroy");
+        if (cameraPanel != null) {
+            cameraPanel.onDestroy();
+        }
         dismissAlignmentPierSideGotoDialog();
         ioExecutor.execute(() -> {
             try {
@@ -429,12 +442,19 @@ public final class MainActivity extends Activity {
     @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode != LOCATION_PERMISSION_REQUEST) {
-            return;
-        }
         boolean granted = false;
         for (int result : grantResults) {
             granted = granted || result == PackageManager.PERMISSION_GRANTED;
+        }
+        if (requestCode == CAMERA_PERMISSION_REQUEST) {
+            Logger.info("camera permission result granted=" + granted);
+            if (cameraPanel != null) {
+                cameraPanel.onCameraPermissionResult(granted);
+            }
+            return;
+        }
+        if (requestCode != LOCATION_PERMISSION_REQUEST) {
+            return;
         }
         if (granted) {
             Logger.info("gps permission result granted");
@@ -500,6 +520,11 @@ public final class MainActivity extends Activity {
         skyPage.setVisibility(View.GONE);
         root.addView(skyPage, matchWrap());
 
+        cameraPanel = new CameraPanel(this, CAMERA_PERMISSION_REQUEST);
+        cameraPage = cameraPanel.view();
+        cameraPage.setVisibility(View.GONE);
+        root.addView(cameraPage, matchWrap());
+
         shell.addView(scrollView, frameMatchParent());
         shell.addView(createPageTabs(), sideMenuParams());
         shell.addView(createFloatingEmergencyStopButton(), floatingStopParams());
@@ -536,6 +561,12 @@ public final class MainActivity extends Activity {
         skyTabButton.setText(R.string.tab_sky);
         skyTabButton.setOnClickListener(v -> selectPageFromMenu(Page.SKY));
         sideMenu.addView(skyTabButton, sideMenuButtonParams(SIDE_MENU_ITEM_TOP_MARGIN_DP));
+
+        cameraSolveButton = new Button(this);
+        configureTabButton(cameraSolveButton);
+        cameraSolveButton.setText(R.string.camera_solve_menu);
+        cameraSolveButton.setOnClickListener(v -> selectPageFromMenu(Page.CAMERA));
+        sideMenu.addView(cameraSolveButton, sideMenuButtonParams(SIDE_MENU_ITEM_TOP_MARGIN_DP));
 
         sideMenuVersionText = new TextView(this);
         sideMenuVersionText.setText(getString(R.string.version_info, appVersionName()));
@@ -7381,6 +7412,12 @@ public final class MainActivity extends Activity {
     }
 
     private void rebuildContentView() {
+        if (cameraPanel != null) {
+            // createContentView() builds a fresh CameraPanel; release the old camera +
+            // detection executor first so the rebuild does not leak them.
+            cameraPanel.onDestroy();
+            cameraPanel = null;
+        }
         setContentView(createContentView());
         updateUiState();
         updateObserverViews();
@@ -8981,12 +9018,27 @@ public final class MainActivity extends Activity {
         if (connectionSyncPage != null) {
             connectionSyncPage.setVisibility(selectedPage == Page.CONNECTION_SYNC ? View.VISIBLE : View.GONE);
         }
+        boolean cameraSelected = selectedPage == Page.CAMERA;
+        if (cameraPage != null) {
+            cameraPage.setVisibility(cameraSelected ? View.VISIBLE : View.GONE);
+        }
+        if (cameraPanel != null) {
+            // onShown opens the camera (requesting permission if needed); onHidden releases it.
+            // Both are idempotent, so calling on every page switch is fine.
+            if (cameraSelected) {
+                cameraPanel.onShown();
+            } else {
+                cameraPanel.onHidden();
+            }
+        }
         if (appHeaderView != null) {
-            appHeaderView.setVisibility(selectedPage == Page.SKY ? View.GONE : View.VISIBLE);
+            // Hide the big app title on the immersive full-bleed pages.
+            appHeaderView.setVisibility(selectedPage == Page.SKY || cameraSelected ? View.GONE : View.VISIBLE);
         }
         styleTabButton(skyTabButton, selectedPage == Page.SKY);
         styleTabButton(settingsTabButton, selectedPage == Page.SETTINGS);
         styleTabButton(connectionSyncTabButton, selectedPage == Page.CONNECTION_SYNC);
+        styleTabButton(cameraSolveButton, cameraSelected);
     }
 
     private void selectPageFromMenu(Page selectedPage) {
@@ -9024,6 +9076,9 @@ public final class MainActivity extends Activity {
         }
         if (skyTabButton != null) {
             skyTabButton.setVisibility(menuItemVisibility);
+        }
+        if (cameraSolveButton != null) {
+            cameraSolveButton.setVisibility(menuItemVisibility);
         }
         if (sideMenuVersionText != null) {
             sideMenuVersionText.setVisibility(menuItemVisibility);
@@ -9390,7 +9445,8 @@ public final class MainActivity extends Activity {
     private enum Page {
         SETTINGS,
         CONNECTION_SYNC,
-        SKY
+        SKY,
+        CAMERA
     }
 
     private enum Direction {
