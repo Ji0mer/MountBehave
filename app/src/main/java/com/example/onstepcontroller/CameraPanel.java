@@ -35,14 +35,15 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * Phase-1 camera plate-solving test bench, hosted as a page inside MainActivity (not a
- * separate Activity) so the shell-level side menu and floating Stop button stay available
- * while the camera page is shown. Owns its own Camera2 wrapper, star detector and detection
- * overlay; MainActivity drives it via {@link #onShown()}/{@link #onHidden()} on page changes
- * and {@link #onResume()}/{@link #onPause()} on the activity lifecycle.
+ * Camera plate-solving page, hosted inside MainActivity (not a separate Activity) so the
+ * shell-level side menu and floating Stop button stay available while it is shown. Owns the
+ * Camera2 wrapper and the detection overlay, and drives an {@link ImageSolveEngine} that does
+ * the detection + blind solving; MainActivity drives it via {@link #onShown()}/{@link
+ * #onHidden()} on page changes and {@link #onResume()}/{@link #onPause()} on the lifecycle.
  *
- * <p>No coordinate maths and no mount commands here; this only measures whether a real
- * phone + tripod yields a usable star field, which drives the future index design.
+ * <p>This class is UI orchestration only -- capture, threading/lifecycle guards and result
+ * display. The detection/solve algorithms live in {@link ImageSolveEngine} so they can be
+ * shared with other image sources (e.g. imported photos). No mount commands here.
  */
 final class CameraPanel implements StarFieldCamera.Listener {
 
@@ -55,7 +56,7 @@ final class CameraPanel implements StarFieldCamera.Listener {
     private final Activity activity;
     private final int cameraPermissionRequest;
     private final StarFieldCamera camera;
-    private final StarDetector detector = new StarDetector();
+    private final ImageSolveEngine solveEngine; // app-scoped shared instance (built once)
     private final ExecutorService detectExecutor = Executors.newSingleThreadExecutor();
     private final View root;
 
@@ -95,10 +96,8 @@ final class CameraPanel implements StarFieldCamera.Listener {
     private StarDetector.StarField lastField;
     private PlateSolver.Solution lastSolution;
 
-    // Catalog + solver are heavy (≈119k stars, ≈164k seed triangles), so build once on a
-    // background thread the first time the page is shown and reuse for every capture.
-    private volatile PlateSolver plateSolver;
-    private volatile SkyCatalog skyCatalog;
+    // The solve engine (catalog + solver) is heavy (≈119k stars, ≈164k seed triangles), so it
+    // is built once on a background thread the first time the page is shown and reused.
     private boolean solverLoading;
     private boolean solveInFlight; // a solve task for the current frame is running
     // Bumped each time a solve is launched and on every reset. A solve callback only owns the
@@ -110,6 +109,7 @@ final class CameraPanel implements StarFieldCamera.Listener {
         this.activity = activity;
         this.cameraPermissionRequest = cameraPermissionRequest;
         this.camera = new StarFieldCamera(activity, this);
+        this.solveEngine = ImageSolveEngine.shared(activity); // shared app-scoped instance
         this.root = buildView();
     }
 
@@ -124,19 +124,16 @@ final class CameraPanel implements StarFieldCamera.Listener {
         ensureSolverAsync();
     }
 
-    /** Build the catalog + plate solver once, off the UI thread, so the first solve is ready. */
+    /** Build the solve engine once, off the UI thread, so the first solve is ready. */
     private void ensureSolverAsync() {
-        if (plateSolver != null || solverLoading) {
+        if (solveEngine.isReady() || solverLoading) {
             return;
         }
         solverLoading = true;
         detectExecutor.execute(() -> {
             try {
-                SkyCatalog cat = SkyCatalog.load(activity);
-                PlateSolver solver = new PlateSolver(cat.stars);
+                solveEngine.load();
                 activity.runOnUiThread(() -> {
-                    skyCatalog = cat;
-                    plateSolver = solver;
                     solverLoading = false;
                     // A frame captured before the solver was ready was only detected; solve it now.
                     maybeSolveCurrentField();
@@ -533,14 +530,14 @@ final class CameraPanel implements StarFieldCamera.Listener {
         }
 
         // Detect on the worker, then publish the frame and let maybeSolveCurrentField() decide
-        // whether to solve. Detection and the (separately built) solver each call that method on
-        // completion, so the solve fires whenever BOTH are ready regardless of which finishes
-        // first -- snapshotting plateSolver here would strand a frame captured while it loaded.
+        // whether to solve. Detection and the (separately loaded) solve engine each call that
+        // method on completion, so the solve fires whenever BOTH are ready regardless of which
+        // finishes first -- and a frame captured before the engine loaded is still solved.
         final int detGen = panelGeneration;
         detectExecutor.execute(() -> {
             StarDetector.StarField field;
             try {
-                field = detector.detectForSolve(image);
+                field = solveEngine.detect(image);
             } catch (Throwable t) {
                 Logger.error("star detection failed", t);
                 activity.runOnUiThread(() -> {
@@ -569,38 +566,23 @@ final class CameraPanel implements StarFieldCamera.Listener {
         });
     }
 
-    /** Build detection arrays and blind-solve a frame. Pure compute; safe off the UI thread. */
-    private PlateSolver.Solution solveField(PlateSolver solver, StarDetector.StarField field,
-                                            StarFieldCamera.CaptureInfo info) {
-        int n = field.stars.size();
-        double[] xs = new double[n];
-        double[] ys = new double[n];
-        double[] pk = new double[n];
-        for (int i = 0; i < n; i++) {
-            StarDetector.Detection d = field.stars.get(i);
-            xs[i] = d.x;
-            ys[i] = d.y;
-            pk[i] = d.peak;
-        }
-        return solver.solve(xs, ys, pk, focalPriorPx(info),
-                info.imageWidth / 2.0, info.imageHeight / 2.0);
-    }
-
     /**
-     * Solve the current detected frame, once. Called from BOTH detection-complete and
-     * solver-ready (UI thread), so the solve runs as soon as a detected frame and a built
-     * solver coexist -- whichever arrives last triggers it. Idempotent: a {@code solveInFlight}
-     * guard and the {@code lastSolution == null} check prevent a double solve, and the result
-     * is dropped if a newer capture replaced the frame meanwhile. Returns true if it launched.
+     * Solve the current detected frame, once, via {@link ImageSolveEngine}. Called from BOTH
+     * detection-complete and solver-ready (UI thread), so the solve runs as soon as a detected
+     * frame and a built solver coexist -- whichever arrives last triggers it. Idempotent: a
+     * {@code solveInFlight} guard and the {@code lastSolution == null} check prevent a double
+     * solve, and the result is dropped if a newer capture replaced the frame meanwhile. Returns
+     * true if it launched.
      */
     private boolean maybeSolveCurrentField() {
-        final PlateSolver solver = plateSolver;
         final StarDetector.StarField field = lastField;
         final StarFieldCamera.CaptureInfo info = lastInfo;
-        if (solver == null || field == null || info == null || lastSolution != null
+        if (!solveEngine.isReady() || field == null || info == null || lastSolution != null
                 || solveInFlight || field.stars.size() < 3) {
             return false;
         }
+        final ImageSolveEngine.SolveInput input =
+                ImageSolveEngine.SolveInput.fromHorizontalFov(info.fovDegrees);
         final int gen = panelGeneration;
         final int solveGen = ++solveGeneration;
         solveInFlight = true;
@@ -609,7 +591,7 @@ final class CameraPanel implements StarFieldCamera.Listener {
         detectExecutor.execute(() -> {
             PlateSolver.Solution sol;
             try {
-                sol = solveField(solver, field, info);
+                sol = solveEngine.solve(field, input);
             } catch (Throwable t) {
                 Logger.error("plate solve failed", t);
                 sol = null;
@@ -630,23 +612,13 @@ final class CameraPanel implements StarFieldCamera.Listener {
                 lastSolution = finalSol;
                 statusText.setText("");
                 if (finalSol != null) {
-                    detectionView.setSolve(finalSol, skyCatalog, field.skyMask,
+                    detectionView.setSolve(finalSol, solveEngine.catalog(), field.skyMask,
                             field.analysisWidth, field.analysisHeight);
                 }
                 showStats(field, finalSol, info);
             });
         });
         return true;
-    }
-
-    /**
-     * Focal length in source-bitmap pixels from the camera's reported horizontal FOV
-     * (sensor width / focal length). Falls back to a typical phone main-camera field if the
-     * device did not report lens geometry, so a solve can still be attempted.
-     */
-    private double focalPriorPx(StarFieldCamera.CaptureInfo info) {
-        double fovH = info.fovDegrees > 0.0 ? info.fovDegrees : 65.0;
-        return info.imageWidth / (2.0 * Math.tan(Math.toRadians(fovH) / 2.0));
     }
 
     private void showStats(StarDetector.StarField field, PlateSolver.Solution sol,
@@ -671,7 +643,7 @@ final class CameraPanel implements StarFieldCamera.Listener {
             sb.append(activity.getString(R.string.camera_solve_stars, brightMatchNames(sol)));
         } else if (solveInFlight) {
             sb.append(activity.getString(R.string.camera_solve_running));
-        } else if (solverLoading || plateSolver == null) {
+        } else if (solverLoading || !solveEngine.isReady()) {
             sb.append(activity.getString(R.string.camera_solve_loading));
         } else {
             sb.append(activity.getString(R.string.camera_solve_failed));
@@ -681,7 +653,7 @@ final class CameraPanel implements StarFieldCamera.Listener {
 
     /** Names of the brightest matched stars, to identify the field at a glance. */
     private String brightMatchNames(PlateSolver.Solution sol) {
-        SkyCatalog cat = skyCatalog;
+        SkyCatalog cat = solveEngine.catalog();
         if (cat == null) {
             return "";
         }
