@@ -1,0 +1,4 @@
+# Local scratch only (not committed): test photos + generated/validation artifacts.
+__pycache__/
+jtest/out/
+work/

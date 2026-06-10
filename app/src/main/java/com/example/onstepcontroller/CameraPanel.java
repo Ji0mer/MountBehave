@@ -92,7 +92,19 @@ final class CameraPanel implements StarFieldCamera.Listener {
     private int panelGeneration;
     private Bitmap lastBitmap;
     private StarFieldCamera.CaptureInfo lastInfo;
-    private StarDetector.Result lastResult;
+    private StarDetector.StarField lastField;
+    private PlateSolver.Solution lastSolution;
+
+    // Catalog + solver are heavy (≈119k stars, ≈164k seed triangles), so build once on a
+    // background thread the first time the page is shown and reuse for every capture.
+    private volatile PlateSolver plateSolver;
+    private volatile SkyCatalog skyCatalog;
+    private boolean solverLoading;
+    private boolean solveInFlight; // a solve task for the current frame is running
+    // Bumped each time a solve is launched and on every reset. A solve callback only owns the
+    // shared solve state if its captured token still matches, so a stale solve that finishes
+    // after a hide/return cannot clear a newer solve's solveInFlight flag.
+    private int solveGeneration;
 
     CameraPanel(Activity activity, int cameraPermissionRequest) {
         this.activity = activity;
@@ -109,6 +121,31 @@ final class CameraPanel implements StarFieldCamera.Listener {
     void onShown() {
         shown = true;
         maybeOpenCamera();
+        ensureSolverAsync();
+    }
+
+    /** Build the catalog + plate solver once, off the UI thread, so the first solve is ready. */
+    private void ensureSolverAsync() {
+        if (plateSolver != null || solverLoading) {
+            return;
+        }
+        solverLoading = true;
+        detectExecutor.execute(() -> {
+            try {
+                SkyCatalog cat = SkyCatalog.load(activity);
+                PlateSolver solver = new PlateSolver(cat.stars);
+                activity.runOnUiThread(() -> {
+                    skyCatalog = cat;
+                    plateSolver = solver;
+                    solverLoading = false;
+                    // A frame captured before the solver was ready was only detected; solve it now.
+                    maybeSolveCurrentField();
+                });
+            } catch (Throwable t) {
+                Logger.error("plate solver init failed", t);
+                activity.runOnUiThread(() -> solverLoading = false);
+            }
+        });
     }
 
     /** Called when another page is selected. */
@@ -137,7 +174,10 @@ final class CameraPanel implements StarFieldCamera.Listener {
         }
         lastBitmap = null;
         lastInfo = null;
-        lastResult = null;
+        lastField = null;
+        lastSolution = null;
+        solveInFlight = false;
+        solveGeneration++; // orphan any in-flight solve so its callback won't touch new state
         if (statsText != null) {
             statsText.setText("");
         }
@@ -326,7 +366,7 @@ final class CameraPanel implements StarFieldCamera.Listener {
     }
 
     private void onSaveClicked() {
-        if (lastBitmap == null || lastBitmap.isRecycled() || lastResult == null) {
+        if (lastBitmap == null || lastBitmap.isRecycled() || lastField == null) {
             statusText.setText(R.string.camera_save_nothing);
             return;
         }
@@ -393,8 +433,9 @@ final class CameraPanel implements StarFieldCamera.Listener {
 
     private void logDetection(String location) {
         StarFieldCamera.CaptureInfo info = lastInfo;
-        StarDetector.Result r = lastResult;
-        StringBuilder sb = new StringBuilder("CAMERA-SOLVE phase1");
+        StarDetector.StarField f = lastField;
+        PlateSolver.Solution sol = lastSolution;
+        StringBuilder sb = new StringBuilder("CAMERA-SOLVE phase2");
         sb.append(" file=").append(location);
         if (info != null) {
             sb.append(" exposureNanos=").append(info.exposureNanos)
@@ -405,16 +446,23 @@ final class CameraPanel implements StarFieldCamera.Listener {
                     .append(" fovDeg=").append(String.format(Locale.US, "%.2f", info.fovDegrees))
                     .append(" image=").append(info.imageWidth).append("x").append(info.imageHeight);
         }
-        if (r != null) {
-            sb.append(" detections=").append(r.starCount())
-                    .append(" rendered=").append(r.renderedStarCount())
-                    .append(" background=").append(String.format(Locale.US, "%.2f", r.backgroundLevel))
-                    .append(" noise=").append(String.format(Locale.US, "%.3f", r.noise))
-                    .append(" threshold=").append(String.format(Locale.US, "%.2f", r.thresholdLevel))
-                    .append(" avgBrightness=").append(String.format(Locale.US, "%.1f", r.averageBrightness))
-                    .append(" maxBrightness=").append(String.format(Locale.US, "%.1f", r.maxBrightness))
-                    .append(" avgSnr=").append(String.format(Locale.US, "%.2f", r.averageSnr))
-                    .append(" edgeFraction=").append(String.format(Locale.US, "%.3f", r.edgeFraction()));
+        if (f != null) {
+            sb.append(" stars=").append(f.stars.size())
+                    .append(" raw=").append(f.rawCount)
+                    .append(" background=").append(String.format(Locale.US, "%.2f", f.background))
+                    .append(" noise=").append(String.format(Locale.US, "%.3f", f.noise))
+                    .append(" threshold=").append(String.format(Locale.US, "%.2f", f.threshold));
+        }
+        if (sol != null) {
+            sb.append(" SOLVED raDeg=").append(String.format(Locale.US, "%.3f", sol.centerRaDeg))
+                    .append(" decDeg=").append(String.format(Locale.US, "%.3f", sol.centerDecDeg))
+                    .append(" fovW=").append(String.format(Locale.US, "%.2f", sol.fovWDeg))
+                    .append(" roll=").append(String.format(Locale.US, "%.1f", sol.rollDeg))
+                    .append(" fPix=").append(String.format(Locale.US, "%.0f", sol.fPix))
+                    .append(" matched=").append(sol.matchDet.length)
+                    .append(" rmsPx=").append(String.format(Locale.US, "%.2f", sol.rmsPx));
+        } else {
+            sb.append(" SOLVED=none");
         }
         Logger.info(sb.toString());
     }
@@ -472,7 +520,8 @@ final class CameraPanel implements StarFieldCamera.Listener {
         Bitmap previous = lastBitmap;
         lastBitmap = image;
         lastInfo = info;
-        lastResult = null;
+        lastField = null;
+        lastSolution = null;
         previewView.setVisibility(View.GONE);
         detectionView.setVisibility(View.VISIBLE);
         detectionView.setImage(image, info.imageWidth, info.imageHeight);
@@ -483,11 +532,15 @@ final class CameraPanel implements StarFieldCamera.Listener {
             previous.recycle();
         }
 
+        // Detect on the worker, then publish the frame and let maybeSolveCurrentField() decide
+        // whether to solve. Detection and the (separately built) solver each call that method on
+        // completion, so the solve fires whenever BOTH are ready regardless of which finishes
+        // first -- snapshotting plateSolver here would strand a frame captured while it loaded.
         final int detGen = panelGeneration;
         detectExecutor.execute(() -> {
-            StarDetector.Result result;
+            StarDetector.StarField field;
             try {
-                result = detector.detect(image);
+                field = detector.detectForSolve(image);
             } catch (Throwable t) {
                 Logger.error("star detection failed", t);
                 activity.runOnUiThread(() -> {
@@ -500,34 +553,160 @@ final class CameraPanel implements StarFieldCamera.Listener {
                 });
                 return;
             }
-            final StarDetector.Result finalResult = result;
+            final StarDetector.StarField finalField = field;
             activity.runOnUiThread(() -> {
                 if (isPanelStale(detGen)) {
                     return; // panel hidden/destroyed during detection; drop the result
                 }
-                lastResult = finalResult;
-                detectionView.setDetections(finalResult.stars);
-                showStats(finalResult, info);
+                lastField = finalField;
+                lastSolution = null;
+                detectionView.setDetections(finalField.stars);
                 setCapturing(false);
+                if (!maybeSolveCurrentField()) {
+                    showStats(finalField, null, info); // solver not ready / too few stars
+                }
             });
         });
     }
 
-    private void showStats(StarDetector.Result r, StarFieldCamera.CaptureInfo info) {
+    /** Build detection arrays and blind-solve a frame. Pure compute; safe off the UI thread. */
+    private PlateSolver.Solution solveField(PlateSolver solver, StarDetector.StarField field,
+                                            StarFieldCamera.CaptureInfo info) {
+        int n = field.stars.size();
+        double[] xs = new double[n];
+        double[] ys = new double[n];
+        double[] pk = new double[n];
+        for (int i = 0; i < n; i++) {
+            StarDetector.Detection d = field.stars.get(i);
+            xs[i] = d.x;
+            ys[i] = d.y;
+            pk[i] = d.peak;
+        }
+        return solver.solve(xs, ys, pk, focalPriorPx(info),
+                info.imageWidth / 2.0, info.imageHeight / 2.0);
+    }
+
+    /**
+     * Solve the current detected frame, once. Called from BOTH detection-complete and
+     * solver-ready (UI thread), so the solve runs as soon as a detected frame and a built
+     * solver coexist -- whichever arrives last triggers it. Idempotent: a {@code solveInFlight}
+     * guard and the {@code lastSolution == null} check prevent a double solve, and the result
+     * is dropped if a newer capture replaced the frame meanwhile. Returns true if it launched.
+     */
+    private boolean maybeSolveCurrentField() {
+        final PlateSolver solver = plateSolver;
+        final StarDetector.StarField field = lastField;
+        final StarFieldCamera.CaptureInfo info = lastInfo;
+        if (solver == null || field == null || info == null || lastSolution != null
+                || solveInFlight || field.stars.size() < 3) {
+            return false;
+        }
+        final int gen = panelGeneration;
+        final int solveGen = ++solveGeneration;
+        solveInFlight = true;
+        statusText.setText(R.string.camera_analyzing);
+        showStats(field, null, info); // shows the "solving" line via the solveInFlight branch
+        detectExecutor.execute(() -> {
+            PlateSolver.Solution sol;
+            try {
+                sol = solveField(solver, field, info);
+            } catch (Throwable t) {
+                Logger.error("plate solve failed", t);
+                sol = null;
+            }
+            final PlateSolver.Solution finalSol = sol;
+            activity.runOnUiThread(() -> {
+                if (solveGen != solveGeneration) {
+                    return; // superseded by a newer solve or a reset; owns no shared state
+                }
+                solveInFlight = false;
+                if (isPanelStale(gen)) {
+                    return; // panel hidden/destroyed
+                }
+                if (lastField != field) {
+                    maybeSolveCurrentField(); // a newer capture arrived mid-solve; solve it now
+                    return;
+                }
+                lastSolution = finalSol;
+                statusText.setText("");
+                if (finalSol != null) {
+                    detectionView.setSolve(finalSol, skyCatalog, field.skyMask,
+                            field.analysisWidth, field.analysisHeight);
+                }
+                showStats(field, finalSol, info);
+            });
+        });
+        return true;
+    }
+
+    /**
+     * Focal length in source-bitmap pixels from the camera's reported horizontal FOV
+     * (sensor width / focal length). Falls back to a typical phone main-camera field if the
+     * device did not report lens geometry, so a solve can still be attempted.
+     */
+    private double focalPriorPx(StarFieldCamera.CaptureInfo info) {
+        double fovH = info.fovDegrees > 0.0 ? info.fovDegrees : 65.0;
+        return info.imageWidth / (2.0 * Math.tan(Math.toRadians(fovH) / 2.0));
+    }
+
+    private void showStats(StarDetector.StarField field, PlateSolver.Solution sol,
+                           StarFieldCamera.CaptureInfo info) {
         StringBuilder sb = new StringBuilder();
         sb.append(activity.getString(R.string.camera_stats_title)).append('\n');
-        sb.append(activity.getString(R.string.camera_stat_detections, r.starCount(), r.renderedStarCount())).append('\n');
-        sb.append(activity.getString(R.string.camera_stat_brightness, r.averageBrightness, r.maxBrightness)).append('\n');
-        sb.append(activity.getString(R.string.camera_stat_noise, r.backgroundLevel, r.noise, r.thresholdLevel)).append('\n');
-        sb.append(activity.getString(R.string.camera_stat_snr, r.averageSnr)).append('\n');
-        sb.append(activity.getString(R.string.camera_stat_edge, r.edgeFraction() * 100.0)).append('\n');
-        sb.append(activity.getString(R.string.camera_stat_capture, formatExposure(info.exposureNanos), info.iso)).append('\n');
-        if (info.fovDegrees > 0.0) {
-            sb.append(activity.getString(R.string.camera_stat_fov, info.fovDegrees, info.focalLengthMm));
+        sb.append(activity.getString(R.string.camera_stat_detections,
+                field.stars.size(), field.rawCount)).append('\n');
+        sb.append(activity.getString(R.string.camera_stat_noise,
+                field.background, field.noise, field.threshold)).append('\n');
+        sb.append(activity.getString(R.string.camera_stat_capture,
+                formatExposure(info.exposureNanos), info.iso)).append('\n');
+        if (sol != null) {
+            double raHours = sol.centerRaDeg / 15.0;
+            sb.append(activity.getString(R.string.camera_solve_center,
+                    (int) raHours, (int) Math.round((raHours - (int) raHours) * 60),
+                    sol.centerDecDeg)).append('\n');
+            sb.append(activity.getString(R.string.camera_solve_field,
+                    sol.fovWDeg, sol.fovHDeg, sol.rollDeg)).append('\n');
+            sb.append(activity.getString(R.string.camera_solve_match,
+                    sol.matchDet.length, sol.rmsPx, sol.fPix)).append('\n');
+            sb.append(activity.getString(R.string.camera_solve_stars, brightMatchNames(sol)));
+        } else if (solveInFlight) {
+            sb.append(activity.getString(R.string.camera_solve_running));
+        } else if (solverLoading || plateSolver == null) {
+            sb.append(activity.getString(R.string.camera_solve_loading));
         } else {
-            sb.append(activity.getString(R.string.camera_stat_fov_unknown));
+            sb.append(activity.getString(R.string.camera_solve_failed));
         }
         statsText.setText(sb.toString());
+    }
+
+    /** Names of the brightest matched stars, to identify the field at a glance. */
+    private String brightMatchNames(PlateSolver.Solution sol) {
+        SkyCatalog cat = skyCatalog;
+        if (cat == null) {
+            return "";
+        }
+        Integer[] order = new Integer[sol.matchStar.length];
+        for (int i = 0; i < order.length; i++) {
+            order[i] = sol.matchStar[i];
+        }
+        java.util.Arrays.sort(order, (a, b) ->
+                Double.compare(cat.stars.get(a).magnitude, cat.stars.get(b).magnitude));
+        StringBuilder names = new StringBuilder();
+        int shown = 0;
+        for (int gi : order) {
+            String nm = cat.stars.get(gi).name;
+            if (nm == null || nm.isEmpty()) {
+                continue;
+            }
+            if (names.length() > 0) {
+                names.append(", ");
+            }
+            names.append(nm);
+            if (++shown >= 5) {
+                break;
+            }
+        }
+        return names.toString();
     }
 
     private void setCapturing(boolean value) {

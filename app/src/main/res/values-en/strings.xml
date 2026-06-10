@@ -421,7 +421,7 @@
     <string name="log_auto_stop_background">App moved to background. Stop command sent.</string>
     <string name="camera_solve_menu">Camera</string>
     <string name="camera_solve_title">Camera Solve</string>
-    <string name="camera_solve_hint">Mount the phone on a tripod aimed at the sky, set a longer exposure, then capture. Detected stars are overlaid and stats appear below to gauge blind-solve viability.</string>
+    <string name="camera_solve_hint">Mount the phone on a tripod aimed at the sky, set a longer exposure, then capture. The app detects stars, masks the foreground and blind-solves the field, overlaying constellation lines and matched stars.</string>
     <string name="camera_permission_rationale">Camera permission is required to photograph the sky.</string>
     <string name="camera_permission_denied">Camera permission denied; cannot capture.</string>
     <string name="camera_unavailable">No back camera available.</string>
@@ -430,7 +430,7 @@
     <string name="camera_manual_supported">Manual exposure supported.</string>
     <string name="camera_capture">Capture</string>
     <string name="camera_capturing">Capturing...</string>
-    <string name="camera_analyzing">Detecting stars...</string>
+    <string name="camera_analyzing">Detecting and solving...</string>
     <string name="camera_exposure_label">Exposure %1$s</string>
     <string name="camera_iso_label">ISO %1$d</string>
     <string name="camera_autofocus">Auto focus</string>
@@ -441,8 +441,8 @@
     <string name="camera_saved">Saved: %1$s</string>
     <string name="camera_save_failed">Save failed: %1$s</string>
     <string name="camera_save_nothing">No capture to save yet.</string>
-    <string name="camera_stats_title">Detection stats</string>
-    <string name="camera_stat_detections">Stars: %1$d (showing %2$d)</string>
+    <string name="camera_stats_title">Detection &amp; solve</string>
+    <string name="camera_stat_detections">Stars %1$d (candidates %2$d)</string>
     <string name="camera_stat_brightness">Avg brightness %1$.0f, peak %2$.0f</string>
     <string name="camera_stat_noise">Bg %1$.1f, noise %2$.2f, threshold %3$.1f</string>
     <string name="camera_stat_snr">Avg SNR %1$.1f</string>
@@ -450,5 +450,12 @@
     <string name="camera_stat_capture">Exp %1$s, ISO %2$d</string>
     <string name="camera_stat_fov">FOV ~%1$.1f° (focal %2$.1fmm)</string>
     <string name="camera_stat_fov_unknown">FOV unknown (camera params missing)</string>
+    <string name="camera_solve_center">Center RA %1$dh%2$02dm, Dec %3$+.1f°</string>
+    <string name="camera_solve_field">FOV %1$.1f×%2$.1f°, roll %3$.0f°</string>
+    <string name="camera_solve_match">Matched %1$d stars, rms %2$.1fpx, focal %3$.0fpx</string>
+    <string name="camera_solve_stars">Field: %1$s</string>
+    <string name="camera_solve_running">Solving field…</string>
+    <string name="camera_solve_loading">Catalog loading; re-capture shortly to solve.</string>
+    <string name="camera_solve_failed">Could not solve this frame (too few stars or too much foreground).</string>
     <string name="camera_detect_failed">Star detection failed: %1$s</string>
 </resources>
