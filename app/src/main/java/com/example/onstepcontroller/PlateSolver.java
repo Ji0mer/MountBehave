@@ -136,6 +136,40 @@ final class PlateSolver {
         this(stars, 3.2, 3.0, 75.0);
     }
 
+    // Stop the blind triangle scan once a pose matches this many bright stars at seed
+    // tolerance (cannot happen by chance; further triples only re-find the same pose).
+    private static final int EARLY_STOP_MATCHES = 12;
+
+    /**
+     * Warm start: re-verify a previous solution against a new frame and refine it, skipping
+     * the blind triangle search entirely. Consecutive camera frames (tracking, the polar
+     * alignment's bolt-turn refresh shots) move the attitude only a little, so the previous
+     * pose usually still matches. The seed tolerance is doubled to absorb up to ~2 deg of
+     * motion (refine re-tightens it); returns null when the hint no longer fits, in which
+     * case the caller falls back to a blind {@link #solve}.
+     */
+    Solution refineFromHint(Solution hint, double[] xs, double[] ys, double[] peak,
+                            double cx, double cy) {
+        if (hint == null) {
+            return null;
+        }
+        int n = xs.length;
+        Integer[] ord = new Integer[n];
+        for (int i = 0; i < n; i++) {
+            ord[i] = i;
+        }
+        java.util.Arrays.sort(ord, (a, b) -> Double.compare(peak[b], peak[a]));
+        int nv = Math.min(40, n);
+        double[] dx = new double[nv];
+        double[] dy = new double[nv];
+        for (int i = 0; i < nv; i++) {
+            dx[i] = xs[ord[i]];
+            dy[i] = ys[ord[i]];
+        }
+        double seedTolPx = 2 * 0.012 * Math.hypot(cx * 2, cy * 2);
+        return refine(hint.r, hint.fPix, dx, dy, cx, cy, seedTolPx, 8, 6.0);
+    }
+
     private void buildTriangleIndex() {
         int nb = brightIdx.length;
         double[][] bvec = new double[nb][];
@@ -288,6 +322,7 @@ final class PlateSolver {
         double bestF = 0;
         int bestCount = 0;
 
+        search:
         for (int a = 0; a < ns; a++) {
             for (int b = a + 1; b < ns; b++) {
                 for (int c = b + 1; c < ns; c++) {
@@ -331,6 +366,12 @@ final class PlateSolver {
                             bestR = R;
                             bestF = fEst;
                         }
+                    }
+                    // A pose that 12+ bright stars agree with at seed tolerance cannot be a
+                    // chance alignment; the remaining triples would only re-find it, so stop
+                    // scanning and go straight to refine. Big speedup on solvable frames.
+                    if (bestCount >= EARLY_STOP_MATCHES) {
+                        break search;
                     }
                 }
             }

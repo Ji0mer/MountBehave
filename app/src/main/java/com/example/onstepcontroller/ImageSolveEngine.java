@@ -116,6 +116,36 @@ final class ImageSolveEngine {
     }
 
     /**
+     * Solve with a warm start: first try to re-verify {@code hint} (a previous solve of the
+     * same camera) against this frame, which skips the blind triangle search when the
+     * attitude moved only a little -- the common case for consecutive live captures and the
+     * polar-alignment adjustment refreshes. Falls back to the blind solve when the hint no
+     * longer fits, so a stale hint costs one cheap verify and can never change the result.
+     */
+    PlateSolver.Solution solve(StarDetector.StarField field, SolveInput input,
+                               PlateSolver.Solution hint) {
+        PlateSolver ps = solver;
+        if (hint != null && ps != null && field != null && field.stars.size() >= 3) {
+            int n = field.stars.size();
+            double[] xs = new double[n];
+            double[] ys = new double[n];
+            double[] pk = new double[n];
+            for (int i = 0; i < n; i++) {
+                StarDetector.Detection d = field.stars.get(i);
+                xs[i] = d.x;
+                ys[i] = d.y;
+                pk[i] = d.peak;
+            }
+            PlateSolver.Solution s = ps.refineFromHint(hint, xs, ys, pk,
+                    field.sourceWidth / 2.0, field.sourceHeight / 2.0);
+            if (s != null) {
+                return s;
+            }
+        }
+        return solve(field, input);
+    }
+
+    /**
      * Blind-solve a detected frame. Returns null if the solver is not ready, the frame has too
      * few stars, or no confident solution is found. Pure compute; safe off the UI thread.
      */

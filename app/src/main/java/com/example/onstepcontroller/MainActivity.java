@@ -101,6 +101,13 @@ public final class MainActivity extends Activity {
     private static final String PREFERRED_PIER_SIDE_QUERY = ":GX96#";
     private static final String PREFERRED_PIER_SIDE_SET_PREFIX = ":SX96,";
     private static final int PREFERRED_PIER_SIDE_READ_TIMEOUT_MS = 600;
+    // Camera polar-alignment RA rotation: poll :GR# while moving until the requested angle
+    // is covered, then stop. Timeout caps a slow/stalled axis; settle lets vibration damp
+    // before the next shot.
+    private static final long RA_ROTATION_POLL_MS = 400;
+    private static final long RA_ROTATION_TIMEOUT_MS = 60_000;
+    private static final long RA_ROTATION_SETTLE_MS = 1_500;
+    private static final double RA_ROTATION_MIN_MOTION_DEG = 0.5;
     private static final int SIDE_MENU_EXPANDED_WIDTH_DP = 148;
     private static final int SIDE_MENU_COLLAPSED_SIZE_DP = 56;
     private static final int SIDE_MENU_MARGIN_START_DP = 8;
@@ -151,6 +158,18 @@ public final class MainActivity extends Activity {
     private final OnStepClient client = new OnStepClient();
     private final AtomicInteger connectionGeneration = new AtomicInteger();
     private final AtomicInteger manualMoveGeneration = new AtomicInteger();
+    // Bumped to cancel an in-flight camera polar-alignment RA rotation (emergency stop,
+    // disconnect, or the camera panel cancelling its sequence).
+    private final AtomicInteger raRotationGeneration = new AtomicInteger();
+    // Dual-axis tracking paused for an auto polar-alignment sequence, to be restored when
+    // the sequence ends (unless an emergency stop / disconnect decided otherwise).
+    private boolean autoPolarPausedDualAxisTracking;
+    private TrackingRate autoPolarPausedTrackingRate;
+    // True while the camera auto polar sequence reserves the mount: any motion commanded
+    // between its shots (GOTO, manual move, tracking changes, park) would break the
+    // only-RA-rotation assumption, so those entries refuse while this is set. Stops are
+    // always allowed.
+    private boolean autoPolarSequenceActive;
     private static volatile SSLContext relaxedJplSslContext;
     private final Runnable skyClockRunnable = new Runnable() {
         @Override
@@ -529,7 +548,7 @@ public final class MainActivity extends Activity {
         root.addView(skyPage, matchWrap());
 
         cameraPanel = new CameraPanel(this, CAMERA_PERMISSION_REQUEST, PICK_IMAGE_REQUEST,
-                () -> observerState);
+                () -> observerState, new CameraRaRotator());
         cameraPage = cameraPanel.view();
         cameraPage.setVisibility(View.GONE);
         root.addView(cameraPage, matchWrap());
@@ -2786,6 +2805,7 @@ public final class MainActivity extends Activity {
     private void disconnect() {
         logUserAction("tap disconnect host=" + (connectedHost == null ? "<none>" : connectedHost)
                 + " port=" + connectedPort);
+        cancelCameraAutoPolar();
         dismissAlignmentPierSideGotoDialog();
         clearPendingPreferredPierSideRestore("user-disconnect");
         preferredPierSideCommandsSupported = null;
@@ -2847,6 +2867,9 @@ public final class MainActivity extends Activity {
 
     private void startMove(Direction direction) {
         if (!connected || busy || parked || activeDirection == direction) {
+            return;
+        }
+        if (blockedByAutoPolar("manual-move " + direction.name())) {
             return;
         }
         resetSkyTimeToNowForMountAction("manual-move");
@@ -2912,6 +2935,254 @@ public final class MainActivity extends Activity {
                 && activeDirection == direction;
     }
 
+    /**
+     * RA-axis rotation for the camera page's automatic polar alignment. Rotates with a timed
+     * {@code :Mw#} move polled against {@code :GR#} -- never a GOTO, which could flip the pier
+     * (any Dec motion between shots breaks the polar-axis recovery). The exact angle does not
+     * matter (the axis is recovered from the solves themselves), only that enough rotation
+     * happened, so stopping a few degrees late is fine.
+     */
+    private final class CameraRaRotator implements CameraPanel.RaRotator {
+        @Override
+        public String blockedReason() {
+            if (!connected) {
+                return getString(R.string.camera_polar_auto_blocked_disconnected);
+            }
+            if (parked) {
+                return getString(R.string.camera_polar_auto_blocked_parked);
+            }
+            if (isAltAzMountMode()) {
+                return getString(R.string.camera_polar_auto_blocked_altaz);
+            }
+            if (busy || gotoInProgress || activeDirection != null) {
+                return getString(R.string.camera_polar_auto_blocked_busy);
+            }
+            return null;
+        }
+
+        @Override
+        public void onSequenceStarted(Callback callback) {
+            beginAutoPolarSequence(callback);
+        }
+
+        @Override
+        public void rotateRa(double degrees, Callback callback) {
+            startCameraRaRotation(degrees, callback);
+        }
+
+        @Override
+        public void onSequenceFinished() {
+            restoreTrackingAfterAutoPolar();
+        }
+
+        @Override
+        public void cancelRotation() {
+            raRotationGeneration.incrementAndGet();
+        }
+    }
+
+    /**
+     * Reserve the mount for the auto polar sequence and quiet the Dec axis. Dual-axis
+     * (pointing-model) tracking drives the Dec axis between shots, which breaks the
+     * measurement's only-RA-rotation assumption -- so pause tracking for the sequence and
+     * only report ready once {@code :Td#} was actually sent. Plain single-axis tracking is
+     * left running: it rotates the same RA axis the measurement recovers, so it does not
+     * pollute the result.
+     */
+    private void beginAutoPolarSequence(CameraPanel.RaRotator.Callback callback) {
+        autoPolarSequenceActive = true;
+        autoPolarPausedDualAxisTracking = false;
+        if (!connected || !trackingEnabled || !trackingUsingDualAxis) {
+            callback.onDone(0);
+            return;
+        }
+        autoPolarPausedDualAxisTracking = true;
+        autoPolarPausedTrackingRate = selectedTrackingRate;
+        trackingEnabled = false;
+        trackingUsingDualAxis = false;
+        appendLog("TX " + OnStepCommand.TRACK_DISABLE.command);
+        Logger.info("AUTO-POLAR pausing dual-axis tracking for measurement");
+        updateTrackingViews();
+        int generation = connectionGeneration.get();
+        ioExecutor.execute(() -> {
+            if (!isConnectionGenerationCurrent(generation)) {
+                runOnUiThread(() -> callback.onError(
+                        getString(R.string.camera_polar_auto_cancelled)));
+                return;
+            }
+            try {
+                client.sendNoReply(OnStepCommand.TRACK_DISABLE.command);
+                runOnUiThread(() -> callback.onDone(0));
+            } catch (IOException ex) {
+                markTransportFault();
+                runOnUiThread(() -> {
+                    handleCommandFailure(ex);
+                    callback.onError(getString(
+                            R.string.camera_polar_auto_pause_tracking_failed, safeMessage(ex)));
+                });
+            }
+        });
+    }
+
+    private void restoreTrackingAfterAutoPolar() {
+        autoPolarSequenceActive = false; // release the mount on every sequence exit
+        if (!autoPolarPausedDualAxisTracking) {
+            return;
+        }
+        autoPolarPausedDualAxisTracking = false;
+        TrackingRate rate = autoPolarPausedTrackingRate != null
+                ? autoPolarPausedTrackingRate : selectedTrackingRate;
+        autoPolarPausedTrackingRate = null;
+        if (!connected || parked || trackingStoppedByEmergencyStop) {
+            // An emergency stop / disconnect / park decided the tracking state; don't fight it.
+            Logger.info("AUTO-POLAR dual-axis tracking restore skipped");
+            return;
+        }
+        trackingEnabled = true;
+        trackingUsingDualAxis = true;
+        appendLog("TX " + trackingStartCommandLog(rate, true));
+        Logger.info("AUTO-POLAR restored dual-axis tracking after measurement");
+        int generation = connectionGeneration.get();
+        ioExecutor.execute(() -> {
+            if (!isConnectionGenerationCurrent(generation)) {
+                return;
+            }
+            try {
+                sendTrackingStartCommandsNoReply(rate, true);
+            } catch (IOException ex) {
+                markTransportFault();
+                runOnUiThread(() -> handleCommandFailure(ex));
+            }
+        });
+        updateTrackingViews();
+    }
+
+    /** Runs on the UI thread; the move/poll/stop sequence runs on ioExecutor. */
+    private void startCameraRaRotation(double degrees, CameraPanel.RaRotator.Callback callback) {
+        String blocked = new CameraRaRotator().blockedReason();
+        if (blocked != null) {
+            callback.onError(blocked);
+            return;
+        }
+        final int rotationGeneration = raRotationGeneration.incrementAndGet();
+        final int generation = connectionGeneration.get();
+        final String restoreRateCommand = getRateCommand(); // user's selected manual rate
+        appendLog("TX " + OnStepCommand.RATE_HALF_MAX.command);
+        appendLog("TX " + OnStepCommand.MOVE_WEST.command);
+        Logger.info("AUTO-POLAR RA rotation start targetDeg="
+                + String.format(Locale.US, "%.1f", degrees));
+        ioExecutor.execute(() -> {
+            boolean moving = false;
+            try {
+                // A cancel/emergency stop can land between rotateRa() and this task actually
+                // running -- never start moving in that case. Re-checked after the RA read
+                // too, since the query takes time. Stop always wins.
+                if (raRotationGeneration.get() != rotationGeneration
+                        || !isConnectionGenerationCurrent(generation)) {
+                    runOnUiThread(() -> callback.onError(
+                            getString(R.string.camera_polar_auto_cancelled)));
+                    return;
+                }
+                double startRaHours = parseRightAscension(client.query(":GR#"));
+                if (raRotationGeneration.get() != rotationGeneration
+                        || !isConnectionGenerationCurrent(generation)) {
+                    runOnUiThread(() -> callback.onError(
+                            getString(R.string.camera_polar_auto_cancelled)));
+                    return;
+                }
+                client.sendNoReply(OnStepCommand.RATE_HALF_MAX.command);
+                client.sendNoReply(OnStepCommand.MOVE_WEST.command);
+                moving = true;
+                long deadline = System.currentTimeMillis() + RA_ROTATION_TIMEOUT_MS;
+                boolean cancelled = false;
+                while (System.currentTimeMillis() < deadline) {
+                    Thread.sleep(RA_ROTATION_POLL_MS);
+                    if (raRotationGeneration.get() != rotationGeneration
+                            || !isConnectionGenerationCurrent(generation)) {
+                        cancelled = true;
+                        break;
+                    }
+                    double raHours = parseRightAscension(client.query(":GR#"));
+                    if (Math.abs(wrapSignedHours(raHours - startRaHours)) * 15.0 >= degrees) {
+                        break;
+                    }
+                }
+                sendMotionStopCommandsWithRetry(new String[]{OnStepCommand.STOP_WEST.command});
+                moving = false;
+                client.sendNoReply(restoreRateCommand);
+                if (cancelled) {
+                    Logger.info("AUTO-POLAR RA rotation cancelled");
+                    runOnUiThread(() -> callback.onError(
+                            getString(R.string.camera_polar_auto_cancelled)));
+                    return;
+                }
+                Thread.sleep(RA_ROTATION_SETTLE_MS);
+                double endRaHours = parseRightAscension(client.query(":GR#"));
+                double actualDegrees = Math.abs(wrapSignedHours(endRaHours - startRaHours)) * 15.0;
+                Logger.info("AUTO-POLAR RA rotation done actualDeg="
+                        + String.format(Locale.US, "%.2f", actualDegrees));
+                if (actualDegrees < RA_ROTATION_MIN_MOTION_DEG) {
+                    runOnUiThread(() -> callback.onError(
+                            getString(R.string.camera_polar_auto_no_motion)));
+                } else {
+                    runOnUiThread(() -> callback.onDone(actualDegrees));
+                }
+            } catch (Exception ex) {
+                if (moving) {
+                    try {
+                        sendMotionStopCommandsWithRetry(
+                                new String[]{OnStepCommand.STOP_WEST.command});
+                        client.sendNoReply(restoreRateCommand);
+                    } catch (IOException stopEx) {
+                        Logger.error("AUTO-POLAR stop after rotation failure also failed", stopEx);
+                    }
+                }
+                if (ex instanceof IOException) {
+                    markTransportFault();
+                }
+                if (ex instanceof InterruptedException) {
+                    Thread.currentThread().interrupt();
+                }
+                Logger.error("AUTO-POLAR RA rotation failed", ex);
+                runOnUiThread(() -> callback.onError(getString(
+                        R.string.camera_polar_auto_rotate_failed, safeMessage(ex))));
+            }
+        });
+    }
+
+    /**
+     * Refuse a mount-motion entry while the auto polar sequence owns the mount. Any motion
+     * between its shots would break the only-RA-rotation assumption and corrupt the result.
+     * Stops (emergency stop, cancel GOTO, direction release) are never gated.
+     */
+    private boolean blockedByAutoPolar(String action) {
+        if (!autoPolarSequenceActive) {
+            return false;
+        }
+        Logger.warn("blocked by auto-polar sequence: " + action);
+        setStatus(getString(R.string.status_blocked_auto_polar));
+        return true;
+    }
+
+    /** Abort the camera page's auto polar-alignment sequence and any RA rotation in flight. */
+    private void cancelCameraAutoPolar() {
+        raRotationGeneration.incrementAndGet();
+        if (cameraPanel != null) {
+            cameraPanel.cancelAutoPolarAlignment(getString(R.string.camera_polar_auto_cancelled));
+        }
+    }
+
+    /** Wrap an RA difference in hours to (-12, 12]. */
+    private static double wrapSignedHours(double hours) {
+        double h = hours % 24.0;
+        if (h > 12.0) {
+            h -= 24.0;
+        } else if (h <= -12.0) {
+            h += 24.0;
+        }
+        return h;
+    }
+
     private void enqueueStop(String logMessage) {
         enqueueCommands(new OnStepCommand[]{OnStepCommand.STOP_ALL}, logMessage, true);
     }
@@ -2970,6 +3241,9 @@ public final class MainActivity extends Activity {
         trackingEnabled = false;
         trackingUsingDualAxis = false;
         trackingStoppedByEmergencyStop = connected;
+        // After the emergency-stop flags are set, so the sequence teardown cannot re-enable
+        // the dual-axis tracking it paused. Stop always wins.
+        cancelCameraAutoPolar();
         lastEmergencyStopAtMillis = System.currentTimeMillis();
         setGotoStatus(getString(R.string.goto_status_cancelled));
         setSafetyStatus(getString(R.string.safety_status_emergency_stop));
@@ -3526,6 +3800,10 @@ public final class MainActivity extends Activity {
             String temporaryPreferredPierSide
     ) {
         if (!connected || busy || target == null) {
+            return;
+        }
+        if (blockedByAutoPolar("goto " + targetLog(target))) {
+            setGotoStatus(getString(R.string.status_blocked_auto_polar));
             return;
         }
         if (parked) {
@@ -4202,6 +4480,9 @@ public final class MainActivity extends Activity {
         if (!connected || busy) {
             return;
         }
+        if (blockedByAutoPolar("park")) {
+            return;
+        }
         logUserAction("tap park");
         List<MountCommand> commands = new ArrayList<>();
         commands.add(MountCommand.withReply(OnStepCommand.PARK.command));
@@ -4237,6 +4518,9 @@ public final class MainActivity extends Activity {
 
     private void unparkMount() {
         if (!connected || busy) {
+            return;
+        }
+        if (blockedByAutoPolar("unpark")) {
             return;
         }
         logUserAction("tap unpark");
@@ -4358,6 +4642,11 @@ public final class MainActivity extends Activity {
             updateTrackingViews();
             return;
         }
+        if (blockedByAutoPolar("tracking-rate " + rate.name())) {
+            // Also keeps selectedTrackingRate stable, so the paused dual-axis tracking is
+            // restored at the rate it was paused with.
+            return;
+        }
         logUserAction("select tracking-rate rate=" + rate.name());
         selectedTrackingRate = rate;
         updateTrackingViews();
@@ -4383,6 +4672,9 @@ public final class MainActivity extends Activity {
 
     private void toggleTracking() {
         if (!connected || busy || parked) {
+            return;
+        }
+        if (blockedByAutoPolar("tracking-toggle")) {
             return;
         }
 
@@ -8881,6 +9173,9 @@ public final class MainActivity extends Activity {
         connected = false;
         busy = false;
         connectionGeneration.incrementAndGet();
+        // After connected=false / generation bump, so the sequence teardown neither sends
+        // tracking-restore commands into a dead socket nor leaves the rotation loop running.
+        cancelCameraAutoPolar();
         connectedHost = null;
         connectedPort = DEFAULT_PORT;
         mountPointingFailureCount = 0;

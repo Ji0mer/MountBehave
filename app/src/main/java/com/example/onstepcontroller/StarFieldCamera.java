@@ -214,12 +214,17 @@ final class StarFieldCamera {
      * Take one still. If {@code manual} and the device supports it, applies exposure/ISO.
      * If {@code autoFocus} is false and the device supports manual focus, focuses at
      * {@code focusDiopters} (0 = infinity); otherwise uses continuous autofocus.
+     *
+     * @return false when the camera is not ready and NO callback will fire (so callers
+     *         waiting on a result, like the auto polar sequence, can fail immediately);
+     *         true when the capture was submitted (success or failure arrives via the
+     *         listener callbacks).
      */
-    void capture(boolean manual, long exposureNanos, int iso, boolean autoFocus, float focusDiopters) {
+    boolean capture(boolean manual, long exposureNanos, int iso, boolean autoFocus, float focusDiopters) {
         CameraDevice device = cameraDevice;
         CameraCaptureSession captureSession = session;
         if (device == null || captureSession == null || imageReader == null) {
-            return;
+            return false;
         }
         pendingManual = manual && capabilities != null && capabilities.manualSensor;
         pendingExposureNanos = exposureNanos;
@@ -287,6 +292,7 @@ final class StarFieldCamera {
         } catch (CameraAccessException | IllegalStateException ex) {
             fail(gen, context.getString(R.string.camera_open_failed, safe(ex)));
         }
+        return true;
     }
 
     /** True if this generation has been superseded by a close()/open(), or the camera is closed. */

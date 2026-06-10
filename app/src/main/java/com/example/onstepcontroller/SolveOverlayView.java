@@ -30,6 +30,8 @@ final class SolveOverlayView extends View {
     private final Paint matchPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint labelPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint centerPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint polarPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint polarTextPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
 
     private Bitmap image;
     private List<StarDetector.Detection> detections = new ArrayList<>();
@@ -39,6 +41,14 @@ final class SolveOverlayView extends View {
     private PlateSolver.Solution solution;
     private SkyCatalog catalog;
     private Bitmap foregroundDim; // semi-transparent overlay marking masked (non-sky) pixels
+
+    // Polar-alignment correction overlay: the mount axis (target circle), the visible
+    // celestial pole (cross), an arrow from pole to axis and the error-angle label. The
+    // user closes the gap by turning the alt/az bolts. NaN axis RA = no correction shown.
+    private double polarAxisRaDeg = Double.NaN;
+    private double polarAxisDecDeg;
+    private double polarPoleDecDeg;
+    private String polarLabel;
 
     SolveOverlayView(Context context) {
         super(context);
@@ -71,6 +81,12 @@ final class SolveOverlayView extends View {
         centerPaint.setStyle(Paint.Style.STROKE);
         centerPaint.setStrokeWidth(dp(1.8f));
         centerPaint.setColor(Color.rgb(255, 90, 90));
+        polarPaint.setStyle(Paint.Style.STROKE);
+        polarPaint.setStrokeWidth(dp(2.2f));
+        polarPaint.setColor(Color.rgb(255, 190, 80));
+        polarTextPaint.setColor(Color.rgb(255, 210, 140));
+        polarTextPaint.setTextSize(dp(13));
+        polarTextPaint.setFakeBoldText(true);
     }
 
     /** Set the captured image (source coordinates are this bitmap's pixel grid). */
@@ -78,6 +94,14 @@ final class SolveOverlayView extends View {
         this.image = image;
         this.sourceWidth = sourceWidth;
         this.sourceHeight = sourceHeight;
+        // Everything derived from the previous frame's solve is invalid on a new frame;
+        // clear it so a failed solve cannot leave the old sky lines / polar arrow overlaid
+        // on the new image. The caller re-sets them when this frame's solve succeeds.
+        solution = null;
+        catalog = null;
+        polarAxisRaDeg = Double.NaN;
+        polarLabel = null;
+        recycleDim();
         invalidate();
     }
 
@@ -105,11 +129,32 @@ final class SolveOverlayView extends View {
         invalidate();
     }
 
+    /**
+     * Show the polar-alignment correction on top of the solve overlay: the mount axis at
+     * {@code axisRaDeg}/{@code axisDecDeg} (target circle), the visible pole at
+     * {@code poleDecDeg} (cross), an arrow between them and the {@code label} error angle.
+     */
+    void setPolarCorrection(double axisRaDeg, double axisDecDeg, double poleDecDeg, String label) {
+        this.polarAxisRaDeg = axisRaDeg;
+        this.polarAxisDecDeg = axisDecDeg;
+        this.polarPoleDecDeg = poleDecDeg;
+        this.polarLabel = label;
+        invalidate();
+    }
+
+    void clearPolarCorrection() {
+        polarAxisRaDeg = Double.NaN;
+        polarLabel = null;
+        invalidate();
+    }
+
     void clear() {
         image = null;
         detections = new ArrayList<>();
         solution = null;
         catalog = null;
+        polarAxisRaDeg = Double.NaN;
+        polarLabel = null;
         recycleDim();
         invalidate();
     }
@@ -215,6 +260,78 @@ final class SolveOverlayView extends View {
         float ccy = offsetY + (float) solution.cy * scale;
         canvas.drawLine(ccx - dp(10), ccy, ccx + dp(10), ccy, centerPaint);
         canvas.drawLine(ccx, ccy - dp(10), ccx, ccy + dp(10), centerPaint);
+
+        if (!Double.isNaN(polarAxisRaDeg)) {
+            drawPolarCorrection(canvas, offsetX, offsetY, scale, dest);
+        }
+    }
+
+    /**
+     * NINA/SharpCap-style correction: the mount axis as a fixed target circle, the celestial
+     * pole as a cross that moves with the star field, an arrow showing how the pole marker
+     * must travel into the target, and the error angle at the arrow's midpoint. Clipped to
+     * the photo rectangle so off-frame geometry degrades gracefully.
+     */
+    private void drawPolarCorrection(Canvas canvas, float offsetX, float offsetY, float scale,
+                                     android.graphics.RectF dest) {
+        double[] axis = solution.project(polarAxisRaDeg, polarAxisDecDeg);
+        double[] pole = solution.project(0.0, polarPoleDecDeg);
+        if (axis[2] <= 0 || pole[2] <= 0) {
+            return; // behind the camera; the text readout still carries the numbers
+        }
+        float ax = offsetX + (float) axis[0] * scale;
+        float ay = offsetY + (float) axis[1] * scale;
+        float px = offsetX + (float) pole[0] * scale;
+        float py = offsetY + (float) pole[1] * scale;
+        canvas.save();
+        canvas.clipRect(dest);
+
+        // Mount axis: double target circle.
+        canvas.drawCircle(ax, ay, dp(12), polarPaint);
+        canvas.drawCircle(ax, ay, dp(3), polarPaint);
+        canvas.drawText(getContext().getString(R.string.camera_polar_axis_label),
+                ax + dp(14), ay - dp(6), polarTextPaint);
+
+        // Celestial pole: cross.
+        canvas.drawLine(px - dp(9), py, px + dp(9), py, polarPaint);
+        canvas.drawLine(px, py - dp(9), px, py + dp(9), polarPaint);
+        canvas.drawText(getContext().getString(R.string.camera_polar_pole_label),
+                px + dp(11), py + dp(14), polarTextPaint);
+
+        // Arrow pole -> axis (the direction the pole marker must move). Trims scale down
+        // with the gap so the arrow stays visible even for small errors; once the markers
+        // essentially coincide the arrow is dropped (aligned).
+        float dx = ax - px, dy = ay - py;
+        float len = (float) Math.hypot(dx, dy);
+        float labelX;
+        float labelY;
+        if (len > dp(6)) {
+            float ux = dx / len, uy = dy / len;
+            float trimStart = Math.min(dp(12), len * 0.30f);
+            float trimEnd = Math.min(dp(15), len * 0.35f);
+            float sx = px + ux * trimStart, sy = py + uy * trimStart;
+            float ex = ax - ux * trimEnd, ey = ay - uy * trimEnd;
+            canvas.drawLine(sx, sy, ex, ey, polarPaint);
+            float head = Math.min(dp(7), len * 0.25f);
+            double ang = Math.atan2(ey - sy, ex - sx);
+            canvas.drawLine(ex, ey,
+                    ex - head * (float) Math.cos(ang - 0.5), ey - head * (float) Math.sin(ang - 0.5),
+                    polarPaint);
+            canvas.drawLine(ex, ey,
+                    ex - head * (float) Math.cos(ang + 0.5), ey - head * (float) Math.sin(ang + 0.5),
+                    polarPaint);
+            // Error label beside the arrow midpoint, offset perpendicular to it so it does
+            // not collide with the axis/pole labels along the line.
+            labelX = (ax + px) * 0.5f - uy * dp(16);
+            labelY = (ay + py) * 0.5f + ux * dp(16);
+        } else {
+            labelX = ax + dp(16);
+            labelY = ay + dp(24);
+        }
+        if (polarLabel != null && !polarLabel.isEmpty()) {
+            canvas.drawText(polarLabel, labelX, labelY, polarTextPaint);
+        }
+        canvas.restore();
     }
 
     private float dp(float value) {

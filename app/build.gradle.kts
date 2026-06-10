@@ -10,7 +10,9 @@ android {
         applicationId = "com.example.onstepcontroller"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
+        // versionCode keeps counting from the MountBehave era (last release was 7): the
+        // applicationId is unchanged, so a lower code would break upgrades for testers.
+        versionCode = 8
         versionName = "0.0.1"
     }
 

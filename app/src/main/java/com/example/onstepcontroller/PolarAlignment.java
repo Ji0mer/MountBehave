@@ -91,7 +91,17 @@ final class PolarAlignment {
             return null; // shots essentially identical: no usable rotation
         }
         double[] axis = {axisSum[0] / norm, axisSum[1] / norm, axisSum[2] / norm};
+        return resultFromAxis(axis, latitudeDeg, longitudeDeg, epochMillis, shots.size());
+    }
 
+    /**
+     * Build a Result from a known polar-axis direction (unit vector, celestial frame). Also
+     * used by the live adjustment phase, where the axis is held fixed in the camera frame
+     * and re-expressed in celestial coordinates through each new solve.
+     */
+    static Result resultFromAxis(double[] axis, double latitudeDeg, double longitudeDeg,
+                                 long epochMillis, int shotsUsed) {
+        double poleSign = latitudeDeg >= 0 ? 1.0 : -1.0;
         double axisDec = Math.toDegrees(Math.asin(clamp(axis[2], -1, 1)));
         double axisRa = Math.toDegrees(Math.atan2(axis[1], axis[0]));
         if (axisRa < 0) {
@@ -113,7 +123,35 @@ final class PolarAlignment {
         // opposite compass way), keeping the east/west adjustment hint correct.
         double azError = wrapSigned(altAz[1] - poleAz) * Math.cos(Math.toRadians(altAz[0])) * poleSign;
 
-        return new Result(axisRa, axisDec, polarError, altError, azError, shots.size());
+        return new Result(axisRa, axisDec, polarError, altError, azError, shotsUsed);
+    }
+
+    // --- vector helpers shared with the camera panel's adjustment phase ---
+
+    /** Unit vector of an RA/Dec direction (celestial XYZ, z toward +90 dec). */
+    static double[] unitVector(double raDeg, double decDeg) {
+        double ra = Math.toRadians(raDeg);
+        double dec = Math.toRadians(decDeg);
+        return new double[]{
+                Math.cos(dec) * Math.cos(ra),
+                Math.cos(dec) * Math.sin(ra),
+                Math.sin(dec)};
+    }
+
+    /** m · v (e.g. celestial->camera with a solve's rotation). */
+    static double[] apply(double[][] m, double[] v) {
+        return new double[]{
+                m[0][0] * v[0] + m[0][1] * v[1] + m[0][2] * v[2],
+                m[1][0] * v[0] + m[1][1] * v[1] + m[1][2] * v[2],
+                m[2][0] * v[0] + m[2][1] * v[1] + m[2][2] * v[2]};
+    }
+
+    /** mᵀ · v (camera->celestial for a rotation stored as celestial->camera). */
+    static double[] applyTranspose(double[][] m, double[] v) {
+        return new double[]{
+                m[0][0] * v[0] + m[1][0] * v[1] + m[2][0] * v[2],
+                m[0][1] * v[0] + m[1][1] * v[1] + m[2][1] * v[2],
+                m[0][2] * v[0] + m[1][2] * v[1] + m[2][2] * v[2]};
     }
 
     // --- coordinate helpers (mirroring SkyChartView's transforms) ---

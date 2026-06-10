@@ -12,12 +12,16 @@ import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.graphics.Matrix;
 import android.graphics.SurfaceTexture;
+import android.graphics.drawable.GradientDrawable;
 import android.media.ExifInterface;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Environment;
 import android.provider.MediaStore;
+import android.text.Editable;
 import android.text.InputType;
+import android.text.TextWatcher;
+import android.view.Gravity;
 import android.view.TextureView;
 import android.view.View;
 import android.view.ViewGroup;
@@ -60,11 +64,45 @@ final class CameraPanel implements StarFieldCamera.Listener {
         ObserverState current();
     }
 
+    /**
+     * Mount-side RA-axis rotation for the automatic polar-alignment sequence (phase 4).
+     * Implemented by MainActivity, which owns the OnStep connection and its safety gates.
+     * The implementation must rotate ONLY the RA motor (timed move, never a GOTO -- a GOTO
+     * could flip the pier, and any Dec motion between shots breaks the axis recovery).
+     */
+    interface RaRotator {
+        /** Null when a rotation may start now, else a user-facing reason it is blocked. */
+        String blockedReason();
+
+        /**
+         * The measurement sequence is starting: reserve the mount (refuse GOTO/manual
+         * motion/tracking changes) and pause anything that could move the Dec axis between
+         * shots (e.g. dual-axis model tracking). Reports via {@code callback}: onDone means
+         * the mount is quiet and the first shot may start; onError aborts the sequence.
+         */
+        void onSequenceStarted(Callback callback);
+
+        /** Rotate the RA axis by roughly {@code degrees} (best effort), then report once. */
+        void rotateRa(double degrees, Callback callback);
+
+        /** The sequence ended (done/failed/cancelled): restore what onSequenceStarted paused. */
+        void onSequenceFinished();
+
+        /** Stop an in-flight rotation; a late callback after this is ignored by the panel. */
+        void cancelRotation();
+
+        interface Callback {
+            void onDone(double actualDegrees);
+
+            void onError(String message);
+        }
+    }
+
     private static final long DEFAULT_EXPOSURE_NANOS = 1_000_000_000L; // 1 s
     private static final int DEFAULT_ISO = 800;
     private static final int EXPOSURE_STEPS = 1000;
     // Allow long exposures up to the device limit; many phones cap well under this.
-    private static final long EXPOSURE_CEILING_NANOS = 8_000_000_000L; // 8 s
+    private static final long EXPOSURE_CEILING_NANOS = 30_000_000_000L; // 30 s
 
     // Bound the decoded bitmap for imported photos, matching the camera capture path; star
     // detection downscales again internally, so this only caps memory.
@@ -76,10 +114,17 @@ final class CameraPanel implements StarFieldCamera.Listener {
     // (ultrawide / telephoto) where the grid did not look; manual entry covers anything else.
     private static final double[] FOV_PRESETS_DEG = {110, 65, 22};
 
+    // Automatic polar alignment: shots to take and RA rotation between consecutive shots.
+    // ~15 deg/step keeps the axis-recovery noise a few times the solve noise (error scales
+    // with 1/sin(rotation)) while staying well clear of mount limits.
+    private static final int AUTO_POLAR_SHOTS = 3;
+    private static final double AUTO_POLAR_STEP_DEG = 15.0;
+
     private final Activity activity;
     private final int cameraPermissionRequest;
     private final int pickImageRequest;
     private final ObserverProvider observerProvider;
+    private final RaRotator raRotator;
     private final StarFieldCamera camera;
     private final ImageSolveEngine solveEngine; // app-scoped shared instance (built once)
     private final PolarAlignment polarAlignment = new PolarAlignment();
@@ -103,8 +148,21 @@ final class CameraPanel implements StarFieldCamera.Listener {
     private TextView statsText;
     private LinearLayout fovRetryRow; // shown when an imported photo fails to solve
     private CheckBox polarToggle;     // enter polar-alignment mode (accumulate solves)
+    private Button polarAutoButton;   // run/cancel the automatic shoot-rotate-solve sequence
     private Button polarResetButton;
     private TextView polarText;
+
+    // Automatic polar-alignment sequence state (UI thread only). awaitingSolve marks the
+    // window between triggering a capture and its solve finishing, so solves from manual
+    // taps or imports during a rotation cannot advance the sequence.
+    private boolean autoPolarActive;
+    private boolean autoPolarAwaitingSolve;
+    // Adjustment phase (after an auto measurement): the measured mount axis frozen in the
+    // CAMERA frame. Bolt turns, tracking and RA motion all rotate the rigid body about or
+    // around this very axis, so it stays constant in camera coordinates -- each later shot
+    // only needs a solve to refresh the correction arrow, no re-measurement. Null while
+    // measuring; non-null switches feedPolarIfActive from accumulating to refreshing.
+    private double[] polarAdjustAxisCam;
 
     private long exposureMinNanos = 1_000_000L;
     private long exposureMaxNanos = EXPOSURE_CEILING_NANOS;
@@ -127,6 +185,12 @@ final class CameraPanel implements StarFieldCamera.Listener {
     private ImageSource lastSource; // provenance of the current frame (camera vs imported)
     private StarDetector.StarField lastField;
     private PlateSolver.Solution lastSolution;
+    // Last successful LIVE-capture solution, used as a warm-start hint for the next live
+    // solve (same camera; a stale hint falls back to the blind solve, so never cleared).
+    private PlateSolver.Solution liveSolveHint;
+    // Durations of the latest detect/solve, for the CAMERA-SOLVE log line (UI thread).
+    private long lastDetectMs;
+    private long lastSolveMs;
 
     // The solve engine (catalog + solver) is heavy (≈119k stars, ≈164k seed triangles), so it
     // is built once on a background thread the first time the page is shown and reused.
@@ -138,11 +202,12 @@ final class CameraPanel implements StarFieldCamera.Listener {
     private int solveGeneration;
 
     CameraPanel(Activity activity, int cameraPermissionRequest, int pickImageRequest,
-                ObserverProvider observerProvider) {
+                ObserverProvider observerProvider, RaRotator raRotator) {
         this.activity = activity;
         this.cameraPermissionRequest = cameraPermissionRequest;
         this.pickImageRequest = pickImageRequest;
         this.observerProvider = observerProvider;
+        this.raRotator = raRotator;
         this.camera = new StarFieldCamera(activity, this);
         this.solveEngine = ImageSolveEngine.shared(activity); // shared app-scoped instance
         this.root = buildView();
@@ -175,7 +240,11 @@ final class CameraPanel implements StarFieldCamera.Listener {
                 });
             } catch (Throwable t) {
                 Logger.error("plate solver init failed", t);
-                activity.runOnUiThread(() -> solverLoading = false);
+                activity.runOnUiThread(() -> {
+                    solverLoading = false;
+                    // An auto-polar shot waiting on this engine can never be solved now.
+                    autoPolarOnSolveFinished(null);
+                });
             }
         });
     }
@@ -183,6 +252,7 @@ final class CameraPanel implements StarFieldCamera.Listener {
     /** Called when another page is selected. */
     void onHidden() {
         shown = false;
+        cancelAutoPolarAlignment(null); // leaving the page must stop any auto rotation
         panelGeneration++;       // invalidate any in-flight detection result
         setCapturing(false);     // never leave the capture button stuck disabled after a switch
         resetPreviewState();     // restore live preview so we don't return to a stale frame
@@ -227,6 +297,7 @@ final class CameraPanel implements StarFieldCamera.Listener {
     }
 
     void onPause() {
+        cancelAutoPolarAlignment(null); // backgrounded: stop any auto rotation
         panelGeneration++;
         setCapturing(false);
         resetPreviewState(); // same as onHidden: don't return from background to a stale frame
@@ -314,35 +385,81 @@ final class CameraPanel implements StarFieldCamera.Listener {
         }));
         container.addView(focusSeek, wrap());
 
+        // Polar alignment: rigidly mount the phone, enable, then shoot/import while rotating the
+        // RA axis between shots. Each solved shot is accumulated; the mount's polar axis and its
+        // error are derived from the relative rotations.
+        LinearLayout polarRow = new LinearLayout(activity);
+        polarRow.setOrientation(LinearLayout.HORIZONTAL);
+        polarRow.setGravity(Gravity.CENTER_VERTICAL);
+        polarToggle = new CheckBox(activity);
+        polarToggle.setText(R.string.camera_polar_toggle);
+        polarToggle.setTextColor(Color.rgb(226, 232, 240));
+        polarToggle.setOnCheckedChangeListener((b, checked) -> onPolarToggled(checked));
+        // Three equal columns so the buttons line up with the capture row right below.
+        polarRow.addView(polarToggle, new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        polarAutoButton = actionButton(R.string.camera_polar_auto_start);
+        polarAutoButton.setOnClickListener(v -> toggleAutoPolar());
+        polarAutoButton.setVisibility(View.GONE);
+        LinearLayout.LayoutParams autoParams = new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        autoParams.leftMargin = dp(8);
+        polarRow.addView(polarAutoButton, autoParams);
+        polarResetButton = actionButton(R.string.camera_polar_reset);
+        polarResetButton.setOnClickListener(v -> resetPolar());
+        polarResetButton.setVisibility(View.GONE);
+        LinearLayout.LayoutParams resetParams = new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        resetParams.leftMargin = dp(8);
+        polarRow.addView(polarResetButton, resetParams);
+        LinearLayout.LayoutParams polarRowParams = wrap();
+        polarRowParams.topMargin = dp(4);
+        container.addView(polarRow, polarRowParams);
+
         LinearLayout buttonRow = new LinearLayout(activity);
         buttonRow.setOrientation(LinearLayout.HORIZONTAL);
-        captureButton = new Button(activity);
-        captureButton.setAllCaps(false);
-        captureButton.setText(R.string.camera_capture);
+        captureButton = actionButton(R.string.camera_capture);
         captureButton.setOnClickListener(v -> onCaptureClicked());
         buttonRow.addView(captureButton, new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        pickButton = new Button(activity);
-        pickButton.setAllCaps(false);
-        pickButton.setText(R.string.camera_pick);
+        pickButton = actionButton(R.string.camera_pick);
         pickButton.setOnClickListener(v -> onPickImageClicked());
         LinearLayout.LayoutParams pickParams = new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
         pickParams.leftMargin = dp(8);
         buttonRow.addView(pickButton, pickParams);
-        saveButton = new Button(activity);
-        saveButton.setAllCaps(false);
-        saveButton.setText(R.string.camera_save);
+        saveButton = actionButton(R.string.camera_save);
         saveButton.setOnClickListener(v -> onSaveClicked());
         LinearLayout.LayoutParams saveParams = new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
         saveParams.leftMargin = dp(8);
         buttonRow.addView(saveButton, saveParams);
-        container.addView(buttonRow, wrap());
+        LinearLayout.LayoutParams buttonRowParams = wrap();
+        buttonRowParams.topMargin = dp(6);
+        container.addView(buttonRow, buttonRowParams);
 
+        // One combined, scrollable info box under the capture row: transient status, then the
+        // polar-alignment readout, then detection/solve stats. Empty sections collapse so the
+        // box reads as a single block of text.
         statusText = label();
         statusText.setText(R.string.camera_solve_hint);
-        container.addView(statusText, wrap());
+        collapseWhenEmpty(statusText);
+        polarText = label();
+        polarText.setTextColor(Color.rgb(255, 210, 140));
+        polarText.setVisibility(View.GONE);
+        statsText = label();
+        statsText.setTextColor(Color.rgb(148, 200, 255));
+        statsText.setVisibility(View.GONE);
+        collapseWhenEmpty(statsText);
+        LinearLayout infoColumn = new LinearLayout(activity);
+        infoColumn.setOrientation(LinearLayout.VERTICAL);
+        infoColumn.addView(statusText, wrap());
+        infoColumn.addView(polarText, wrap());
+        infoColumn.addView(statsText, wrap());
+        ScrollView infoScroll = new ScrollView(activity);
+        infoScroll.addView(infoColumn); // ScrollView default params: match width, wrap height
+        container.addView(infoScroll, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(132)));
 
         // Shown only when an imported photo fails to solve: let the user pick a field of view
         // (the photo's EXIF prior may be missing or wrong) and re-solve the same frame.
@@ -369,37 +486,6 @@ final class CameraPanel implements StarFieldCamera.Listener {
         fovRetryRow.addView(manualFov, new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         container.addView(fovRetryRow, wrap());
-
-        ScrollView statsScroll = new ScrollView(activity);
-        statsText = label();
-        statsText.setTextColor(Color.rgb(148, 200, 255));
-        statsScroll.addView(statsText);
-        container.addView(statsScroll, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(92)));
-
-        // Polar alignment: rigidly mount the phone, enable, then shoot/import while rotating the
-        // RA axis between shots. Each solved shot is accumulated; the mount's polar axis and its
-        // error are derived from the relative rotations.
-        LinearLayout polarRow = new LinearLayout(activity);
-        polarRow.setOrientation(LinearLayout.HORIZONTAL);
-        polarToggle = new CheckBox(activity);
-        polarToggle.setText(R.string.camera_polar_toggle);
-        polarToggle.setTextColor(Color.rgb(226, 232, 240));
-        polarToggle.setOnCheckedChangeListener((b, checked) -> onPolarToggled(checked));
-        polarRow.addView(polarToggle, new LinearLayout.LayoutParams(
-                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        polarResetButton = new Button(activity);
-        polarResetButton.setAllCaps(false);
-        polarResetButton.setText(R.string.camera_polar_reset);
-        polarResetButton.setOnClickListener(v -> resetPolar());
-        polarResetButton.setVisibility(View.GONE);
-        polarRow.addView(polarResetButton, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        container.addView(polarRow, wrap());
-        polarText = label();
-        polarText.setTextColor(Color.rgb(255, 210, 140));
-        polarText.setVisibility(View.GONE);
-        container.addView(polarText, wrap());
 
         updateExposureLabel();
         updateIsoLabel();
@@ -450,16 +536,28 @@ final class CameraPanel implements StarFieldCamera.Listener {
     }
 
     private void onCaptureClicked() {
-        if (capturing) {
-            return;
+        if (autoPolarActive) {
+            return; // the auto polar sequence owns the camera; a manual shot mid-sequence
+                    // (rotating, or while a solve is still running) would feed a junk attitude
         }
-        camera.capture(manualToggle.isChecked(), selectedExposureNanos, selectedIso,
+        startCapture();
+    }
+
+    /** Submit a capture; false when the camera cannot take one now (no callback will fire). */
+    private boolean startCapture() {
+        if (capturing) {
+            return false;
+        }
+        return camera.capture(manualToggle.isChecked(), selectedExposureNanos, selectedIso,
                 autoFocusToggle.isChecked(), selectedFocusDiopters);
     }
 
     private void onPickImageClicked() {
         if (capturing) {
             return; // busy detecting/solving a previous frame
+        }
+        if (autoPolarActive) {
+            return; // don't mix imported shots into a running auto sequence
         }
         Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
         intent.setType("image/*");
@@ -538,6 +636,8 @@ final class CameraPanel implements StarFieldCamera.Listener {
                 Bitmap previous = lastBitmap;
                 lastBitmap = finalBitmap;
                 lastInfo = null; // imported photo has no live capture metadata
+                lastDetectMs = 0; // timings are only tracked for the live-capture path
+                lastSolveMs = 0;
                 lastSource = ImageSource.IMPORT;
                 lastField = finalField;
                 lastSolution = finalSol;
@@ -554,6 +654,7 @@ final class CameraPanel implements StarFieldCamera.Listener {
                         && finalSol == null && finalField.stars.size() >= 3);
                 feedPolarIfActive(finalSol);
                 showStats(finalField, finalSol, activity.getString(R.string.camera_source_import));
+                logDetection();
                 setCapturing(false);
                 if (previous != null && previous != finalBitmap && !previous.isRecycled()) {
                     previous.recycle();
@@ -643,17 +744,182 @@ final class CameraPanel implements StarFieldCamera.Listener {
     // --- polar alignment ---
 
     private void onPolarToggled(boolean enabled) {
+        if (!enabled) {
+            cancelAutoPolarAlignment(null);
+        }
+        polarAutoButton.setVisibility(enabled && raRotator != null ? View.VISIBLE : View.GONE);
         polarResetButton.setVisibility(enabled ? View.VISIBLE : View.GONE);
         polarText.setVisibility(enabled ? View.VISIBLE : View.GONE);
+        polarAdjustAxisCam = null;
+        detectionView.clearPolarCorrection();
         if (enabled) {
             polarAlignment.clear();
-            updatePolarReadout();
+            updatePolarReadout(null);
         }
     }
 
     private void resetPolar() {
+        cancelAutoPolarAlignment(null); // reset means start over; don't keep rotating
         polarAlignment.clear();
-        updatePolarReadout();
+        polarAdjustAxisCam = null;
+        detectionView.clearPolarCorrection();
+        updatePolarReadout(null);
+    }
+
+    // --- automatic polar alignment (shoot -> solve -> rotate RA -> repeat) ---
+
+    private void toggleAutoPolar() {
+        if (autoPolarActive) {
+            cancelAutoPolarAlignment(activity.getString(R.string.camera_polar_auto_cancelled));
+            return;
+        }
+        if (raRotator == null) {
+            return;
+        }
+        String blocked = raRotator.blockedReason();
+        if (blocked != null) {
+            statusText.setText(blocked);
+            return;
+        }
+        if (capturing) {
+            return; // a capture/solve is already in flight; let it finish first
+        }
+        Logger.info("AUTO-POLAR start shots=" + AUTO_POLAR_SHOTS
+                + " stepDeg=" + AUTO_POLAR_STEP_DEG);
+        ensureSolverAsync(); // retry the engine build if an earlier attempt failed
+        polarAlignment.clear();
+        polarAdjustAxisCam = null; // back to measurement: feeds must accumulate again
+        detectionView.clearPolarCorrection();
+        updatePolarReadout(null);
+        autoPolarActive = true;
+        polarAutoButton.setText(R.string.camera_polar_auto_cancel);
+        // First shot waits until the mount side confirms it is quiet (dual-axis tracking
+        // paused), so the Dec axis cannot be moving during any exposure of the sequence.
+        raRotator.onSequenceStarted(new RaRotator.Callback() {
+            @Override
+            public void onDone(double ignored) {
+                if (!autoPolarActive) {
+                    return; // cancelled while preparing
+                }
+                autoPolarShoot();
+            }
+
+            @Override
+            public void onError(String message) {
+                if (!autoPolarActive) {
+                    return;
+                }
+                failAutoPolar(message);
+            }
+        });
+    }
+
+    private void autoPolarShoot() {
+        if (!autoPolarActive) {
+            return;
+        }
+        autoPolarAwaitingSolve = true;
+        statusText.setText(activity.getString(R.string.camera_polar_auto_shooting,
+                polarAlignment.shotCount() + 1, AUTO_POLAR_SHOTS));
+        if (!startCapture()) {
+            // Camera not ready (still opening, permission missing, open failed): no capture
+            // callback will ever fire, so fail now instead of waiting forever.
+            autoPolarAwaitingSolve = false;
+            failAutoPolar(activity.getString(R.string.camera_polar_auto_camera_not_ready));
+        }
+    }
+
+    /**
+     * Advance the sequence after a live-capture attempt finished (solve result, or null when
+     * the frame could not be solved). Solves the panel did not trigger itself (manual taps,
+     * imports) are ignored via the awaiting flag.
+     */
+    private void autoPolarOnSolveFinished(PlateSolver.Solution sol) {
+        if (!autoPolarActive || !autoPolarAwaitingSolve) {
+            return;
+        }
+        autoPolarAwaitingSolve = false;
+        if (sol == null) {
+            failAutoPolar(activity.getString(R.string.camera_polar_auto_solve_failed));
+            return;
+        }
+        int shots = polarAlignment.shotCount();
+        if (shots >= AUTO_POLAR_SHOTS) {
+            endAutoPolarSequence();
+            double[] latLon = observerLatLon();
+            PolarAlignment.Result r = polarAlignment.compute(
+                    latLon[0], latLon[1], System.currentTimeMillis());
+            if (r != null) {
+                // Enter the adjustment phase: freeze the measured axis in the camera frame
+                // (invariant under bolt turns / tracking / RA motion) so each further shot
+                // just refreshes the correction arrow.
+                polarAdjustAxisCam = PolarAlignment.apply(sol.r,
+                        PolarAlignment.unitVector(r.axisRaDeg, r.axisDecDeg));
+                statusText.setText(R.string.camera_polar_adjust_hint);
+            } else {
+                statusText.setText(R.string.camera_polar_auto_done);
+            }
+            Logger.info("AUTO-POLAR done shots=" + shots);
+            return;
+        }
+        statusText.setText(activity.getString(R.string.camera_polar_auto_rotating,
+                shots, AUTO_POLAR_SHOTS));
+        Logger.info("AUTO-POLAR rotate request deg=" + AUTO_POLAR_STEP_DEG + " afterShot=" + shots);
+        raRotator.rotateRa(AUTO_POLAR_STEP_DEG, new RaRotator.Callback() {
+            @Override
+            public void onDone(double actualDegrees) {
+                Logger.info("AUTO-POLAR rotated deg="
+                        + String.format(Locale.US, "%.2f", actualDegrees));
+                if (!autoPolarActive) {
+                    return; // cancelled while rotating
+                }
+                autoPolarShoot();
+            }
+
+            @Override
+            public void onError(String message) {
+                if (!autoPolarActive) {
+                    return;
+                }
+                failAutoPolar(message);
+            }
+        });
+    }
+
+    /** Stop the sequence on an unrecoverable step failure; accumulated shots are kept. */
+    private void failAutoPolar(String message) {
+        endAutoPolarSequence();
+        statusText.setText(message);
+        Logger.warn("AUTO-POLAR stopped: " + message);
+    }
+
+    /**
+     * Cancel the automatic sequence and any rotation in flight. Safe to call when inactive.
+     * Called on user cancel, polar-mode off, reset, page hide/pause, and by MainActivity on
+     * emergency stop / connection loss (the safety convention: stop always wins).
+     */
+    void cancelAutoPolarAlignment(String statusMessage) {
+        if (!autoPolarActive) {
+            return;
+        }
+        if (raRotator != null) {
+            raRotator.cancelRotation();
+        }
+        endAutoPolarSequence();
+        if (statusMessage != null) {
+            statusText.setText(statusMessage);
+        }
+        Logger.info("AUTO-POLAR cancelled");
+    }
+
+    /** Single exit funnel: clears sequence state and lets the mount side restore tracking. */
+    private void endAutoPolarSequence() {
+        autoPolarActive = false;
+        autoPolarAwaitingSolve = false;
+        polarAutoButton.setText(R.string.camera_polar_auto_start);
+        if (raRotator != null) {
+            raRotator.onSequenceFinished();
+        }
     }
 
     /** Feed a successful solve into the polar-alignment accumulator while that mode is on. */
@@ -661,11 +927,29 @@ final class CameraPanel implements StarFieldCamera.Listener {
         if (sol == null || polarToggle == null || !polarToggle.isChecked()) {
             return;
         }
+        if (polarAdjustAxisCam != null) {
+            // Adjustment phase: refresh the arrow, don't measure. Only live captures may
+            // refresh -- the frozen axis lives in the rigidly-mounted phone's camera frame,
+            // which an imported photo's attitude has nothing to do with.
+            if (lastSource == ImageSource.CAMERA) {
+                updatePolarAdjustment(sol);
+            }
+            return;
+        }
         polarAlignment.addShot(sol.r);
-        updatePolarReadout();
+        updatePolarReadout(sol);
     }
 
-    private void updatePolarReadout() {
+    /** Observer {latitude, longitude} with the panel's usual Boston fallback. */
+    private double[] observerLatLon() {
+        ObserverState obs = observerProvider != null ? observerProvider.current() : null;
+        double lat = obs != null ? obs.latitudeDegrees : ObserverState.BOSTON_LATITUDE;
+        double lon = obs != null ? obs.longitudeDegrees : ObserverState.BOSTON_LONGITUDE;
+        return new double[]{lat, lon};
+    }
+
+    /** @param sol the solve shown on screen, for drawing the correction; null = text only. */
+    private void updatePolarReadout(PlateSolver.Solution sol) {
         if (polarText == null) {
             return;
         }
@@ -674,15 +958,44 @@ final class CameraPanel implements StarFieldCamera.Listener {
             polarText.setText(activity.getString(R.string.camera_polar_progress, n));
             return;
         }
-        ObserverState obs = observerProvider != null ? observerProvider.current() : null;
-        double lat = obs != null ? obs.latitudeDegrees : ObserverState.BOSTON_LATITUDE;
-        double lon = obs != null ? obs.longitudeDegrees : ObserverState.BOSTON_LONGITUDE;
-        PolarAlignment.Result r = polarAlignment.compute(lat, lon, System.currentTimeMillis());
+        double[] latLon = observerLatLon();
+        PolarAlignment.Result r = polarAlignment.compute(latLon[0], latLon[1], System.currentTimeMillis());
         if (r == null) {
             polarText.setText(activity.getString(R.string.camera_polar_need_rotation, n));
             return;
         }
         polarText.setText(formatPolar(r));
+        if (sol != null) {
+            showPolarCorrection(r, latLon[0]);
+        }
+    }
+
+    /**
+     * Adjustment phase: re-express the frozen camera-frame axis in celestial coordinates
+     * through this shot's attitude, then refresh the readout and the on-image arrow. The
+     * error shrinks live as the user turns the alt/az bolts and re-shoots.
+     */
+    private void updatePolarAdjustment(PlateSolver.Solution sol) {
+        double[] latLon = observerLatLon();
+        double[] axisCel = PolarAlignment.applyTranspose(sol.r, polarAdjustAxisCam);
+        PolarAlignment.Result r = PolarAlignment.resultFromAxis(
+                axisCel, latLon[0], latLon[1], System.currentTimeMillis(),
+                polarAlignment.shotCount());
+        polarText.setText(formatPolar(r));
+        showPolarCorrection(r, latLon[0]);
+        statusText.setText(R.string.camera_polar_adjust_hint);
+        Logger.info("AUTO-POLAR adjust refresh errorDeg="
+                + String.format(Locale.US, "%.3f", r.polarErrorDeg));
+    }
+
+    /** Draw the axis/pole markers, arrow and error label on the current solve overlay. */
+    private void showPolarCorrection(PolarAlignment.Result r, double latitudeDeg) {
+        if (detectionView == null) {
+            return;
+        }
+        double poleDec = latitudeDeg >= 0 ? 90.0 : -90.0;
+        detectionView.setPolarCorrection(r.axisRaDeg, r.axisDecDeg, poleDec,
+                formatAngle(r.polarErrorDeg));
     }
 
     private String formatPolar(PolarAlignment.Result r) {
@@ -740,7 +1053,8 @@ final class CameraPanel implements StarFieldCamera.Listener {
      *  same generation guards as the automatic solve so a stale result cannot clobber state. */
     private void retrySolveWithFov(double fovDeg) {
         final StarDetector.StarField field = lastField;
-        if (field == null || solveInFlight || !solveEngine.isReady() || field.stars.size() < 3) {
+        if (field == null || solveInFlight || !solveEngine.isReady() || field.stars.size() < 3
+                || autoPolarActive) { // don't feed a stale import's re-solve into a running sequence
             return;
         }
         final int gen = panelGeneration;
@@ -780,6 +1094,7 @@ final class CameraPanel implements StarFieldCamera.Listener {
                 }
                 feedPolarIfActive(finalSol);
                 showStats(field, finalSol, sourceLine);
+                logDetection();
             });
         });
     }
@@ -798,7 +1113,7 @@ final class CameraPanel implements StarFieldCamera.Listener {
                     ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage()));
             return;
         }
-        logDetection(location);
+        Logger.info("CAMERA-SAVE file=" + location);
         String msg = activity.getString(R.string.camera_saved, location);
         statusText.setText(msg);
         Toast.makeText(activity, msg, Toast.LENGTH_LONG).show();
@@ -850,12 +1165,12 @@ final class CameraPanel implements StarFieldCamera.Listener {
         return file.getAbsolutePath();
     }
 
-    private void logDetection(String location) {
+    /** Logs the current frame's capture/detection/solve summary; called after every solve. */
+    private void logDetection() {
         StarFieldCamera.CaptureInfo info = lastInfo;
         StarDetector.StarField f = lastField;
         PlateSolver.Solution sol = lastSolution;
         StringBuilder sb = new StringBuilder("CAMERA-SOLVE phase2");
-        sb.append(" file=").append(location);
         if (info != null) {
             sb.append(" exposureNanos=").append(info.exposureNanos)
                     .append(" iso=").append(info.iso)
@@ -871,6 +1186,9 @@ final class CameraPanel implements StarFieldCamera.Listener {
                     .append(" background=").append(String.format(Locale.US, "%.2f", f.background))
                     .append(" noise=").append(String.format(Locale.US, "%.3f", f.noise))
                     .append(" threshold=").append(String.format(Locale.US, "%.2f", f.threshold));
+        }
+        if (lastDetectMs > 0 || lastSolveMs > 0) {
+            sb.append(" detectMs=").append(lastDetectMs).append(" solveMs=").append(lastSolveMs);
         }
         if (sol != null) {
             sb.append(" SOLVED raDeg=").append(String.format(Locale.US, "%.3f", sol.centerRaDeg))
@@ -926,6 +1244,9 @@ final class CameraPanel implements StarFieldCamera.Listener {
     public void onError(String message) {
         statusText.setText(message);
         setCapturing(false);
+        if (autoPolarActive) {
+            failAutoPolar(message); // camera failure mid-sequence: stop instead of hanging
+        }
     }
 
     @Override
@@ -960,6 +1281,7 @@ final class CameraPanel implements StarFieldCamera.Listener {
         final int detGen = panelGeneration;
         detectExecutor.execute(() -> {
             StarDetector.StarField field;
+            final long detectStart = System.currentTimeMillis();
             try {
                 field = solveEngine.detect(image);
             } catch (Throwable t) {
@@ -971,20 +1293,29 @@ final class CameraPanel implements StarFieldCamera.Listener {
                     statusText.setText(activity.getString(R.string.camera_detect_failed,
                             t.getMessage() == null ? t.getClass().getSimpleName() : t.getMessage()));
                     setCapturing(false);
+                    autoPolarOnSolveFinished(null);
                 });
                 return;
             }
             final StarDetector.StarField finalField = field;
+            final long detectMs = System.currentTimeMillis() - detectStart;
             activity.runOnUiThread(() -> {
                 if (isPanelStale(detGen)) {
                     return; // panel hidden/destroyed during detection; drop the result
                 }
+                lastDetectMs = detectMs;
+                lastSolveMs = 0; // new frame; the solve has not run yet
                 lastField = finalField;
                 lastSolution = null;
                 detectionView.setDetections(finalField.stars);
                 setCapturing(false);
                 if (!maybeSolveCurrentField()) {
                     showStats(finalField, null, captureSourceLine(info)); // solver not ready / too few stars
+                    // Too few stars can never solve: fail the auto sequence now. A solver
+                    // that is still loading will solve this frame when ready, so keep waiting.
+                    if (finalField.stars.size() < 3) {
+                        autoPolarOnSolveFinished(null);
+                    }
                 }
             });
         });
@@ -1013,15 +1344,18 @@ final class CameraPanel implements StarFieldCamera.Listener {
         solveInFlight = true;
         statusText.setText(R.string.camera_analyzing);
         showStats(field, null, sourceLine); // shows the "solving" line via the solveInFlight branch
+        final PlateSolver.Solution hint = liveSolveHint;
         detectExecutor.execute(() -> {
             PlateSolver.Solution sol;
+            final long solveStart = System.currentTimeMillis();
             try {
-                sol = solveEngine.solve(field, input);
+                sol = solveEngine.solve(field, input, hint);
             } catch (Throwable t) {
                 Logger.error("plate solve failed", t);
                 sol = null;
             }
             final PlateSolver.Solution finalSol = sol;
+            final long solveMs = System.currentTimeMillis() - solveStart;
             activity.runOnUiThread(() -> {
                 if (solveGen != solveGeneration) {
                     return; // superseded by a newer solve or a reset; owns no shared state
@@ -1034,7 +1368,11 @@ final class CameraPanel implements StarFieldCamera.Listener {
                     maybeSolveCurrentField(); // a newer capture arrived mid-solve; solve it now
                     return;
                 }
+                lastSolveMs = solveMs;
                 lastSolution = finalSol;
+                if (finalSol != null) {
+                    liveSolveHint = finalSol; // warm start for the next live solve
+                }
                 statusText.setText("");
                 if (finalSol != null) {
                     detectionView.setSolve(finalSol, solveEngine.catalog(), field.skyMask,
@@ -1042,6 +1380,8 @@ final class CameraPanel implements StarFieldCamera.Listener {
                 }
                 feedPolarIfActive(finalSol);
                 showStats(field, finalSol, sourceLine);
+                logDetection();
+                autoPolarOnSolveFinished(finalSol);
             });
         });
         return true;
@@ -1189,6 +1529,46 @@ final class CameraPanel implements StarFieldCamera.Listener {
         text.setTextSize(13);
         text.setPadding(0, dp(4), 0, dp(2));
         return text;
+    }
+
+    /** Hide the view while its text is empty, so the merged info box has no blank gaps. */
+    private static void collapseWhenEmpty(TextView text) {
+        text.addTextChangedListener(new TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+            }
+
+            @Override
+            public void onTextChanged(CharSequence s, int start, int before, int count) {
+            }
+
+            @Override
+            public void afterTextChanged(Editable s) {
+                text.setVisibility(s.length() == 0 ? View.GONE : View.VISIBLE);
+            }
+        });
+    }
+
+    // Same look as MainActivity#compactButton/createActionButtonBackground (day theme),
+    // so camera-page buttons match the rest of the app.
+    private Button actionButton(int textRes) {
+        Button button = new Button(activity);
+        button.setAllCaps(false);
+        button.setText(textRes);
+        button.setTextSize(15);
+        button.setMinHeight(dp(44));
+        button.setMinimumHeight(dp(44));
+        button.setMinWidth(0);
+        button.setMinimumWidth(0);
+        button.setPadding(dp(10), 0, dp(10), 0);
+        button.setTextColor(Color.rgb(226, 232, 240));
+        GradientDrawable bg = new GradientDrawable();
+        bg.setShape(GradientDrawable.RECTANGLE);
+        bg.setColor(Color.rgb(30, 41, 59));
+        bg.setStroke(dp(1), Color.rgb(51, 65, 85));
+        bg.setCornerRadius(dp(12));
+        button.setBackground(bg);
+        return button;
     }
 
     private LinearLayout.LayoutParams wrap() {
