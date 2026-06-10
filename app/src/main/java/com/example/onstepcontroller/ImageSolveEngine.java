@@ -107,6 +107,14 @@ final class ImageSolveEngine {
         return detector.detectForSolve(image);
     }
 
+    /** Detect then solve a frame in one call, returning both. Pure compute; off the UI thread.
+     *  Used by one-shot sources (imported photo, polar-alignment shot); the live camera path
+     *  keeps detect()/solve() separate to publish detections before the solve finishes. */
+    ImageSolveResult run(Bitmap image, SolveInput input) {
+        StarDetector.StarField field = detect(image);
+        return new ImageSolveResult(field, solve(field, input));
+    }
+
     /**
      * Blind-solve a detected frame. Returns null if the solver is not ready, the frame has too
      * few stars, or no confident solution is found. Pure compute; safe off the UI thread.

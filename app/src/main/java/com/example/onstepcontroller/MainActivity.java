@@ -528,7 +528,8 @@ public final class MainActivity extends Activity {
         skyPage.setVisibility(View.GONE);
         root.addView(skyPage, matchWrap());
 
-        cameraPanel = new CameraPanel(this, CAMERA_PERMISSION_REQUEST, PICK_IMAGE_REQUEST);
+        cameraPanel = new CameraPanel(this, CAMERA_PERMISSION_REQUEST, PICK_IMAGE_REQUEST,
+                () -> observerState);
         cameraPage = cameraPanel.view();
         cameraPage.setVisibility(View.GONE);
         root.addView(cameraPage, matchWrap());

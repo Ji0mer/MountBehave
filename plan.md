@@ -59,7 +59,7 @@ ClearskyGoto 是针对晴空谐波赤道仪系列开发的 Android 控制 App。
 
 ## 相机识别与极轴校准（开发中）
 
-相机盲解已落地（phase 2：前景感知检测 + 三角形盲解 + 叠加，见 `PlateSolver`/`StarDetector.detectForSolve`/`StarDetectionView`）。下一阶段拆成两层，先做图像模块，极轴校准复用它。
+相机盲解已落地（phase 2：前景感知检测 + 三角形盲解 + 叠加，见 `PlateSolver`/`StarDetector.detectForSolve`/`SolveOverlayView`）。下一阶段拆成两层，先做图像模块，极轴校准复用它。
 
 ### 层一：独立图像识别/标注模块
 
@@ -77,7 +77,7 @@ ClearskyGoto 是针对晴空谐波赤道仪系列开发的 Android 控制 App。
 
 前提：手机须**刚性固定**在随 RA 轴转动的结构上；仅**赤道仪模式**适用；相机 boresight 不能与 RA 轴重合（需有夹角）。
 
-原理（NINA/SharpCap 式多点盲解极轴法）：绕 RA 轴转动并多次盲解，反推 RA 轴在天球的方向，与天极比较得偏差。**因盲解给完整三轴姿态 `R`，两次解算的相对旋转 `ΔR=R₂·R₁ᵀ` 的旋转轴即 RA 轴方向——2 次足够，第 3 次降噪**（测量时关跟踪或按时间戳补偿恒星运动）。
+原理（NINA/SharpCap 式多点盲解极轴法）：绕 RA 轴转动并多次盲解，反推 RA 轴在天球的方向，与天极比较得偏差。**因盲解给完整三轴姿态 `R`（约定 `R` 为 celestial→camera，见 `PlateSolver.Solution.r`），两次解算的相对旋转 `ΔR = R_b​ᵀ·R_a`（代码 `PolarAlignment` 即按此实现）其旋转轴即 RA 轴方向——2 次足够，第 3 次降噪**（测量时关跟踪或按时间戳补偿恒星运动）。注意方向约定：写反成 `R_a·R_bᵀ` 会得到反向轴。
 
 难点（须先想清）：把天球极轴偏差**分解为方位/高度两个螺丝的可执行方向并实时更新**（拧螺丝时 boresight 随之移动，可持续拍摄解算刷新箭头）；测量阶段用 RA 电机，校正阶段只拧螺丝、不用手控。
 
@@ -86,8 +86,8 @@ ClearskyGoto 是针对晴空谐波赤道仪系列开发的 Android 控制 App。
 ### 实施顺序
 
 1. **模块化图像识别**：抽 `ImageSolveEngine`/`SolveInput`，实时拍摄走 engine，行为不变。（已完成；engine 为应用级共享单例，`load()` 单飞构建）
-2. **相册导入**：相机页加"拍摄/从相册选择"，含 EXIF 方向、FOV 兜底、失败重试。引入 `ImageSolveResult`/`ImageSource`，`StarDetectionView` 演进为 `SolveOverlayView`（不依赖相机）。（进行中：已加"从相册选择"入口、EXIF 方向校正、35mm 焦距估 FOV、未知 FOV 时 engine 自动网格搜索、复用叠加显示；待办：手动 FOV 选择/重试 UI，`ImageSolveResult`/`ImageSource` 抽象与 `SolveOverlayView` 改名）
-3. **极轴校准页（手动版）**：App 提示用户手动转 RA、确认后拍下一张，先验证数学流程。
+2. **相册导入**：相机页"拍摄/从相册选择"，EXIF 方向、35mm 焦距估 FOV、未知 FOV 自动网格搜索、手动 FOV 选择/重试。引入 `ImageSolveResult`/`ImageSource`，`StarDetectionView`→`SolveOverlayView`。（已完成）
+3. **极轴校准（手动版）**：实现为相机页内的"极轴校准"模式（非独立页面）。手机刚性固定后，绕 RA 轴转动并多次拍摄/导入，累计解算，由 `ΔR=R₂ᵀ·R₁` 反推 RA 轴并给出极轴偏差与高度/方位分解。（已完成；几何离线验证：已知轴恢复误差 0）
 4. **自动 RA 旋转**：手动版确认后接 OnStep 自动转轴/停止/拍照/解算。
 
 ## 发布前检查

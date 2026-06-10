@@ -20,7 +20,7 @@ import java.util.List;
  * handled correctly. Everything is stored in source-image coordinates and mapped to the
  * on-screen letterboxed rectangle at draw time, so it survives view resizes.
  */
-final class StarDetectionView extends View {
+final class SolveOverlayView extends View {
 
     private final Paint imagePaint = new Paint(Paint.FILTER_BITMAP_FLAG);
     private final Paint markerPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -40,12 +40,12 @@ final class StarDetectionView extends View {
     private SkyCatalog catalog;
     private Bitmap foregroundDim; // semi-transparent overlay marking masked (non-sky) pixels
 
-    StarDetectionView(Context context) {
+    SolveOverlayView(Context context) {
         super(context);
         init();
     }
 
-    StarDetectionView(Context context, AttributeSet attrs) {
+    SolveOverlayView(Context context, AttributeSet attrs) {
         super(context, attrs);
         init();
     }

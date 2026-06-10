@@ -2,6 +2,7 @@ package com.example.onstepcontroller;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.ContentResolver;
 import android.content.ContentValues;
 import android.content.Intent;
@@ -16,11 +17,13 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Environment;
 import android.provider.MediaStore;
+import android.text.InputType;
 import android.view.TextureView;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.CheckBox;
+import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -52,6 +55,11 @@ import java.util.concurrent.Executors;
  */
 final class CameraPanel implements StarFieldCamera.Listener {
 
+    /** Supplies the current observer location, for the polar-alignment alt/az decomposition. */
+    interface ObserverProvider {
+        ObserverState current();
+    }
+
     private static final long DEFAULT_EXPOSURE_NANOS = 1_000_000_000L; // 1 s
     private static final int DEFAULT_ISO = 800;
     private static final int EXPOSURE_STEPS = 1000;
@@ -63,17 +71,23 @@ final class CameraPanel implements StarFieldCamera.Listener {
     private static final int IMPORT_DECODE_LONG_EDGE = 2400;
     // 35mm-equivalent focal length -> horizontal FOV uses the full-frame 36mm sensor width.
     private static final double FULL_FRAME_WIDTH_MM = 36.0;
+    // Manual-retry horizontal-FOV presets (deg) when an imported photo fails to solve. The
+    // automatic import already scans ~24..100 deg, so these reach a bit beyond that range
+    // (ultrawide / telephoto) where the grid did not look; manual entry covers anything else.
+    private static final double[] FOV_PRESETS_DEG = {110, 65, 22};
 
     private final Activity activity;
     private final int cameraPermissionRequest;
     private final int pickImageRequest;
+    private final ObserverProvider observerProvider;
     private final StarFieldCamera camera;
     private final ImageSolveEngine solveEngine; // app-scoped shared instance (built once)
+    private final PolarAlignment polarAlignment = new PolarAlignment();
     private final ExecutorService detectExecutor = Executors.newSingleThreadExecutor();
     private final View root;
 
     private TextureView previewView;
-    private StarDetectionView detectionView;
+    private SolveOverlayView detectionView;
     private CheckBox manualToggle;
     private CheckBox autoFocusToggle;
     private SeekBar exposureSeek;
@@ -87,6 +101,10 @@ final class CameraPanel implements StarFieldCamera.Listener {
     private Button saveButton;
     private TextView statusText;
     private TextView statsText;
+    private LinearLayout fovRetryRow; // shown when an imported photo fails to solve
+    private CheckBox polarToggle;     // enter polar-alignment mode (accumulate solves)
+    private Button polarResetButton;
+    private TextView polarText;
 
     private long exposureMinNanos = 1_000_000L;
     private long exposureMaxNanos = EXPOSURE_CEILING_NANOS;
@@ -106,6 +124,7 @@ final class CameraPanel implements StarFieldCamera.Listener {
     private int panelGeneration;
     private Bitmap lastBitmap;
     private StarFieldCamera.CaptureInfo lastInfo;
+    private ImageSource lastSource; // provenance of the current frame (camera vs imported)
     private StarDetector.StarField lastField;
     private PlateSolver.Solution lastSolution;
 
@@ -118,10 +137,12 @@ final class CameraPanel implements StarFieldCamera.Listener {
     // after a hide/return cannot clear a newer solve's solveInFlight flag.
     private int solveGeneration;
 
-    CameraPanel(Activity activity, int cameraPermissionRequest, int pickImageRequest) {
+    CameraPanel(Activity activity, int cameraPermissionRequest, int pickImageRequest,
+                ObserverProvider observerProvider) {
         this.activity = activity;
         this.cameraPermissionRequest = cameraPermissionRequest;
         this.pickImageRequest = pickImageRequest;
+        this.observerProvider = observerProvider;
         this.camera = new StarFieldCamera(activity, this);
         this.solveEngine = ImageSolveEngine.shared(activity); // shared app-scoped instance
         this.root = buildView();
@@ -183,8 +204,10 @@ final class CameraPanel implements StarFieldCamera.Listener {
             detectionView.setVisibility(View.GONE);
             detectionView.clear();
         }
+        showFovRetry(false);
         lastBitmap = null;
         lastInfo = null;
+        lastSource = null;
         lastField = null;
         lastSolution = null;
         solveInFlight = false;
@@ -238,7 +261,7 @@ final class CameraPanel implements StarFieldCamera.Listener {
         previewView.setSurfaceTextureListener(surfaceListener);
         frame.addView(previewView, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        detectionView = new StarDetectionView(activity);
+        detectionView = new SolveOverlayView(activity);
         detectionView.setVisibility(View.GONE);
         frame.addView(detectionView, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
@@ -321,12 +344,62 @@ final class CameraPanel implements StarFieldCamera.Listener {
         statusText.setText(R.string.camera_solve_hint);
         container.addView(statusText, wrap());
 
+        // Shown only when an imported photo fails to solve: let the user pick a field of view
+        // (the photo's EXIF prior may be missing or wrong) and re-solve the same frame.
+        fovRetryRow = new LinearLayout(activity);
+        fovRetryRow.setOrientation(LinearLayout.HORIZONTAL);
+        fovRetryRow.setVisibility(View.GONE);
+        TextView fovLabel = label();
+        fovLabel.setText(R.string.camera_fov_retry_label);
+        fovRetryRow.addView(fovLabel, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        for (double presetFov : FOV_PRESETS_DEG) {
+            final double fov = presetFov;
+            Button b = new Button(activity);
+            b.setAllCaps(false);
+            b.setText(activity.getString(R.string.camera_fov_preset, (int) presetFov));
+            b.setOnClickListener(v -> retrySolveWithFov(fov));
+            fovRetryRow.addView(b, new LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        }
+        Button manualFov = new Button(activity);
+        manualFov.setAllCaps(false);
+        manualFov.setText(R.string.camera_fov_manual);
+        manualFov.setOnClickListener(v -> promptManualFov());
+        fovRetryRow.addView(manualFov, new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        container.addView(fovRetryRow, wrap());
+
         ScrollView statsScroll = new ScrollView(activity);
         statsText = label();
         statsText.setTextColor(Color.rgb(148, 200, 255));
         statsScroll.addView(statsText);
         container.addView(statsScroll, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(92)));
+
+        // Polar alignment: rigidly mount the phone, enable, then shoot/import while rotating the
+        // RA axis between shots. Each solved shot is accumulated; the mount's polar axis and its
+        // error are derived from the relative rotations.
+        LinearLayout polarRow = new LinearLayout(activity);
+        polarRow.setOrientation(LinearLayout.HORIZONTAL);
+        polarToggle = new CheckBox(activity);
+        polarToggle.setText(R.string.camera_polar_toggle);
+        polarToggle.setTextColor(Color.rgb(226, 232, 240));
+        polarToggle.setOnCheckedChangeListener((b, checked) -> onPolarToggled(checked));
+        polarRow.addView(polarToggle, new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        polarResetButton = new Button(activity);
+        polarResetButton.setAllCaps(false);
+        polarResetButton.setText(R.string.camera_polar_reset);
+        polarResetButton.setOnClickListener(v -> resetPolar());
+        polarResetButton.setVisibility(View.GONE);
+        polarRow.addView(polarResetButton, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        container.addView(polarRow, wrap());
+        polarText = label();
+        polarText.setTextColor(Color.rgb(255, 210, 140));
+        polarText.setVisibility(View.GONE);
+        container.addView(polarText, wrap());
 
         updateExposureLabel();
         updateIsoLabel();
@@ -414,6 +487,7 @@ final class CameraPanel implements StarFieldCamera.Listener {
         previewView.setVisibility(View.GONE);
         detectionView.setVisibility(View.VISIBLE);
         detectionView.clear();
+        showFovRetry(false);
         statusText.setText(R.string.camera_analyzing);
         setCapturing(true);
         final int gen = panelGeneration;
@@ -427,9 +501,10 @@ final class CameraPanel implements StarFieldCamera.Listener {
                 ImportedImage imported = decodeImported(uri);
                 bitmap = imported.bitmap;
                 solveEngine.load(); // ensure ready (idempotent; waits if still building)
-                field = solveEngine.detect(bitmap);
-                sol = solveEngine.solve(field,
+                ImageSolveResult result = solveEngine.run(bitmap,
                         ImageSolveEngine.SolveInput.forImport(imported.fovHorizontalDeg));
+                field = result.field;
+                sol = result.solution;
             } catch (Throwable t) {
                 Logger.error("imported image solve failed", t);
                 // The bitmap was decoded but never handed to the UI; free it (failures here
@@ -463,6 +538,7 @@ final class CameraPanel implements StarFieldCamera.Listener {
                 Bitmap previous = lastBitmap;
                 lastBitmap = finalBitmap;
                 lastInfo = null; // imported photo has no live capture metadata
+                lastSource = ImageSource.IMPORT;
                 lastField = finalField;
                 lastSolution = finalSol;
                 detectionView.setImage(finalBitmap, finalField.sourceWidth, finalField.sourceHeight);
@@ -472,6 +548,11 @@ final class CameraPanel implements StarFieldCamera.Listener {
                             finalField.analysisWidth, finalField.analysisHeight);
                 }
                 statusText.setText("");
+                // Imported photo with no solution: offer a manual FOV retry (the EXIF prior may
+                // be missing or wrong, and a few-star frame won't be helped by FOV either way).
+                showFovRetry(lastSource == ImageSource.IMPORT
+                        && finalSol == null && finalField.stars.size() >= 3);
+                feedPolarIfActive(finalSol);
                 showStats(finalField, finalSol, activity.getString(R.string.camera_source_import));
                 setCapturing(false);
                 if (previous != null && previous != finalBitmap && !previous.isRecycled()) {
@@ -557,6 +638,150 @@ final class CameraPanel implements StarFieldCamera.Listener {
 
     private static String safeMessage(Throwable t) {
         return t.getMessage() == null ? t.getClass().getSimpleName() : t.getMessage();
+    }
+
+    // --- polar alignment ---
+
+    private void onPolarToggled(boolean enabled) {
+        polarResetButton.setVisibility(enabled ? View.VISIBLE : View.GONE);
+        polarText.setVisibility(enabled ? View.VISIBLE : View.GONE);
+        if (enabled) {
+            polarAlignment.clear();
+            updatePolarReadout();
+        }
+    }
+
+    private void resetPolar() {
+        polarAlignment.clear();
+        updatePolarReadout();
+    }
+
+    /** Feed a successful solve into the polar-alignment accumulator while that mode is on. */
+    private void feedPolarIfActive(PlateSolver.Solution sol) {
+        if (sol == null || polarToggle == null || !polarToggle.isChecked()) {
+            return;
+        }
+        polarAlignment.addShot(sol.r);
+        updatePolarReadout();
+    }
+
+    private void updatePolarReadout() {
+        if (polarText == null) {
+            return;
+        }
+        int n = polarAlignment.shotCount();
+        if (n < 2) {
+            polarText.setText(activity.getString(R.string.camera_polar_progress, n));
+            return;
+        }
+        ObserverState obs = observerProvider != null ? observerProvider.current() : null;
+        double lat = obs != null ? obs.latitudeDegrees : ObserverState.BOSTON_LATITUDE;
+        double lon = obs != null ? obs.longitudeDegrees : ObserverState.BOSTON_LONGITUDE;
+        PolarAlignment.Result r = polarAlignment.compute(lat, lon, System.currentTimeMillis());
+        if (r == null) {
+            polarText.setText(activity.getString(R.string.camera_polar_need_rotation, n));
+            return;
+        }
+        polarText.setText(formatPolar(r));
+    }
+
+    private String formatPolar(PolarAlignment.Result r) {
+        String altDir = activity.getString(r.altErrorDeg >= 0
+                ? R.string.camera_polar_alt_high : R.string.camera_polar_alt_low);
+        String azDir = activity.getString(r.azErrorDeg >= 0
+                ? R.string.camera_polar_az_east : R.string.camera_polar_az_west);
+        return activity.getString(R.string.camera_polar_result,
+                r.shotsUsed,
+                formatAngle(r.polarErrorDeg),
+                altDir, formatAngle(Math.abs(r.altErrorDeg)),
+                azDir, formatAngle(Math.abs(r.azErrorDeg)),
+                r.axisRaDeg / 15.0, r.axisDecDeg);
+    }
+
+    /** Angle as arcminutes below 1 degree, else degrees. */
+    private static String formatAngle(double deg) {
+        if (deg < 1.0) {
+            return String.format(Locale.US, "%.1f'", deg * 60.0);
+        }
+        return String.format(Locale.US, "%.2f°", deg);
+    }
+
+    /** Show/hide the manual-FOV retry row (only meaningful for an imported, unsolved frame). */
+    private void showFovRetry(boolean show) {
+        if (fovRetryRow != null) {
+            fovRetryRow.setVisibility(show ? View.VISIBLE : View.GONE);
+        }
+    }
+
+    /** Ask for a horizontal FOV in degrees, then re-solve the current frame at that scale. */
+    private void promptManualFov() {
+        final EditText input = new EditText(activity);
+        input.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
+        input.setHint(R.string.camera_fov_manual_hint);
+        new AlertDialog.Builder(activity)
+                .setTitle(R.string.camera_fov_manual)
+                .setView(input)
+                .setPositiveButton(R.string.camera_fov_manual_ok, (d, w) -> {
+                    double fov;
+                    try {
+                        fov = Double.parseDouble(input.getText().toString().trim());
+                    } catch (NumberFormatException ex) {
+                        return;
+                    }
+                    if (fov > 0.0 && fov < 180.0) {
+                        retrySolveWithFov(fov);
+                    }
+                })
+                .setNegativeButton(android.R.string.cancel, null)
+                .show();
+    }
+
+    /** Re-solve the already-detected current frame at a user-chosen horizontal FOV. Reuses the
+     *  same generation guards as the automatic solve so a stale result cannot clobber state. */
+    private void retrySolveWithFov(double fovDeg) {
+        final StarDetector.StarField field = lastField;
+        if (field == null || solveInFlight || !solveEngine.isReady() || field.stars.size() < 3) {
+            return;
+        }
+        final int gen = panelGeneration;
+        final int solveGen = ++solveGeneration;
+        final String sourceLine = activity.getString(R.string.camera_source_manual_fov, fovDeg);
+        solveInFlight = true;
+        setCapturing(true);
+        showFovRetry(false);
+        statusText.setText(R.string.camera_analyzing);
+        showStats(field, null, sourceLine);
+        detectExecutor.execute(() -> {
+            PlateSolver.Solution sol;
+            try {
+                // A deliberate user FOV: solve once at that scale (no grid override).
+                sol = solveEngine.solve(field, ImageSolveEngine.SolveInput.fromHorizontalFov(fovDeg));
+            } catch (Throwable t) {
+                Logger.error("manual-fov solve failed", t);
+                sol = null;
+            }
+            final PlateSolver.Solution finalSol = sol;
+            activity.runOnUiThread(() -> {
+                if (solveGen != solveGeneration) {
+                    return;
+                }
+                solveInFlight = false;
+                setCapturing(false);
+                if (isPanelStale(gen) || lastField != field) {
+                    return;
+                }
+                lastSolution = finalSol;
+                statusText.setText("");
+                if (finalSol != null) {
+                    detectionView.setSolve(finalSol, solveEngine.catalog(), field.skyMask,
+                            field.analysisWidth, field.analysisHeight);
+                } else {
+                    showFovRetry(true); // still no solution; let the user try another FOV
+                }
+                feedPolarIfActive(finalSol);
+                showStats(field, finalSol, sourceLine);
+            });
+        });
     }
 
     private void onSaveClicked() {
@@ -714,12 +939,14 @@ final class CameraPanel implements StarFieldCamera.Listener {
         Bitmap previous = lastBitmap;
         lastBitmap = image;
         lastInfo = info;
+        lastSource = ImageSource.CAMERA;
         lastField = null;
         lastSolution = null;
         previewView.setVisibility(View.GONE);
         detectionView.setVisibility(View.VISIBLE);
         detectionView.setImage(image, info.imageWidth, info.imageHeight);
         detectionView.setDetections(null);
+        showFovRetry(false);
         statusText.setText(R.string.camera_analyzing);
 
         if (previous != null && previous != image && !previous.isRecycled()) {
@@ -813,6 +1040,7 @@ final class CameraPanel implements StarFieldCamera.Listener {
                     detectionView.setSolve(finalSol, solveEngine.catalog(), field.skyMask,
                             field.analysisWidth, field.analysisHeight);
                 }
+                feedPolarIfActive(finalSol);
                 showStats(field, finalSol, sourceLine);
             });
         });
