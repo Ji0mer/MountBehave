@@ -39,22 +39,35 @@ final class ImageSolveEngine {
         return instance;
     }
 
-    /** Solve inputs that vary per image source; currently the focal-length prior. */
+    /** Solve inputs that vary per image source: the focal-length prior and how to treat it. */
     static final class SolveInput {
-        /** Horizontal field of view in degrees, or <=0 if unknown (a fallback is used). */
+        /** Horizontal field of view in degrees, or <=0 if unknown. */
         final double fovHorizontalDeg;
+        /** If true, fall back to the FOV grid when the prior fails (an unreliable prior, e.g.
+         *  a photo's 35mm-equiv EXIF tag, which may not match the bitmap after rotation/crop). */
+        final boolean gridFallback;
 
-        private SolveInput(double fovHorizontalDeg) {
+        private SolveInput(double fovHorizontalDeg, boolean gridFallback) {
             this.fovHorizontalDeg = fovHorizontalDeg;
+            this.gridFallback = gridFallback;
         }
 
+        /** Reliable prior (camera lens metadata): one solve at this FOV, no grid fallback. */
         static SolveInput fromHorizontalFov(double fovHorizontalDeg) {
-            return new SolveInput(fovHorizontalDeg);
+            return new SolveInput(fovHorizontalDeg, false);
+        }
+
+        /** Imported photo: try the FOV if known, but fall back to the grid on failure (or when
+         *  the FOV is unknown), since photo EXIF is not a dependable horizontal-FOV prior. */
+        static SolveInput forImport(double fovHorizontalDegOrZero) {
+            return new SolveInput(fovHorizontalDegOrZero, true);
         }
     }
 
-    /** Fallback horizontal FOV when none is known (a typical phone main-camera field). */
-    private static final double FALLBACK_FOV_DEG = 65.0;
+    // When the horizontal FOV is unknown (e.g. an imported photo with no lens EXIF), try this
+    // coarse grid of horizontal FOVs spanning ultrawide..short-tele and keep the best solve.
+    // Steps are <1.5x apart in focal length so the solver's +/-20% scale gate leaves no gap.
+    private static final double[] AUTO_FOV_GRID_DEG = {100, 80, 64, 50, 40, 31, 24};
 
     private final Context appContext;
     private final StarDetector detector = new StarDetector();
@@ -115,13 +128,34 @@ final class ImageSolveEngine {
         }
         double cx = field.sourceWidth / 2.0;
         double cy = field.sourceHeight / 2.0;
-        return ps.solve(xs, ys, pk, focalPriorPx(field.sourceWidth, input), cx, cy);
+        double fov = input != null ? input.fovHorizontalDeg : 0.0;
+        boolean gridFallback = input == null || input.gridFallback;
+        if (fov > 0.0) {
+            PlateSolver.Solution s = ps.solve(xs, ys, pk, focalFromFov(field.sourceWidth, fov), cx, cy);
+            if (s != null || !gridFallback) {
+                // Reliable prior (camera): a null here is a genuine no-solve, so don't waste
+                // time on the grid. Unreliable prior (import): fall through to the grid.
+                return s;
+            }
+        }
+        // Unknown FOV, or a failed unreliable prior: search the grid and keep the best solve --
+        // most matched stars, and on a tie the smaller rms (avoids picking a worse fit when a
+        // wrong scale coincidentally matches as many stars).
+        PlateSolver.Solution best = null;
+        for (double gridFov : AUTO_FOV_GRID_DEG) {
+            PlateSolver.Solution s = ps.solve(xs, ys, pk,
+                    focalFromFov(field.sourceWidth, gridFov), cx, cy);
+            if (s != null && (best == null
+                    || s.matchDet.length > best.matchDet.length
+                    || (s.matchDet.length == best.matchDet.length && s.rmsPx < best.rmsPx))) {
+                best = s;
+            }
+        }
+        return best;
     }
 
-    /** Focal length in source pixels from a horizontal FOV; falls back when unknown. */
-    private static double focalPriorPx(int width, SolveInput input) {
-        double fov = input != null && input.fovHorizontalDeg > 0.0
-                ? input.fovHorizontalDeg : FALLBACK_FOV_DEG;
-        return width / (2.0 * Math.tan(Math.toRadians(fov) / 2.0));
+    /** Focal length in source pixels for a given horizontal field of view. */
+    private static double focalFromFov(int width, double fovDeg) {
+        return width / (2.0 * Math.tan(Math.toRadians(fovDeg) / 2.0));
     }
 }

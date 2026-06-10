@@ -4,10 +4,14 @@ import android.Manifest;
 import android.app.Activity;
 import android.content.ContentResolver;
 import android.content.ContentValues;
+import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Color;
+import android.graphics.Matrix;
 import android.graphics.SurfaceTexture;
+import android.media.ExifInterface;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Environment;
@@ -27,6 +31,7 @@ import android.widget.Toast;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.text.SimpleDateFormat;
 import java.util.Date;
@@ -53,8 +58,15 @@ final class CameraPanel implements StarFieldCamera.Listener {
     // Allow long exposures up to the device limit; many phones cap well under this.
     private static final long EXPOSURE_CEILING_NANOS = 8_000_000_000L; // 8 s
 
+    // Bound the decoded bitmap for imported photos, matching the camera capture path; star
+    // detection downscales again internally, so this only caps memory.
+    private static final int IMPORT_DECODE_LONG_EDGE = 2400;
+    // 35mm-equivalent focal length -> horizontal FOV uses the full-frame 36mm sensor width.
+    private static final double FULL_FRAME_WIDTH_MM = 36.0;
+
     private final Activity activity;
     private final int cameraPermissionRequest;
+    private final int pickImageRequest;
     private final StarFieldCamera camera;
     private final ImageSolveEngine solveEngine; // app-scoped shared instance (built once)
     private final ExecutorService detectExecutor = Executors.newSingleThreadExecutor();
@@ -71,6 +83,7 @@ final class CameraPanel implements StarFieldCamera.Listener {
     private TextView isoLabel;
     private TextView focusLabel;
     private Button captureButton;
+    private Button pickButton;
     private Button saveButton;
     private TextView statusText;
     private TextView statsText;
@@ -105,9 +118,10 @@ final class CameraPanel implements StarFieldCamera.Listener {
     // after a hide/return cannot clear a newer solve's solveInFlight flag.
     private int solveGeneration;
 
-    CameraPanel(Activity activity, int cameraPermissionRequest) {
+    CameraPanel(Activity activity, int cameraPermissionRequest, int pickImageRequest) {
         this.activity = activity;
         this.cameraPermissionRequest = cameraPermissionRequest;
+        this.pickImageRequest = pickImageRequest;
         this.camera = new StarFieldCamera(activity, this);
         this.solveEngine = ImageSolveEngine.shared(activity); // shared app-scoped instance
         this.root = buildView();
@@ -285,6 +299,14 @@ final class CameraPanel implements StarFieldCamera.Listener {
         captureButton.setOnClickListener(v -> onCaptureClicked());
         buttonRow.addView(captureButton, new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        pickButton = new Button(activity);
+        pickButton.setAllCaps(false);
+        pickButton.setText(R.string.camera_pick);
+        pickButton.setOnClickListener(v -> onPickImageClicked());
+        LinearLayout.LayoutParams pickParams = new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        pickParams.leftMargin = dp(8);
+        buttonRow.addView(pickButton, pickParams);
         saveButton = new Button(activity);
         saveButton.setAllCaps(false);
         saveButton.setText(R.string.camera_save);
@@ -360,6 +382,181 @@ final class CameraPanel implements StarFieldCamera.Listener {
         }
         camera.capture(manualToggle.isChecked(), selectedExposureNanos, selectedIso,
                 autoFocusToggle.isChecked(), selectedFocusDiopters);
+    }
+
+    private void onPickImageClicked() {
+        if (capturing) {
+            return; // busy detecting/solving a previous frame
+        }
+        Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
+        intent.setType("image/*");
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        try {
+            activity.startActivityForResult(
+                    Intent.createChooser(intent, activity.getString(R.string.camera_pick)),
+                    pickImageRequest);
+        } catch (RuntimeException ex) {
+            statusText.setText(activity.getString(R.string.camera_pick_failed, safeMessage(ex)));
+        }
+    }
+
+    /**
+     * Handle a photo chosen from the gallery: decode it (with EXIF orientation), read a focal
+     * prior from EXIF if present, then detect + solve via the shared engine and show the result.
+     * Forwarded by MainActivity from onActivityResult. The solve runs on the worker; an unknown
+     * FOV (no lens EXIF) falls back to the engine's FOV grid search.
+     */
+    void onImagePicked(Uri uri) {
+        if (uri == null) {
+            statusText.setText(R.string.camera_pick_cancelled);
+            return;
+        }
+        previewView.setVisibility(View.GONE);
+        detectionView.setVisibility(View.VISIBLE);
+        detectionView.clear();
+        statusText.setText(R.string.camera_analyzing);
+        setCapturing(true);
+        final int gen = panelGeneration;
+        final int solveGen = ++solveGeneration; // invalidate any in-flight camera solve
+        solveInFlight = true;
+        detectExecutor.execute(() -> {
+            Bitmap bitmap = null; // declared out here so the catch can recycle it on failure
+            StarDetector.StarField field;
+            PlateSolver.Solution sol;
+            try {
+                ImportedImage imported = decodeImported(uri);
+                bitmap = imported.bitmap;
+                solveEngine.load(); // ensure ready (idempotent; waits if still building)
+                field = solveEngine.detect(bitmap);
+                sol = solveEngine.solve(field,
+                        ImageSolveEngine.SolveInput.forImport(imported.fovHorizontalDeg));
+            } catch (Throwable t) {
+                Logger.error("imported image solve failed", t);
+                // The bitmap was decoded but never handed to the UI; free it (failures here
+                // are often memory pressure, so leaking a large bitmap worsens retries).
+                if (bitmap != null && !bitmap.isRecycled()) {
+                    bitmap.recycle();
+                }
+                activity.runOnUiThread(() -> {
+                    if (solveGen == solveGeneration) {
+                        solveInFlight = false;
+                    }
+                    if (isPanelStale(gen)) {
+                        return;
+                    }
+                    statusText.setText(activity.getString(R.string.camera_pick_failed, safeMessage(t)));
+                    setCapturing(false);
+                });
+                return;
+            }
+            final Bitmap finalBitmap = bitmap;
+            final StarDetector.StarField finalField = field;
+            final PlateSolver.Solution finalSol = sol;
+            activity.runOnUiThread(() -> {
+                if (solveGen != solveGeneration || isPanelStale(gen)) {
+                    if (!finalBitmap.isRecycled()) {
+                        finalBitmap.recycle();
+                    }
+                    return;
+                }
+                solveInFlight = false;
+                Bitmap previous = lastBitmap;
+                lastBitmap = finalBitmap;
+                lastInfo = null; // imported photo has no live capture metadata
+                lastField = finalField;
+                lastSolution = finalSol;
+                detectionView.setImage(finalBitmap, finalField.sourceWidth, finalField.sourceHeight);
+                detectionView.setDetections(finalField.stars);
+                if (finalSol != null) {
+                    detectionView.setSolve(finalSol, solveEngine.catalog(), finalField.skyMask,
+                            finalField.analysisWidth, finalField.analysisHeight);
+                }
+                statusText.setText("");
+                showStats(finalField, finalSol, activity.getString(R.string.camera_source_import));
+                setCapturing(false);
+                if (previous != null && previous != finalBitmap && !previous.isRecycled()) {
+                    previous.recycle();
+                }
+            });
+        });
+    }
+
+    /** Decoded imported photo plus the horizontal FOV from EXIF (0 if unknown). */
+    private static final class ImportedImage {
+        final Bitmap bitmap;
+        final double fovHorizontalDeg;
+
+        ImportedImage(Bitmap bitmap, double fovHorizontalDeg) {
+            this.bitmap = bitmap;
+            this.fovHorizontalDeg = fovHorizontalDeg;
+        }
+    }
+
+    /** Decode {@code uri} bounded to {@link #IMPORT_DECODE_LONG_EDGE}, applying EXIF orientation,
+     *  and read a horizontal FOV from the 35mm-equivalent focal length if present. */
+    private ImportedImage decodeImported(Uri uri) throws IOException {
+        ContentResolver resolver = activity.getContentResolver();
+
+        int orientation = ExifInterface.ORIENTATION_NORMAL;
+        double fov = 0.0;
+        try (InputStream exifStream = resolver.openInputStream(uri)) {
+            if (exifStream != null) {
+                ExifInterface exif = new ExifInterface(exifStream);
+                orientation = exif.getAttributeInt(ExifInterface.TAG_ORIENTATION,
+                        ExifInterface.ORIENTATION_NORMAL);
+                int focal35 = exif.getAttributeInt(ExifInterface.TAG_FOCAL_LENGTH_IN_35MM_FILM, 0);
+                if (focal35 > 0) {
+                    fov = Math.toDegrees(2.0 * Math.atan(FULL_FRAME_WIDTH_MM / (2.0 * focal35)));
+                }
+            }
+        }
+
+        BitmapFactory.Options bounds = new BitmapFactory.Options();
+        bounds.inJustDecodeBounds = true;
+        try (InputStream boundsStream = resolver.openInputStream(uri)) {
+            BitmapFactory.decodeStream(boundsStream, null, bounds);
+        }
+        int longEdge = Math.max(bounds.outWidth, bounds.outHeight);
+        int sample = 1;
+        while (longEdge / sample > IMPORT_DECODE_LONG_EDGE) {
+            sample *= 2;
+        }
+        BitmapFactory.Options opts = new BitmapFactory.Options();
+        opts.inSampleSize = sample;
+        opts.inPreferredConfig = Bitmap.Config.ARGB_8888;
+        Bitmap decoded;
+        try (InputStream decodeStream = resolver.openInputStream(uri)) {
+            decoded = BitmapFactory.decodeStream(decodeStream, null, opts);
+        }
+        if (decoded == null) {
+            throw new IOException("could not decode image");
+        }
+        return new ImportedImage(applyExifOrientation(decoded, orientation), fov);
+    }
+
+    /** Rotate/flip {@code src} to upright per the EXIF orientation tag. Recycles {@code src}
+     *  when a transformed copy is produced. */
+    private static Bitmap applyExifOrientation(Bitmap src, int orientation) {
+        Matrix m = new Matrix();
+        switch (orientation) {
+            case ExifInterface.ORIENTATION_ROTATE_90: m.setRotate(90); break;
+            case ExifInterface.ORIENTATION_ROTATE_180: m.setRotate(180); break;
+            case ExifInterface.ORIENTATION_ROTATE_270: m.setRotate(270); break;
+            case ExifInterface.ORIENTATION_FLIP_HORIZONTAL: m.setScale(-1, 1); break;
+            case ExifInterface.ORIENTATION_FLIP_VERTICAL: m.setScale(1, -1); break;
+            case ExifInterface.ORIENTATION_TRANSPOSE: m.setRotate(90); m.postScale(-1, 1); break;
+            case ExifInterface.ORIENTATION_TRANSVERSE: m.setRotate(270); m.postScale(-1, 1); break;
+            default: return src; // ORIENTATION_NORMAL / undefined: no transform
+        }
+        Bitmap rotated = Bitmap.createBitmap(src, 0, 0, src.getWidth(), src.getHeight(), m, true);
+        if (rotated != src && !src.isRecycled()) {
+            src.recycle();
+        }
+        return rotated;
+    }
+
+    private static String safeMessage(Throwable t) {
+        return t.getMessage() == null ? t.getClass().getSimpleName() : t.getMessage();
     }
 
     private void onSaveClicked() {
@@ -560,7 +757,7 @@ final class CameraPanel implements StarFieldCamera.Listener {
                 detectionView.setDetections(finalField.stars);
                 setCapturing(false);
                 if (!maybeSolveCurrentField()) {
-                    showStats(finalField, null, info); // solver not ready / too few stars
+                    showStats(finalField, null, captureSourceLine(info)); // solver not ready / too few stars
                 }
             });
         });
@@ -585,9 +782,10 @@ final class CameraPanel implements StarFieldCamera.Listener {
                 ImageSolveEngine.SolveInput.fromHorizontalFov(info.fovDegrees);
         final int gen = panelGeneration;
         final int solveGen = ++solveGeneration;
+        final String sourceLine = captureSourceLine(info);
         solveInFlight = true;
         statusText.setText(R.string.camera_analyzing);
-        showStats(field, null, info); // shows the "solving" line via the solveInFlight branch
+        showStats(field, null, sourceLine); // shows the "solving" line via the solveInFlight branch
         detectExecutor.execute(() -> {
             PlateSolver.Solution sol;
             try {
@@ -615,22 +813,27 @@ final class CameraPanel implements StarFieldCamera.Listener {
                     detectionView.setSolve(finalSol, solveEngine.catalog(), field.skyMask,
                             field.analysisWidth, field.analysisHeight);
                 }
-                showStats(field, finalSol, info);
+                showStats(field, finalSol, sourceLine);
             });
         });
         return true;
     }
 
+    /** The per-frame source line for the stats panel: exposure + ISO for a live capture. */
+    private String captureSourceLine(StarFieldCamera.CaptureInfo info) {
+        return activity.getString(R.string.camera_stat_capture,
+                formatExposure(info.exposureNanos), info.iso);
+    }
+
     private void showStats(StarDetector.StarField field, PlateSolver.Solution sol,
-                           StarFieldCamera.CaptureInfo info) {
+                           String sourceLine) {
         StringBuilder sb = new StringBuilder();
         sb.append(activity.getString(R.string.camera_stats_title)).append('\n');
         sb.append(activity.getString(R.string.camera_stat_detections,
                 field.stars.size(), field.rawCount)).append('\n');
         sb.append(activity.getString(R.string.camera_stat_noise,
                 field.background, field.noise, field.threshold)).append('\n');
-        sb.append(activity.getString(R.string.camera_stat_capture,
-                formatExposure(info.exposureNanos), info.iso)).append('\n');
+        sb.append(sourceLine).append('\n');
         if (sol != null) {
             double raHours = sol.centerRaDeg / 15.0;
             sb.append(activity.getString(R.string.camera_solve_center,
@@ -684,6 +887,7 @@ final class CameraPanel implements StarFieldCamera.Listener {
     private void setCapturing(boolean value) {
         capturing = value;
         captureButton.setEnabled(!value);
+        pickButton.setEnabled(!value); // also gate gallery import while busy
     }
 
     private void updateManualControlsEnabled() {

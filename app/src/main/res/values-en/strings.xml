@@ -429,6 +429,10 @@
     <string name="camera_manual_unsupported">This device has no manual exposure; using auto mode.</string>
     <string name="camera_manual_supported">Manual exposure supported.</string>
     <string name="camera_capture">Capture</string>
+    <string name="camera_pick">Pick from gallery</string>
+    <string name="camera_pick_cancelled">No image selected.</string>
+    <string name="camera_pick_failed">Could not open image: %1$s</string>
+    <string name="camera_source_import">Source: imported photo</string>
     <string name="camera_capturing">Capturing...</string>
     <string name="camera_analyzing">Detecting and solving...</string>
     <string name="camera_exposure_label">Exposure %1$s</string>

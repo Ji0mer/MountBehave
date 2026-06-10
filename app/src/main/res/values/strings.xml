@@ -429,6 +429,10 @@
     <string name="camera_manual_unsupported">此设备不支持手动曝光，使用自动模式。</string>
     <string name="camera_manual_supported">支持手动曝光。</string>
     <string name="camera_capture">拍摄</string>
+    <string name="camera_pick">从相册选择</string>
+    <string name="camera_pick_cancelled">未选择图片。</string>
+    <string name="camera_pick_failed">无法打开图片：%1$s</string>
+    <string name="camera_source_import">来源：相册导入</string>
     <string name="camera_capturing">正在拍摄……</string>
     <string name="camera_analyzing">正在检测并解析星空……</string>
     <string name="camera_exposure_label">曝光时间 %1$s</string>

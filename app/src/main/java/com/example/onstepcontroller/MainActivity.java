@@ -116,6 +116,7 @@ public final class MainActivity extends Activity {
     private static final int LOCATION_PERMISSION_REQUEST = 24;
     private static final int LOG_EXPORT_CREATE_DOCUMENT_REQUEST = 25;
     private static final int CAMERA_PERMISSION_REQUEST = 26;
+    private static final int PICK_IMAGE_REQUEST = 27;
     private static final long CONNECTION_POLL_INTERVAL_MS = 5_000L;
     private static final long GOTO_STATUS_POLL_INITIAL_DELAY_MS = 2_500L;
     private static final long GOTO_STATUS_POLL_INTERVAL_MS = 3_000L;
@@ -468,6 +469,13 @@ public final class MainActivity extends Activity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == PICK_IMAGE_REQUEST) {
+            Uri image = (resultCode == RESULT_OK && data != null) ? data.getData() : null;
+            if (cameraPanel != null) {
+                cameraPanel.onImagePicked(image); // null => cancelled, handled by the panel
+            }
+            return;
+        }
         if (requestCode != LOG_EXPORT_CREATE_DOCUMENT_REQUEST) {
             return;
         }
@@ -520,7 +528,7 @@ public final class MainActivity extends Activity {
         skyPage.setVisibility(View.GONE);
         root.addView(skyPage, matchWrap());
 
-        cameraPanel = new CameraPanel(this, CAMERA_PERMISSION_REQUEST);
+        cameraPanel = new CameraPanel(this, CAMERA_PERMISSION_REQUEST, PICK_IMAGE_REQUEST);
         cameraPage = cameraPanel.view();
         cameraPage.setVisibility(View.GONE);
         root.addView(cameraPage, matchWrap());

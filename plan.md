@@ -86,7 +86,7 @@ ClearskyGoto 是针对晴空谐波赤道仪系列开发的 Android 控制 App。
 ### 实施顺序
 
 1. **模块化图像识别**：抽 `ImageSolveEngine`/`SolveInput`，实时拍摄走 engine，行为不变。（已完成；engine 为应用级共享单例，`load()` 单飞构建）
-2. **相册导入**：相机页加"拍摄/从相册选择"，含 EXIF 方向、FOV 兜底、失败重试。引入 `ImageSolveResult`/`ImageSource`，`StarDetectionView` 演进为 `SolveOverlayView`（不依赖相机）。（进行中）
+2. **相册导入**：相机页加"拍摄/从相册选择"，含 EXIF 方向、FOV 兜底、失败重试。引入 `ImageSolveResult`/`ImageSource`，`StarDetectionView` 演进为 `SolveOverlayView`（不依赖相机）。（进行中：已加"从相册选择"入口、EXIF 方向校正、35mm 焦距估 FOV、未知 FOV 时 engine 自动网格搜索、复用叠加显示；待办：手动 FOV 选择/重试 UI，`ImageSolveResult`/`ImageSource` 抽象与 `SolveOverlayView` 改名）
 3. **极轴校准页（手动版）**：App 提示用户手动转 RA、确认后拍下一张，先验证数学流程。
 4. **自动 RA 旋转**：手动版确认后接 OnStep 自动转轴/停止/拍照/解算。
 
