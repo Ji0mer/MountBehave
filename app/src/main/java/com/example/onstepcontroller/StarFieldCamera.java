@@ -509,32 +509,96 @@ final class StarFieldCamera {
 
     // --- Helpers ---
 
+    // Camera characteristics are logged once per process so a tester's exported log shows
+    // exactly what the device offers (Huawei/EMUI in particular hides MANUAL_SENSOR on some
+    // logical cameras while a physical back camera still supports it).
+    private static boolean characteristicsLogged;
+
+    /**
+     * Prefer a back camera that advertises MANUAL_SENSOR (long manual exposures are the whole
+     * point of this page); multi-camera phones often list a logical combo camera first, which
+     * may lack manual controls that one of the physical back cameras has. Falls back to the
+     * first back camera, then to anything.
+     */
     private static String chooseBackCamera(CameraManager manager) throws CameraAccessException {
         String firstAny = null;
+        String firstBack = null;
+        String firstManualBack = null;
         for (String id : manager.getCameraIdList()) {
             CameraCharacteristics c = manager.getCameraCharacteristics(id);
             Integer facing = c.get(CameraCharacteristics.LENS_FACING);
+            boolean back = facing != null && facing == CameraCharacteristics.LENS_FACING_BACK;
+            if (!characteristicsLogged) {
+                logCharacteristics(id, c, back);
+            }
             if (firstAny == null) {
                 firstAny = id;
             }
-            if (facing != null && facing == CameraCharacteristics.LENS_FACING_BACK) {
-                return id;
+            if (!back) {
+                continue;
+            }
+            // Candidates must also produce what this page consumes (JPEG stills + a
+            // SurfaceTexture preview): an auxiliary physical camera can advertise manual
+            // controls yet lack these outputs, which would only fail later in
+            // createCaptureSession.
+            if (!hasUsableOutputs(c)) {
+                continue;
+            }
+            if (firstBack == null) {
+                firstBack = id;
+            }
+            if (firstManualBack == null && hasManualSensor(c)) {
+                firstManualBack = id;
             }
         }
-        return firstAny; // fall back to whatever exists
+        characteristicsLogged = true;
+        String chosen = firstManualBack != null ? firstManualBack
+                : (firstBack != null ? firstBack : firstAny);
+        Logger.info("CAMERA-SELECT id=" + chosen
+                + " manualBack=" + firstManualBack + " firstBack=" + firstBack);
+        return chosen;
     }
 
-    private static Capabilities readCapabilities(CameraCharacteristics c) {
-        boolean manualSensor = false;
+    /** True when the camera offers both JPEG stills and SurfaceTexture preview output. */
+    private static boolean hasUsableOutputs(CameraCharacteristics c) {
+        StreamConfigurationMap map = c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
+        if (map == null) {
+            return false;
+        }
+        Size[] jpeg = map.getOutputSizes(ImageFormat.JPEG);
+        Size[] preview = map.getOutputSizes(SurfaceTexture.class);
+        return jpeg != null && jpeg.length > 0 && preview != null && preview.length > 0;
+    }
+
+    private static boolean hasManualSensor(CameraCharacteristics c) {
         int[] caps = c.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES);
         if (caps != null) {
             for (int cap : caps) {
                 if (cap == CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR) {
-                    manualSensor = true;
-                    break;
+                    return true;
                 }
             }
         }
+        return false;
+    }
+
+    private static void logCharacteristics(String id, CameraCharacteristics c, boolean back) {
+        Integer level = c.get(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL);
+        Range<Long> exp = c.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE);
+        Range<Integer> iso = c.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE);
+        float[] focals = c.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS);
+        Logger.info("CAMERA-CAPS id=" + id
+                + " facing=" + (back ? "back" : "other")
+                + " level=" + level
+                + " manualSensor=" + hasManualSensor(c)
+                + " usableOutputs=" + hasUsableOutputs(c)
+                + " exposureNs=" + (exp == null ? "null" : exp.getLower() + ".." + exp.getUpper())
+                + " iso=" + (iso == null ? "null" : iso.getLower() + ".." + iso.getUpper())
+                + " focalMm=" + (focals == null || focals.length == 0 ? "null" : focals[0]));
+    }
+
+    private static Capabilities readCapabilities(CameraCharacteristics c) {
+        boolean manualSensor = hasManualSensor(c);
 
         long minExp = 1_000_000L;       // 1 ms fallback
         long maxExp = 1_000_000_000L;   // 1 s fallback
